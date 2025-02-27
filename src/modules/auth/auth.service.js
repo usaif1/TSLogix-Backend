@@ -1,33 +1,56 @@
 // src/modules/authentication/auth.service.js
-const db = require("@/db"); // relative path to the db folder
+const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcrypt");
 
-// Insert a new user
-function registerUser(userId, plainPassword) {
-  const passwordHash = bcrypt.hashSync(plainPassword, 10); // synchronous for simplicity
+const prisma = new PrismaClient();
 
-  // Using better-sqlite3
-  const insertStmt = db.prepare(`
-    INSERT INTO users (userId, passwordHash)
-    VALUES (?, ?)
-  `);
+// Register a new user
+async function registerUser(userId, plainPassword, role, organization) {
+  const passwordHash = bcrypt.hashSync(plainPassword, 10); // Hash the password
 
   try {
-    const result = insertStmt.run(userId, passwordHash);
-    return result.lastInsertRowid; // the new user ID in the table
+    const newUser = await prisma.user.create({
+      data: {
+        userId: userId,
+        passwordHash: bcrypt.hashSync(plainPassword, 10),
+
+        // ✅ Fix Role Connection
+        role: {
+          connectOrCreate: {
+            where: { id: 1 }, // Ensure Role ID is used
+            create: { name: role.name },
+          },
+        },
+
+        // ✅ Fix Organization Connection
+        organization: {
+          connectOrCreate: {
+            where: { name: organization.name }, // `name` is now UNIQUE
+            create: { name: organization.name },
+          },
+        },
+      },
+    });
+
+    console.log("new user", newUser);
+    return newUser.id; // Return the new user ID
   } catch (error) {
     throw new Error("Error inserting user: " + error.message);
   }
 }
 
 // Fetch user by userId
-function getUserByUserId(userId) {
-  const selectStmt = db.prepare(`
-    SELECT * FROM users
-    WHERE userId = ?
-  `);
-
-  return selectStmt.get(userId); // returns the row object or undefined
+async function getUserByUserId(userId) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: {
+        userId,
+      },
+    });
+    return user; // Returns the user object or null
+  } catch (error) {
+    throw new Error("Error fetching user: " + error.message);
+  }
 }
 
 module.exports = {

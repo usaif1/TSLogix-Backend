@@ -10,10 +10,13 @@
     "@": "src"
   },
   "dependencies": {
+    "@prisma/client": "^6.4.1",
     "bcrypt": "^5.1.1",
     "better-sqlite3": "^11.8.1",
     "express": "^4.21.2",
-    "module-alias": "^2.2.3"
+    "module-alias": "^2.2.3",
+    "prisma": "^6.4.1",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.9"
