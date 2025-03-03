@@ -5,20 +5,17 @@ const authService = require("./auth.service");
  * Handle user registration
  */
 async function register(req, res) {
-  const { userId, email, password, role, organisation_id } = req.body;
+  const { loginPayload } = req.body;
+  console.log("loginPayload", loginPayload);
+  const { userId, email, plainPassword, roleName, organisation_id } =
+    loginPayload;
 
-  if (!userId || !email || !password || !role || !organisation_id) {
+  if (!userId || !email || !plainPassword || !roleName || !organisation_id) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
   try {
-    const newRowId = await authService.registerUser(
-      userId,
-      email,
-      password,
-      role,
-      organisation_id
-    );
+    const newRowId = await authService.registerUser(loginPayload);
 
     return res.status(201).json({ message: "User created", id: newRowId });
   } catch (err) {

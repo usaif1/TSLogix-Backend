@@ -9,17 +9,12 @@ const SECRET_KEY = process.env.JWT_SECRET || "your_secret_key";
 /**
  * Registers a new user.
  */
-async function registerUser(
-  userId,
-  email,
-  plainPassword,
-  roleName,
-  organisation_id
-) {
+async function registerUser(loginPayload) {
+  const { userId, email, plainPassword, roleName, organisation_id } =
+    loginPayload;
+
   try {
     console.log("Registering user with role:", roleName);
-
-    roleName = roleName.toUpperCase();
 
     if (!organisation_id) {
       throw new Error("Organisation ID is required.");
