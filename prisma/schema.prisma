@@ -159,7 +159,8 @@ model User {
 
     created_at DateTime @default(now())
 
-    orders Order[] @relation("OrderCreatedBy")
+    orders     Order[]      @relation("OrderCreatedBy")
+    EntryOrder EntryOrder[]
 
     @@map("users")
 }
@@ -252,35 +253,80 @@ model OrderType {
 }
 
 model EntryOrder {
-    entry_order_id String @id @default(uuid()) @map("entry_order_id") // Separate primary key
-    order_id       String @unique // ✅ Ensure order_id is unique (One-to-One Relation)
-    order          Order  @relation(fields: [order_id], references: [order_id]) // ✅ One-to-One Relation
+    entry_order_id String @id @default(uuid()) @map("entry_order_id")
+    order_id       String @unique // One-to-One relation with `Order`
+    order          Order  @relation(fields: [order_id], references: [order_id])
 
+    // --------------------------
+    // FIELDS FROM DB (references)
+    // --------------------------
+
+    // Origin
     origin_id String?
     origin    Origin? @relation(fields: [origin_id], references: [origin_id])
 
-    supplier_id String?
-    supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
-
+    // Document 
+    // (If you’re storing “document” in `DocumentType`, keep it. 
+    // Otherwise, point it to whichever table you use to store "document" items.)
     document_type_id String?
     documentType     DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
 
-    product_line_id String?
-    productLine     ProductLine? @relation(fields: [product_line_id], references: [product_line_id])
+    // Personnel in charge
+    // (If the person is a user from DB, link to `User`—adjust references as needed.)
+    personnel_incharge_id String?
+    personnel_incharge    User?   @relation(fields: [personnel_incharge_id], references: [id])
+    // If your `User` model has `user_id` as business ID and `id` as the PK, 
+    // then references: [id] is correct. Adjust if different.
 
-    temperature_id String?
-    temperature    Temperature? @relation(fields: [temperature_id], references: [temperature_id])
+    // Supplier
+    supplier_id String?
+    supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
 
-    active_state_id String?
-    active_state    ActiveState? @relation(fields: [active_state_id], references: [state_id])
+    // --------------
+    // TEXT FIELDS
+    // --------------
 
-    batch_number      String?
-    received_quantity Int?
-    unit              String?
-    expiry_date       DateTime?
-    storage_location  String?
-    quality_check     Boolean   @default(false)
-    order_progress    String?
+    entry_order_no                String? // text
+    document_status               String? // fixed or store as text
+    observation                   String?
+    total_volume                  String?
+    total_weight                  String?
+    cif_value                     String?
+    product                       String?
+    protocol_analysis_certificate String? // file upload url
+    lot_series                    String?
+    quantity_packaging            String?
+    presentation                  String?
+    total_qty                     String?
+    technical_specification       String? // file upload url
+    temperature                   String?
+    humidity                      String?
+    order_progress_id             String?
+
+    // -----------------
+    // DATETIME FIELDS
+    // -----------------
+    registration_date   DateTime?
+    document_date       DateTime?
+    admission_date_time DateTime?
+    mfd_date_time       DateTime?
+    expiration_date     DateTime?
+
+    // ------------------------------------------------------
+    // LEGACY FIELDS (from previous schema) – keep if needed
+    // ------------------------------------------------------
+    batch_number               String?
+    received_quantity          Int?
+    unit                       String?
+    expiry_date                DateTime?
+    storage_location           String?
+    quality_check              Boolean      @default(false)
+    ProductLine                ProductLine? @relation(fields: [productLineProduct_line_id], references: [product_line_id])
+    productLineProduct_line_id String?
+    Temperature                Temperature? @relation(fields: [temperatureTemperature_id], references: [temperature_id])
+    temperatureTemperature_id  String?
+    ActiveState                ActiveState? @relation(fields: [activeStateState_id], references: [state_id])
+    activeStateState_id        String?
 
     @@map("entry_orders")
 }
