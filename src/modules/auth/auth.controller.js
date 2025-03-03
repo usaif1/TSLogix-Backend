@@ -40,8 +40,10 @@ async function login(req, res) {
 
     return res.status(200).json({
       message: "Login successful",
-      token,
-      role,
+      data: {
+        token,
+        role,
+      },
     });
   } catch (err) {
     return res.status(401).json({ message: err.message });

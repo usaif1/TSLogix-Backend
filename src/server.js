@@ -1,7 +1,17 @@
 require("module-alias/register");
 const express = require("express");
+const cors = require("cors");
 const app = express();
-const db = require("@/db");
+
+// Configure CORS
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "http://127.0.0.1:3000"],
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+    credentials: true,
+    optionsSuccessStatus: 204,
+  })
+);
 
 // 2. Body parsing middleware **must** come before routes
 app.use(express.json());
