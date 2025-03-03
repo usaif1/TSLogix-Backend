@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * ------------------------------------------------------------------------ ENUMS -------------------------------------------------------------------------
+ */
+
+enum RoleEnum {
+  provider
+  user
+}
+
+/**
+ * ------------------------------------------------------------------------ Models -------------------------------------------------------------------------
+ */
+
+model Organization {
+  id             String    @id @default(uuid())
+  name           String    @unique
+  address        String?
+  city           String?
+  state_province String?
+  postal_code    String?
+  country        String?
+  tax_id         String?
+  contact_email  String?
+  contact_phone  String?
+  status         String    @default("active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime? @map("updated_at")
+  users          User[]
+  orders         Order[]
+  Role           Role[]
+
+  @@map("organizations")
+}
+
+// model Role {
+//   id             Int           @id @default(autoincrement())
+//   name           RoleName      @unique
+//   description    String?
+//   permissions    String? // JSON string for permissions
+//   isDefault      Boolean       @default(false) @map("is_default")
+//   organizationId String?
+//   organization   Organization? @relation(fields: [organizationId], references: [id])
+//   users          User[]
+
+//   @@map("roles")
+// }
+
+model Role {
+  id             String        @id @default(uuid())
+  name           RoleEnum      @unique
+  users          User[]
+  createdAt      DateTime      @default(now())
+  Organization   Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
+
+  @@map("roles")
+}
+
+// model User {
+//   id                  String       @id @default(uuid())
+//   organizationId      String
+//   organization        Organization @relation(fields: [organizationId], references: [id])
+//   roleId              Int
+//   role                Role         @relation(fields: [roleId], references: [id])
+//   userId              String       @unique
+//   passwordHash        String       @map("password_hash")
+//   firstName           String?      @map("first_name")
+//   lastName            String?      @map("last_name")
+//   phone               String?
+// lastLogin           DateTime?    @map("last_login")
+//   mfaSecret           String?      @map("mfa_secret")
+//   passwordResetToken  String?      @map("password_reset_token")
+//   passwordResetExpiry DateTime?    @map("password_reset_expiry")
+//   status              String       @default("active")
+//   createdAt           DateTime     @default(now()) @map("created_at")
+//   updatedAt           DateTime?    @map("updated_at")
+//   orders              Order[]
+
+//   @@map("users")
+// }
+
+model User {
+  id             String       @id @default(uuid()) // PostgreSQL UUID
+  userId         String       @unique
+  passwordHash   String
+  roleId         String
+  firstName      String?      @map("first_name")
+  lastName       String?      @map("last_name")
+  phone          String?
+  lastLogin      DateTime?    @map("last_login")
+  organizationId String
+  role           Role         @relation(fields: [roleId], references: [id])
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  status         String       @default("active")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  Order          Order[]
+}
+
+model Order {
+  id              String          @id @default(uuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  organizationId  String
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  orderTypeId     Int
+  orderType       OrderType       @relation(fields: [orderTypeId], references: [id])
+  status          String          @default("draft")
+  priority        Int?
+  referenceNumber String?         @map("reference_number")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime?       @map("updated_at")
+  dueDate         DateTime?       @map("due_date")
+  notes           String?
+  metadata        String? // JSON string for custom fields
+  entryOrder      EntryOrder?
+  departureOrder  DepartureOrder?
+
+  @@map("orders")
+}
+
+model OrderType {
+  id          Int     @id @default(autoincrement())
+  name        String  @unique
+  description String?
+  schema      String? // JSON string for schema
+  orders      Order[]
+
+  @@map("order_types")
+}
+
+model EntryOrder {
+  orderId                  String    @id
+  order                    Order     @relation(fields: [orderId], references: [id])
+  originCountry            String    @map("origin_country")
+  entryPort                String?   @map("entry_port")
+  customsDeclarationNumber String?   @map("customs_declaration_number")
+  expectedArrival          DateTime? @map("expected_arrival")
+  actualArrival            DateTime? @map("actual_arrival")
+  storageLocation          String?   @map("storage_location")
+  inspectionRequired       Boolean   @default(false) @map("inspection_required")
+  inspectionReportUrl      String?   @map("inspection_report_url")
+  items                    String? // JSON string for items
+
+  @@map("entry_orders")
+}
+
+model DepartureOrder {
+  orderId             String    @id
+  order               Order     @relation(fields: [orderId], references: [id])
+  destinationCountry  String    @map("destination_country")
+  carrierName         String?   @map("carrier_name")
+  trackingNumber      String?   @map("tracking_number")
+  shippingMethod      String?   @map("shipping_method")
+  departureDate       DateTime? @map("departure_date")
+  estimatedDelivery   DateTime? @map("estimated_delivery")
+  insuranceAmount     Float?    @map("insurance_amount")
+  exportLicenseNumber String?   @map("export_license_number")
+  billOfLadingUrl     String?   @map("bill_of_lading_url")
+
+  @@map("departure_orders")
+}

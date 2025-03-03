@@ -9,9 +9,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // routes
 const authRoutes = require("@/modules/auth/auth.route");
+const organisationRoutes = require("@/modules/organisation/organisation.route");
 
 // Mount your module routes
 app.use("/auth", authRoutes);
+app.use("/organisation", organisationRoutes);
 
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);

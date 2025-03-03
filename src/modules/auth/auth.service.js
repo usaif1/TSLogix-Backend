@@ -1,59 +1,67 @@
-// src/modules/authentication/auth.service.js
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcrypt");
 
 const prisma = new PrismaClient();
 
-// Register a new user
-async function registerUser(userId, plainPassword, role, organization) {
-  const passwordHash = bcrypt.hashSync(plainPassword, 10); // Hash the password
-
+/**
+ * Registers a new user.
+ */
+async function registerUser(
+  userId,
+  email,
+  plainPassword,
+  roleName,
+  organisation_id
+) {
   try {
+    console.log("Registering user with role:", roleName);
+
+    // Convert role to uppercase to match ENUM values
+    roleName = roleName.toUpperCase();
+
+    // ✅ Validate `organisation_id`
+    if (!organisation_id) {
+      throw new Error("Organisation ID is required.");
+    }
+
+    // ✅ Validate `organisation` exists
+    const organisation = await prisma.organisation.findUnique({
+      where: { organisation_id },
+    });
+
+    if (!organisation) {
+      throw new Error("Organisation not found.");
+    }
+
+    // ✅ Find the `role_id` based on role name
+    const role = await prisma.role.findUnique({
+      where: { name: roleName }, // Ensure `name` is unique in the `Role` table
+    });
+
+    if (!role) {
+      throw new Error(`Role '${roleName}' not found.`);
+    }
+
+    // ✅ Hash the password
+    const passwordHash = bcrypt.hashSync(plainPassword, 10);
+
+    // ✅ Create the user with `role_id` and `organisation_id`
     const newUser = await prisma.user.create({
       data: {
-        userId: userId,
-        passwordHash: bcrypt.hashSync(plainPassword, 10),
-
-        // ✅ Fix Role Connection
-        role: {
-          connectOrCreate: {
-            where: { id: 1 }, // Ensure Role ID is used
-            create: { name: role.name },
-          },
-        },
-
-        // ✅ Fix Organization Connection
-        organization: {
-          connectOrCreate: {
-            where: { name: organization.name }, // `name` is now UNIQUE
-            create: { name: organization.name },
-          },
-        },
+        user_id: userId,
+        email,
+        password_hash: passwordHash,
+        role_id: role.role_id, // ✅ Now connecting via `role_id`
+        organisation_id, // ✅ Connecting via `organisation_id`
       },
     });
 
-    console.log("new user", newUser);
-    return newUser.id; // Return the new user ID
+    console.log("✅ New user created:", newUser);
+    return newUser.user_id;
   } catch (error) {
+    console.error("❌ Error registering user:", error.message);
     throw new Error("Error inserting user: " + error.message);
   }
 }
 
-// Fetch user by userId
-async function getUserByUserId(userId) {
-  try {
-    const user = await prisma.user.findUnique({
-      where: {
-        userId,
-      },
-    });
-    return user; // Returns the user object or null
-  } catch (error) {
-    throw new Error("Error fetching user: " + error.message);
-  }
-}
-
-module.exports = {
-  registerUser,
-  getUserByUserId,
-};
+module.exports = { registerUser };

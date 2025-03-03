@@ -4,7 +4,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "show-db": "npx prisma studio",
+    "reset-db": "npx prisma migrate reset"
   },
   "_moduleAliases": {
     "@": "src"
@@ -15,6 +17,7 @@
     "better-sqlite3": "^11.8.1",
     "express": "^4.21.2",
     "module-alias": "^2.2.3",
+    "pg": "^8.13.3",
     "prisma": "^6.4.1",
     "uuid": "^11.1.0"
   },
