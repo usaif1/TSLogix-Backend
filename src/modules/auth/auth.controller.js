@@ -1,22 +1,21 @@
 // src/modules/authentication/auth.controller.js
 const authService = require("./auth.service");
 
-// Handle user registration
+/**
+ * Handle user registration
+ */
 async function register(req, res) {
-  const { userId, email, password, role, organisation_id } = req.body;
+  const { loginPayload } = req.body;
+  console.log("loginPayload", loginPayload);
+  const { userId, email, plainPassword, roleName, organisation_id } =
+    loginPayload;
 
-  if (!userId || !email || !password || !role || !organisation_id) {
+  if (!userId || !email || !plainPassword || !roleName || !organisation_id) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
   try {
-    const newRowId = await authService.registerUser(
-      userId,
-      email,
-      password,
-      role,
-      organisation_id // ✅ Now passing organisation_id instead of name
-    );
+    const newRowId = await authService.registerUser(loginPayload);
 
     return res.status(201).json({ message: "User created", id: newRowId });
   } catch (err) {
@@ -24,28 +23,31 @@ async function register(req, res) {
   }
 }
 
-// Handle login
+/**
+ * Handle user login
+ */
 async function login(req, res) {
   const { userId, password } = req.body;
 
-  res.json({ message: "Login successful", userId: "asd" });
+  if (!userId || !password) {
+    return res
+      .status(400)
+      .json({ message: "userId and password are required" });
+  }
 
-  // try {
-  //   const user = await authService.getUserByUserId(userId);
-  //   if (!user) {
-  //     return res.status(401).json({ message: "Invalid credentials" });
-  //   }
+  try {
+    const { token, role } = await authService.loginUser(userId, password);
 
-  //   const match = await bcrypt.compare(password, user.passwordHash);
-  //   if (!match) {
-  //     return res.status(401).json({ message: "Invalid credentials" });
-  //   }
-
-  //   req.session.userId = user.user_id;
-  //   return res.json({ message: "Login successful", userId: user.user_id });
-  // } catch (err) {
-  //   return res.status(500).json({ message: err.message });
-  // }
+    return res.status(200).json({
+      message: "Login successful",
+      data: {
+        token,
+        role,
+      },
+    });
+  } catch (err) {
+    return res.status(401).json({ message: err.message });
+  }
 }
 
 module.exports = { register, login };

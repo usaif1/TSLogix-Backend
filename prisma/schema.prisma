@@ -80,6 +80,7 @@ model ProductLine {
     temperature_id  String?
     temperature     Temperature? @relation(fields: [temperature_id], references: [temperature_id])
     Product         Product[]
+    EntryOrder      EntryOrder[]
 
     @@map("product_lines")
 }
@@ -110,17 +111,19 @@ model Temperature {
     min_celsius    Int?
     max_celsius    Int?
     ProductLine    ProductLine[]
+    EntryOrder     EntryOrder[]
 
     @@map("temperatures")
 }
 
 model ActiveState {
-    state_id String     @id @default(uuid()) @map("state_id")
-    name     String     @unique
-    User     User[]
-    Supplier Supplier[]
-    Customer Customer[]
-    Product  Product[]
+    state_id   String       @id @default(uuid()) @map("state_id")
+    name       String       @unique
+    User       User[]
+    Supplier   Supplier[]
+    Customer   Customer[]
+    Product    Product[]
+    EntryOrder EntryOrder[]
 
     @@map("active_states")
 }
@@ -139,39 +142,24 @@ model Organisation {
     @@map("organisations")
 }
 
-// model User {
-//     user_id         String       @id @default(uuid()) @map("user_id")
-//     organisation_id String
-//     organisation    Organisation @relation(fields: [organisation_id], references: [organisation_id])
-//     email           String       @unique
-//     role            String // Constraint: must be one of ('Admin', 'Manager', 'Operator')
-//     active_state_id String?
-//     active_state    ActiveState? @relation(fields: [active_state_id], references: [state_id])
-//     created_at      DateTime     @default(now())
-
-//     // Relations: A user can create many orders.
-//     orders Order[] @relation("OrderCreatedBy")
-
-//     @@map("users")
-// }
-
 model User {
-    user_id         String       @id @default(uuid()) @map("user_id")
+    id              String       @id @default(uuid()) @map("id") // New UUID for relationships
+    user_id         String       @unique @map("user_id") // Used for login
     organisation_id String
     organisation    Organisation @relation(fields: [organisation_id], references: [organisation_id])
 
     email         String @unique
-    password_hash String @map("password_hash") // ✅ Added for authentication
+    password_hash String @map("password_hash")
 
     role_id String?
-    role    Role?   @relation(fields: [role_id], references: [role_id]) // ✅ Fixed Role relation
+    role    Role?   @relation(fields: [role_id], references: [role_id])
 
     active_state_id String?
     active_state    ActiveState? @relation(fields: [active_state_id], references: [state_id])
 
     created_at DateTime @default(now())
 
-    orders Order[] @relation("OrderCreatedBy") // ✅ Ensures consistency
+    orders Order[] @relation("OrderCreatedBy")
 
     @@map("users")
 }
@@ -179,7 +167,7 @@ model User {
 model Role {
     role_id String   @id @default(uuid()) @map("role_id")
     name    RoleName @unique
-    users   User[]
+    users   User[] // ✅ Fix: Removed `@relation(fields: [...], references: [...])`
 
     @@map("roles")
 }
@@ -239,11 +227,11 @@ model Order {
     status          String       @default("PENDING")
     organisation_id String
     organisation    Organisation @relation(fields: [organisation_id], references: [organisation_id])
-    created_by      String
-    createdBy       User         @relation("OrderCreatedBy", fields: [created_by], references: [user_id])
-    created_at      DateTime     @default(now())
+    created_by      String // Now references User.id (UUID)
+    createdBy       User         @relation("OrderCreatedBy", fields: [created_by], references: [id]) // Changed to reference 'id'
 
-    // Relations to specific order types
+    created_at DateTime @default(now())
+
     entryOrder     EntryOrder?
     departureOrder DepartureOrder?
     OrderType      OrderType?      @relation(fields: [orderTypeId], references: [id])
@@ -264,16 +252,35 @@ model OrderType {
 }
 
 model EntryOrder {
-    // Primary key also referencing orders.order_id
-    entry_order_id   String        @id @map("entry_order_id")
-    order            Order         @relation(fields: [entry_order_id], references: [order_id])
-    origin_id        String?
-    origin           Origin?       @relation(fields: [origin_id], references: [origin_id])
-    supplier_id      String?
-    supplier         Supplier?     @relation(fields: [supplier_id], references: [supplier_id])
+    entry_order_id String @id @default(uuid()) @map("entry_order_id") // Separate primary key
+    order_id       String @unique // ✅ Ensure order_id is unique (One-to-One Relation)
+    order          Order  @relation(fields: [order_id], references: [order_id]) // ✅ One-to-One Relation
+
+    origin_id String?
+    origin    Origin? @relation(fields: [origin_id], references: [origin_id])
+
+    supplier_id String?
+    supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
+
     document_type_id String?
     documentType     DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
-    product_list     Json
+
+    product_line_id String?
+    productLine     ProductLine? @relation(fields: [product_line_id], references: [product_line_id])
+
+    temperature_id String?
+    temperature    Temperature? @relation(fields: [temperature_id], references: [temperature_id])
+
+    active_state_id String?
+    active_state    ActiveState? @relation(fields: [active_state_id], references: [state_id])
+
+    batch_number      String?
+    received_quantity Int?
+    unit              String?
+    expiry_date       DateTime?
+    storage_location  String?
+    quality_check     Boolean   @default(false)
+    order_progress    String?
 
     @@map("entry_orders")
 }
