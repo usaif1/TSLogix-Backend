@@ -254,73 +254,53 @@ model OrderType {
 
 model EntryOrder {
     entry_order_id String @id @default(uuid()) @map("entry_order_id")
-    order_id       String @unique // One-to-One relation with `Order`
+    order_id       String @unique
     order          Order  @relation(fields: [order_id], references: [order_id])
 
     // --------------------------
-    // FIELDS FROM DB (references)
+    // RELATIONSHIP FIELDS (Dropdowns)
     // --------------------------
-
-    // Origin
     origin_id String?
     origin    Origin? @relation(fields: [origin_id], references: [origin_id])
 
-    // Document 
-    // (If you’re storing “document” in `DocumentType`, keep it. 
-    // Otherwise, point it to whichever table you use to store "document" items.)
     document_type_id String?
     documentType     DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
 
-    // Personnel in charge
-    // (If the person is a user from DB, link to `User`—adjust references as needed.)
     personnel_incharge_id String?
     personnel_incharge    User?   @relation(fields: [personnel_incharge_id], references: [id])
-    // If your `User` model has `user_id` as business ID and `id` as the PK, 
-    // then references: [id] is correct. Adjust if different.
 
-    // Supplier
     supplier_id String?
     supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
 
-    // --------------
-    // TEXT FIELDS
-    // --------------
-
-    entry_order_no                String? // text
-    document_status               String? // fixed or store as text
+    // --------------------------
+    // TEXT & DATE FIELDS
+    // --------------------------
+    entry_order_no                String?
+    registration_date             DateTime?
+    document_date                 DateTime?
+    admission_date_time           DateTime?
+    document_status               String? // Consider using enum if limited values
+    order_progress                String?
     observation                   String?
     total_volume                  String?
     total_weight                  String?
     cif_value                     String?
     product                       String?
-    protocol_analysis_certificate String? // file upload url
+    protocol_analysis_certificate String? // File URL
+    mfd_date_time                 DateTime?
+    expiration_date               DateTime?
     lot_series                    String?
     quantity_packaging            String?
     presentation                  String?
     total_qty                     String?
-    technical_specification       String? // file upload url
-    temperature                   String?
-    humidity                      String?
-    order_progress_id             String?
+    technical_specification       String? // File URL
+    temperature                   String? // Consider Decimal type if numeric
+    humidity                      String? // Consider Decimal type if numeric
 
-    // -----------------
-    // DATETIME FIELDS
-    // -----------------
-    registration_date   DateTime?
-    document_date       DateTime?
-    admission_date_time DateTime?
-    mfd_date_time       DateTime?
-    expiration_date     DateTime?
-
-    // ------------------------------------------------------
-    // LEGACY FIELDS (from previous schema) – keep if needed
-    // ------------------------------------------------------
-    batch_number               String?
-    received_quantity          Int?
-    unit                       String?
-    expiry_date                DateTime?
-    storage_location           String?
-    quality_check              Boolean      @default(false)
+    // --------------------------
+    // REMOVED LEGACY FIELDS
+    // (No longer needed based on your requirements)
+    // --------------------------
     ProductLine                ProductLine? @relation(fields: [productLineProduct_line_id], references: [product_line_id])
     productLineProduct_line_id String?
     Temperature                Temperature? @relation(fields: [temperatureTemperature_id], references: [temperature_id])
