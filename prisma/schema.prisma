@@ -28,30 +28,28 @@ enum DocumentApplicableTo {
  */
 
 model Origin {
-    origin_id  String       @id @default(uuid()) @map("origin_id")
-    name       String       @unique
-    // Relation: Many Origins belong to one Country.
-    country_id String?
-    country    Country?     @relation(fields: [country_id], references: [country_id])
+    origin_id String @id @default(uuid()) @map("origin_id")
+    name      String @unique
+
     EntryOrder EntryOrder[]
 
     @@map("origins")
 }
 
 model DocumentType {
-    document_type_id String               @id @default(uuid()) @map("document_type_id")
-    name             String               @unique
-    applicable_to    DocumentApplicableTo
-    EntryOrder       EntryOrder[]
+    document_type_id String @id @default(uuid()) @map("document_type_id")
+    name             String @unique
+
+    EntryOrder EntryOrder[]
 
     @@map("document_types")
 }
 
 model ExitOption {
-    exit_option_id  String           @id @default(uuid()) @map("exit_option_id")
-    name            String           @unique
-    carrier_details Json?
-    DepartureOrder  DepartureOrder[]
+    exit_option_id String @id @default(uuid()) @map("exit_option_id")
+    name           String @unique
+
+    DepartureOrder DepartureOrder[]
 
     @@map("exit_options")
 }
@@ -66,12 +64,21 @@ model CustomerType {
 }
 
 model Label {
-    label_id              String           @id @default(uuid()) @map("label_id")
-    name                  String           @unique
-    shipping_requirements Json?
-    DepartureOrder        DepartureOrder[]
+    label_id String @id @default(uuid()) @map("label_id")
+    name     String @unique
+
+    DepartureOrder DepartureOrder[]
 
     @@map("labels")
+}
+
+model PackagingType {
+    packaging_type_id String @id @default(uuid()) @map("packaging_type_id")
+    name              String @unique
+
+    DepartureOrder DepartureOrder[]
+
+    @@map("packaging_types")
 }
 
 model ProductLine {
@@ -94,12 +101,11 @@ model GroupName {
 }
 
 model Country {
-    country_id String     @id @default(uuid()) @map("country_id")
-    name       String     @unique
-    iso_code   String?    @unique @db.Char(2)
-    Origin     Origin[]
-    Supplier   Supplier[]
-    Product    Product[]
+    country_id String  @id @default(uuid()) @map("country_id")
+    name       String  @unique
+
+
+    Product Product[]
 
     @@map("countries")
 }
@@ -115,12 +121,11 @@ model Temperature {
 }
 
 model ActiveState {
-    state_id   String       @id @default(uuid()) @map("state_id")
-    name       String       @unique
-    User       User[]
-    Supplier   Supplier[]
-    Customer   Customer[]
-    Product    Product[]
+    state_id String     @id @default(uuid()) @map("state_id")
+    name     String     @unique
+    User     User[]
+    Customer Customer[]
+    Product  Product[]
 
     @@map("active_states")
 }
@@ -171,18 +176,11 @@ model Role {
 }
 
 model Supplier {
-    supplier_id           String       @id @default(uuid()) @map("supplier_id")
-    name                  String
-    country_id            String?
-    country               Country?     @relation(fields: [country_id], references: [country_id])
-    document_types        Json? // JSON array/object storing supported document types
-    active_state_id       String?
-    active_state          ActiveState? @relation(fields: [active_state_id], references: [state_id])
-    maintenance_notes     String?
-    last_maintenance_date DateTime?    @db.Date
-    EntryOrder            EntryOrder[]
+    supplier_id String @id @default(uuid()) @map("supplier_id")
+    name        String
 
-    @@index([country_id], name: "idx_supplier_country")
+    EntryOrder EntryOrder[]
+
     @@map("suppliers")
 }
 
@@ -254,43 +252,39 @@ model EntryOrder {
     order_id       String @unique
     order          Order  @relation(fields: [order_id], references: [order_id])
 
-
-    origin_id      String?
-    origin         Origin?  @relation(fields: [origin_id], references: [origin_id])
+    origin_id String?
+    origin    Origin? @relation(fields: [origin_id], references: [origin_id])
 
     document_type_id String?
-    documentType    DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
+    documentType     DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
 
     personnel_incharge_id String?
-    personnel_incharge    User? @relation(fields: [personnel_incharge_id], references: [id])
+    personnel_incharge    User?   @relation(fields: [personnel_incharge_id], references: [id])
 
-    supplier_id     String?
-    supplier        Supplier? @relation(fields: [supplier_id], references: [supplier_id])
+    supplier_id String?
+    supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
 
-
-    entry_order_no                 String?
-    registration_date              DateTime?
-    document_date                  DateTime?
-    admission_date_time            DateTime?
-    document_status                String?  // Consider using enum if limited values
-    order_progress                 String?
-    observation                    String?
-    total_volume                   String?
-    total_weight                   String?
-    cif_value                      String?
-    product                        String?
-    protocol_analysis_certificate  String?  // File URL
-    mfd_date_time                  DateTime?
-    expiration_date                DateTime?
-    lot_series                     String?
-    quantity_packaging             String?
-    presentation                   String?
-    total_qty                      String?
-    technical_specification        String?  // File URL
-    temperature                    String?  // Consider Decimal type if numeric
-    humidity                       String?  // Consider Decimal type if numeric
-
-
+    entry_order_no                String?
+    registration_date             DateTime?
+    document_date                 DateTime?
+    admission_date_time           DateTime?
+    document_status               String? // Consider using enum if limited values
+    order_progress                String?
+    observation                   String?
+    total_volume                  String?
+    total_weight                  String?
+    cif_value                     String?
+    product                       String?
+    protocol_analysis_certificate String? // File URL
+    mfd_date_time                 DateTime?
+    expiration_date               DateTime?
+    lot_series                    String?
+    quantity_packaging            String?
+    presentation                  String?
+    total_qty                     String?
+    technical_specification       String? // File URL
+    temperature                   String? // Consider Decimal type if numeric
+    humidity                      String? // Consider Decimal type if numeric
 
     @@map("entry_orders")
 }
@@ -305,7 +299,11 @@ model DepartureOrder {
     exitOption         ExitOption? @relation(fields: [exit_option_id], references: [exit_option_id])
     label_id           String?
     label              Label?      @relation(fields: [label_id], references: [label_id])
-    shipping_details   Json?
+
+    packaging_id  String?
+    packagingType PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
+
+    shipping_details Json?
 
     @@map("departure_orders")
 }
