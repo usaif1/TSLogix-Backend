@@ -130,10 +130,23 @@ async function getEntryFormFields() {
     const origins = await prisma.origin.findMany();
 
     // Fetching all data from the DocumentType table
-    const documentTypes = prisma.documentType.findMany();
+    const documentTypes = await prisma.documentType.findMany({
+      select: {
+        document_type_id: true,
+        name: true,
+      },
+    });
 
     // Fetching all data from the User table
-    const users = await prisma.user.findMany();
+    const users = await prisma.user.findMany({
+      select: {
+        user_id: true,
+        id: true,
+        first_name: true,
+        middle_name: true,
+        last_name: true,
+      },
+    });
 
     // Fetching all data from the Supplier table
     const suppliers = await prisma.supplier.findMany();

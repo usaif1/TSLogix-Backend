@@ -144,9 +144,11 @@ model User {
     user_id         String       @unique @map("user_id") // Used for login
     organisation_id String
     organisation    Organisation @relation(fields: [organisation_id], references: [organisation_id])
-
-    email         String @unique
-    password_hash String @map("password_hash")
+    first_name      String?
+    middle_name     String?
+    last_name       String?
+    email           String       @unique
+    password_hash   String       @map("password_hash")
 
     role_id String?
     role    Role?   @relation(fields: [role_id], references: [role_id])
@@ -271,7 +273,7 @@ model EntryOrder {
     supplier_id String?
     supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
 
-    entry_order_no                String?
+    entry_order_no                String?   @unique
     registration_date             DateTime?
     document_date                 DateTime?
     admission_date_time           DateTime?
