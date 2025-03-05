@@ -229,8 +229,6 @@ model Order {
 
     entryOrder     EntryOrder?
     departureOrder DepartureOrder?
-    OrderType      OrderType?      @relation(fields: [orderTypeId], references: [id])
-    orderTypeId    Int?
 
     @@index([created_at], name: "idx_order_creation")
     @@map("orders")
@@ -241,7 +239,6 @@ model OrderType {
     name        String  @unique
     description String?
     schema      String? // JSON string for schema
-    orders      Order[]
 
     @@map("order_types")
 }
@@ -274,7 +271,7 @@ model EntryOrder {
     total_weight                  String?
     cif_value                     String?
     product                       String?
-    protocol_analysis_certificate String? // File URL
+    certificate_protocol_analysis String? // File URL
     mfd_date_time                 DateTime?
     expiration_date               DateTime?
     lot_series                    String?

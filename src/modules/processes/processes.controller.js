@@ -1,43 +1,64 @@
-const processService = require("./processes.service");
+const processesService = require("./processes.service");
 
 /**
  * Handles the creation of an order and entry order.
  */
 async function createEntryOrder(req, res) {
+  const entryData = req.body;
+
+  // Validate the incoming data (make sure essential fields are present)
+  if (
+    !entryData.order_type ||
+    !entryData.entry_order_no ||
+    !entryData.organisation_id ||
+    !entryData.created_by
+  ) {
+    return res.status(400).json({
+      message: "Missing required fields",
+    });
+  }
+
   try {
-    const { orderData, entryData } = req.body;
+    // Call the service to create the EntryOrder and Order
+    const newEntryOrder = await processesService.createEntryOrder(entryData);
 
-    if (!orderData || !entryData) {
-      return res.status(400).json({ message: "Missing required data" });
-    }
-
-    const result = await processService.createEntryOrder(orderData, entryData);
-
+    // Send the newly created EntryOrder as the response
     return res.status(201).json({
-      message: "Order and Entry Order created successfully",
-      order_id: result.order_id,
-      entry_order_id: result.entry_order_id,
+      message: "Entry order created successfully",
+      entryOrder: newEntryOrder,
     });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    // Handle any errors
+    return res.status(500).json({
+      message: "Error creating entry order",
+      error: error.message,
+    });
   }
 }
 
 /**
- * Fetch all entry orders.
+ * Handle request to fetch all EntryOrders
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
  */
 async function getAllEntryOrders(req, res) {
   try {
-    const entryOrders = await processService.getAllEntryOrders();
-    return res.status(200).json(entryOrders);
+    const entryOrders = await processesService.getAllEntryOrders();
+    return res.status(200).json({
+      message: "Entry orders fetched successfully",
+      data: entryOrders,
+    });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return res.status(500).json({
+      message: "Error fetching entry orders",
+      error: error.message,
+    });
   }
 }
 
 async function getEntryFormFields(req, res) {
   try {
-    const entryFormDropdownData = await processService.getEntryFormFields();
+    const entryFormDropdownData = await processesService.getEntryFormFields();
     return res.status(200).json(entryFormDropdownData);
   } catch (error) {
     console.error("Error fetching data:", error);

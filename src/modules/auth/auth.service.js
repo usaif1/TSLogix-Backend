@@ -91,8 +91,7 @@ async function loginUser(userId, plainPassword) {
         email: user.email,
         role: user.role.name, // Attach role name in the token
       },
-      SECRET_KEY,
-      { expiresIn: "2h" }
+      SECRET_KEY
     );
 
     return { token, role: user.role.name };

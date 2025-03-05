@@ -27,7 +27,7 @@ const processesRoutes = require("@/modules/processes/processes.route");
 
 // Mount your module routes
 app.use("/auth", authRoutes);
-app.use("/organisation", authenticateToken, organisationRoutes);
+app.use("/organisation", organisationRoutes);
 app.use("/processes", authenticateToken, processesRoutes);
 
 // const indexRouter = require("@/routes");
