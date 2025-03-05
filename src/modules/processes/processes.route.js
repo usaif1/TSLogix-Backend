@@ -6,6 +6,8 @@ const router = express.Router();
 // ✅ Route to create a new entry order
 router.post("/create-entry-order", processController.createEntryOrder);
 
+router.get("/entry-formfields", processController.getEntryFormFields);
+
 // ✅ Route to fetch all entry orders
 router.get("/entry-orders", processController.getAllEntryOrders);
 

@@ -77,4 +77,26 @@ async function getAllEntryOrders() {
   }
 }
 
-module.exports = { createEntryOrder, getAllEntryOrders };
+async function getEntryFormFields() {
+  try {
+    // Fetching all data from the Origin table
+    const origins = await prisma.origin.findMany();
+
+    // Fetching all data from the User table
+    const users = await prisma.user.findMany();
+
+    // Fetching all data from the Supplier table
+    const suppliers = await prisma.supplier.findMany();
+
+    return {
+      origins,
+      users,
+      suppliers,
+    };
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    throw new Error("Error fetching data from the database");
+  }
+}
+
+module.exports = { createEntryOrder, getAllEntryOrders, getEntryFormFields };

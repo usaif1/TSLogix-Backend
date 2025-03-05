@@ -35,4 +35,14 @@ async function getAllEntryOrders(req, res) {
   }
 }
 
-module.exports = { createEntryOrder, getAllEntryOrders };
+async function getEntryFormFields(req, res) {
+  try {
+    const entryFormDropdownData = await processService.getEntryFormFields();
+    return res.status(200).json(entryFormDropdownData);
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    return res.status(500).json({ message: error.message });
+  }
+}
+
+module.exports = { createEntryOrder, getAllEntryOrders, getEntryFormFields };

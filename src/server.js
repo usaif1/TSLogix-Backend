@@ -17,6 +17,9 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// middleware
+const authenticateToken = require("@/middlewares/authMiddleware");
+
 // routes
 const authRoutes = require("@/modules/auth/auth.route");
 const organisationRoutes = require("@/modules/organisation/organisation.route");
@@ -24,8 +27,8 @@ const processesRoutes = require("@/modules/processes/processes.route");
 
 // Mount your module routes
 app.use("/auth", authRoutes);
-app.use("/organisation", organisationRoutes);
-app.use("/processes", processesRoutes);
+app.use("/organisation", authenticateToken, organisationRoutes);
+app.use("/processes", authenticateToken, processesRoutes);
 
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);
