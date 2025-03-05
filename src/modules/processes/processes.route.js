@@ -12,4 +12,9 @@ router.post("/create-entry-order", processController.createEntryOrder);
 // ✅ Route to fetch all entry orders
 router.get("/entry-orders", processController.getAllEntryOrders);
 
+// ---------------------------- DEPARTURE  ---------------------------- //
+
+// route to get data for departure form dropdown fields
+router.get("/departure-formfields", processController.getDepartureFormFields);
+
 module.exports = router;

@@ -49,8 +49,6 @@ model ExitOption {
     exit_option_id String @id @default(uuid()) @map("exit_option_id")
     name           String @unique
 
-    DepartureOrder DepartureOrder[]
-
     @@map("exit_options")
 }
 
@@ -67,8 +65,6 @@ model Label {
     label_id String @id @default(uuid()) @map("label_id")
     name     String @unique
 
-    DepartureOrder DepartureOrder[]
-
     @@map("labels")
 }
 
@@ -76,16 +72,12 @@ model PackagingType {
     packaging_type_id String @id @default(uuid()) @map("packaging_type_id")
     name              String @unique
 
-    DepartureOrder DepartureOrder[]
-
     @@map("packaging_types")
 }
 
 model ProductLine {
-    product_line_id String       @id @default(uuid()) @map("product_line_id")
-    name            String       @unique
-    temperature_id  String?
-    temperature     Temperature? @relation(fields: [temperature_id], references: [temperature_id])
+    product_line_id String    @id @default(uuid()) @map("product_line_id")
+    name            String    @unique
     Product         Product[]
 
     @@map("product_lines")
@@ -104,19 +96,20 @@ model Country {
     country_id String @id @default(uuid()) @map("country_id")
     name       String @unique
 
-    Product Product[]
+    Supplier Supplier[] // Reverse relation to Supplier
 
     @@map("countries")
 }
 
-model Temperature {
-    temperature_id String        @id @default(uuid()) @map("temperature_id")
-    range          String        @unique
-    min_celsius    Int?
-    max_celsius    Int?
-    ProductLine    ProductLine[]
+model TemperatureRange {
+    temperature_range_id String @id @default(uuid()) @map("temperature_id")
+    range                String @unique
+    min_celsius          Int?
+    max_celsius          Int?
 
-    @@map("temperatures")
+    Product Product[]
+
+    @@map("temperature_ranges") // Renaming the table to 'temperature_ranges'
 }
 
 model ActiveState {
@@ -175,10 +168,19 @@ model Role {
 }
 
 model Supplier {
-    supplier_id String @id @default(uuid()) @map("supplier_id")
+    supplier_id String  @id @default(uuid()) @map("supplier_id")
     name        String
+    address     String? // Address field
+    city        String? // City field
+    phone       String? // Phone field
+    email       String? // Email field
+    ruc         String? // RUC field
+    country_id  String? // Foreign key to Country
+    country     Country? @relation(fields: [country_id], references: [country_id]) // Link to Country table
 
-    EntryOrder EntryOrder[]
+    EntryOrder EntryOrder[] // Relation with EntryOrder model
+
+    DepartureOrder DepartureOrder[] // Relation with DepartureOrder model
 
     @@map("suppliers")
 }
@@ -199,20 +201,26 @@ model Customer {
 }
 
 model Product {
-    product_id            String       @id @default(uuid()) @map("product_id")
-    name                  String
-    product_line_id       String
-    product_line          ProductLine  @relation(fields: [product_line_id], references: [product_line_id])
-    group_id              String
-    group                 GroupName    @relation(fields: [group_id], references: [group_id])
-    country_id            String
-    country               Country      @relation(fields: [country_id], references: [country_id])
-    active_state_id       String?
-    active_state          ActiveState? @relation(fields: [active_state_id], references: [state_id])
-    maintenance_schedule  Json?
-    last_maintenance_date DateTime?    @db.Date
+    product_id      String      @id @default(uuid()) @map("product_id")
+    name            String
+    product_line_id String
+    product_line    ProductLine @relation(fields: [product_line_id], references: [product_line_id])
 
-    @@index([last_maintenance_date], name: "idx_product_maintenance")
+    group_id String
+    group    GroupName @relation(fields: [group_id], references: [group_id])
+
+    temperature_range_id String
+    temperature_range    TemperatureRange @relation(fields: [temperature_range_id], references: [temperature_range_id]) // Linked to TemperatureRange
+
+    humidity String? // Optional field to store humidity value
+
+    active_state_id String?
+    active_state    ActiveState? @relation(fields: [active_state_id], references: [state_id]) // Linked to ActiveState
+
+    // Optional fields for product information
+    manufacturer       String? // Assuming 'Fabricante' refers to the manufacturer
+    storage_conditions String? // Humidity and temperature storage conditions, if needed
+
     @@map("products")
 }
 
@@ -287,19 +295,19 @@ model EntryOrder {
 
 model DepartureOrder {
     // Primary key also referencing orders.order_id
-    departure_order_id String      @id @map("departure_order_id")
-    order              Order       @relation(fields: [departure_order_id], references: [order_id])
+    departure_order_id String    @id @map("departure_order_id")
+    order              Order     @relation(fields: [departure_order_id], references: [order_id])
     customer_id        String?
-    customer           Customer?   @relation(fields: [customer_id], references: [customer_id])
+    customer           Customer? @relation(fields: [customer_id], references: [customer_id])
     exit_option_id     String?
-    exitOption         ExitOption? @relation(fields: [exit_option_id], references: [exit_option_id])
     label_id           String?
-    label              Label?      @relation(fields: [label_id], references: [label_id])
 
-    packaging_id  String?
-    packagingType PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
+    packaging_id String?
 
     shipping_details Json?
+
+    supplier_id String?
+    supplier    Supplier? @relation(fields: [supplier_id], references: [supplier_id])
 
     @@map("departure_orders")
 }

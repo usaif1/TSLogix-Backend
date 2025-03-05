@@ -69,12 +69,31 @@ async function createEntryOrder(entryData) {
 async function getAllEntryOrders() {
   try {
     const entryOrders = await prisma.entryOrder.findMany({
-      include: {
-        order: true,
-        origin: true,
-        documentType: true,
-        supplier: true,
-        personnel_incharge: true,
+      select: {
+        entry_order_no: true,
+        documentType: {
+          select: {
+            name: true, // Only select the 'name' of the documentType
+            document_type_id: true,
+          },
+        },
+        supplier: {
+          select: {
+            name: true, // Only select the 'name' of the supplier
+            supplier_id: true,
+          },
+        },
+        origin: {
+          select: {
+            name: true, // Only select the 'name' of the origin
+            origin_id: true,
+          },
+        },
+        order: {
+          select: {
+            created_at: true, // Select 'created_at' from the related Order model
+          },
+        },
       },
     });
     return entryOrders;
@@ -83,10 +102,35 @@ async function getAllEntryOrders() {
     throw new Error("Error fetching entry orders");
   }
 }
+// async function getAllEntryOrders() {
+// try {
+//   const entryOrders = await prisma.entryOrder.findMany({
+//     include: {
+//       order: true,
+//       origin: true,
+//       documentType: true,
+//       supplier: true,
+//       personnel_incharge: true,
+//     },
+//   });
+//   return entryOrders;
+// } catch (error) {
+//   console.error("Error fetching entry orders:", error);
+//   throw new Error("Error fetching entry orders");
+// }
+// }
+
+/**
+ * get all the dropdown fields required for entry form
+ *  */
+
 async function getEntryFormFields() {
   try {
     // Fetching all data from the Origin table
     const origins = await prisma.origin.findMany();
+
+    // Fetching all data from the DocumentType table
+    const documentTypes = prisma.documentType.findMany();
 
     // Fetching all data from the User table
     const users = await prisma.user.findMany();
@@ -98,6 +142,7 @@ async function getEntryFormFields() {
       origins,
       users,
       suppliers,
+      documentTypes,
     };
   } catch (error) {
     console.error("Error fetching data:", error);
@@ -105,4 +150,44 @@ async function getEntryFormFields() {
   }
 }
 
-module.exports = { createEntryOrder, getAllEntryOrders, getEntryFormFields };
+/**
+ * Fetch all required data (ExitOptions, Customers, DocumentTypes, Users, PackagingTypes, Labels)
+ */
+async function getDepartureFormFields() {
+  try {
+    const [
+      exitOptions,
+      customers,
+      documentTypes,
+      users,
+      packagingTypes,
+      labels,
+    ] = await Promise.all([
+      prisma.exitOption.findMany(),
+      prisma.customer.findMany(),
+      prisma.documentType.findMany(),
+      prisma.user.findMany(),
+      prisma.packagingType.findMany(),
+      prisma.label.findMany(),
+    ]);
+
+    return {
+      exitOptions,
+      customers,
+      documentTypes,
+      users,
+      packagingTypes,
+      labels,
+    };
+  } catch (error) {
+    console.error("Error fetching all data:", error);
+    throw new Error("Error fetching all data");
+  }
+}
+
+module.exports = {
+  createEntryOrder,
+  getAllEntryOrders,
+  getEntryFormFields,
+  getDepartureFormFields,
+};

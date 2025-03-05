@@ -56,6 +56,9 @@ async function getAllEntryOrders(req, res) {
   }
 }
 
+/**
+ * Handle request to fetch all entry form dropdown fields
+ */
 async function getEntryFormFields(req, res) {
   try {
     const entryFormDropdownData = await processesService.getEntryFormFields();
@@ -66,4 +69,27 @@ async function getEntryFormFields(req, res) {
   }
 }
 
-module.exports = { createEntryOrder, getAllEntryOrders, getEntryFormFields };
+/**
+ * Handle request to fetch all entry form dropdown fields
+ */
+async function getDepartureFormFields(req, res) {
+  try {
+    const data = await processesService.getDepartureFormFields();
+    return res.status(200).json({
+      message: "Data fetched successfully",
+      data: data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error fetching data",
+      error: error.message,
+    });
+  }
+}
+
+module.exports = {
+  createEntryOrder,
+  getAllEntryOrders,
+  getEntryFormFields,
+  getDepartureFormFields,
+};
