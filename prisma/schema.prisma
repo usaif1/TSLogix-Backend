@@ -46,8 +46,9 @@ model DocumentType {
 }
 
 model ExitOption {
-    exit_option_id String @id @default(uuid()) @map("exit_option_id")
-    name           String @unique
+    exit_option_id String           @id @default(uuid()) @map("exit_option_id")
+    name           String           @unique
+    DepartureOrder DepartureOrder[]
 
     @@map("exit_options")
 }
@@ -62,15 +63,17 @@ model CustomerType {
 }
 
 model Label {
-    label_id String @id @default(uuid()) @map("label_id")
-    name     String @unique
+    label_id       String           @id @default(uuid()) @map("label_id")
+    name           String           @unique
+    DepartureOrder DepartureOrder[]
 
     @@map("labels")
 }
 
 model PackagingType {
-    packaging_type_id String @id @default(uuid()) @map("packaging_type_id")
-    name              String @unique
+    packaging_type_id String           @id @default(uuid()) @map("packaging_type_id")
+    name              String           @unique
+    DepartureOrder    DepartureOrder[]
 
     @@map("packaging_types")
 }
@@ -168,7 +171,7 @@ model Role {
 }
 
 model Supplier {
-    supplier_id String  @id @default(uuid()) @map("supplier_id")
+    supplier_id String   @id @default(uuid()) @map("supplier_id")
     name        String
     address     String? // Address field
     city        String? // City field
@@ -295,14 +298,23 @@ model EntryOrder {
 
 model DepartureOrder {
     // Primary key also referencing orders.order_id
-    departure_order_id String    @id @map("departure_order_id")
-    order              Order     @relation(fields: [departure_order_id], references: [order_id])
-    customer_id        String?
-    customer           Customer? @relation(fields: [customer_id], references: [customer_id])
-    exit_option_id     String?
-    label_id           String?
+    departure_order_id String @id @map("departure_order_id")
 
-    packaging_id String?
+    // Ensure it's a one-to-one relationship with `Order`
+    order_id String @unique
+    order    Order  @relation(fields: [order_id], references: [order_id])
+
+    customer_id String?
+    customer    Customer? @relation(fields: [customer_id], references: [customer_id])
+
+    exit_option_id String?
+    exitOption     ExitOption? @relation(fields: [exit_option_id], references: [exit_option_id])
+
+    label_id String?
+    label    Label?  @relation(fields: [label_id], references: [label_id])
+
+    packaging_id  String?
+    packagingType PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
 
     shipping_details Json?
 
