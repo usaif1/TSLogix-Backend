@@ -1,5 +1,4 @@
 const { PrismaClient } = require("@prisma/client");
-
 const prisma = new PrismaClient();
 
 async function createSupplier(supplierData) {
@@ -17,7 +16,6 @@ async function createSupplier(supplierData) {
         },
       },
     });
-
     return newSupplier;
   } catch (error) {
     console.error("Error creating supplier:", error);
@@ -25,4 +23,21 @@ async function createSupplier(supplierData) {
   }
 }
 
-module.exports = { createSupplier };
+/**
+ * Fetch all suppliers along with related country details.
+ */
+async function getAllSuppliers() {
+  try {
+    const suppliers = await prisma.supplier.findMany({
+      include: {
+        country: true,
+      },
+    });
+    return suppliers;
+  } catch (error) {
+    console.error("Error fetching suppliers:", error);
+    throw new Error("Error fetching suppliers: " + error.message);
+  }
+}
+
+module.exports = { createSupplier, getAllSuppliers };
