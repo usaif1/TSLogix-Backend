@@ -29,4 +29,23 @@ async function addSupplier(req, res) {
   }
 }
 
-module.exports = { addSupplier };
+
+/**
+ * Controller function to fetch all suppliers.
+ */
+async function getSuppliers(req, res) {
+  try {
+    const suppliers = await maintenanceService.getAllSuppliers();
+    return res.status(200).json({
+      message: "Suppliers fetched successfully",
+      suppliers,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error fetching suppliers",
+      error: error.message,
+    });
+  }
+}
+
+module.exports = { addSupplier, getSuppliers };
