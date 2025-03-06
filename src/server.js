@@ -2,6 +2,8 @@ require("module-alias/register");
 const express = require("express");
 const cors = require("cors");
 const app = express();
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient();
 
 // Configure CORS
 app.use(

@@ -87,9 +87,61 @@ async function getDepartureFormFields(req, res) {
   }
 }
 
+// get departure exit options
+async function getDepartureExitOptions(req, res) {
+  try {
+    const data = await processesService.getDepartureExitOptions();
+    return res.status(200).json({
+      message: "Data fetched successfully",
+      data: data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error fetching data",
+      error: error.message,
+    });
+  }
+}
+
+// get all departure order
+async function getAllDepartureOrders(req, res) {
+  try {
+    const data = await processesService.getAllDepartureOrders();
+    return res.status(200).json({
+      message: "Data fetched successfully",
+      data: data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error fetching data",
+      error: error.message,
+    });
+  }
+}
+
+// function to create new departure order
+async function createDepartureOrder(req, res) {
+  try {
+    const newRecord = await processesService.createDepartureOrder(req.body);
+    return res.status(201).json({
+      message: "Departure Order created successfully",
+      data: newRecord,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to create departure order" });
+  }
+}
+
 module.exports = {
+  // entry orders
   createEntryOrder,
   getAllEntryOrders,
   getEntryFormFields,
+
+  // departure
   getDepartureFormFields,
+  getDepartureExitOptions,
+  getAllDepartureOrders,
+  createDepartureOrder,
 };

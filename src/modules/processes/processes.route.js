@@ -17,4 +17,13 @@ router.get("/entry-orders", processController.getAllEntryOrders);
 // route to get data for departure form dropdown fields
 router.get("/departure-formfields", processController.getDepartureFormFields);
 
+router.get(
+  "/departure-exit-options",
+  processController.getDepartureExitOptions
+);
+
+router.get("/departure-orders", processController.getAllDepartureOrders);
+
+router.post("/create-departure-order", processController.createDepartureOrder);
+
 module.exports = router;
