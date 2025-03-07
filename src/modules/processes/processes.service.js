@@ -164,31 +164,34 @@ async function getDepartureExitOptions() {
  */
 async function getDepartureFormFields() {
   try {
-    const [
-      exitOptions,
-      customers,
-      documentTypes,
-      users,
-      packagingTypes,
-      labels,
-    ] = await Promise.all([
-      prisma.customer.findMany(),
-      prisma.documentType.findMany(),
-      prisma.user.findMany({
-        select: {
-          user_id: true,
-          id: true,
-          first_name: true,
-          middle_name: true,
-          last_name: true,
-        },
-      }),
-      prisma.packagingType.findMany(),
-      prisma.label.findMany(),
-    ]);
+    const [customers, documentTypes, users, packagingTypes, labels] =
+      await Promise.all([
+        prisma.customer.findMany({
+          select: {
+            customer_id: true,
+            name: true,
+          },
+        }),
+        prisma.documentType.findMany({
+          select: {
+            document_type_id: true,
+            name: true,
+          },
+        }),
+        prisma.user.findMany({
+          select: {
+            user_id: true,
+            id: true,
+            first_name: true,
+            middle_name: true,
+            last_name: true,
+          },
+        }),
+        prisma.packagingType.findMany(),
+        prisma.label.findMany(),
+      ]);
 
     return {
-      exitOptions,
       customers,
       documentTypes,
       users,
