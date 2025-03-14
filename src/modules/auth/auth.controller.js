@@ -36,17 +36,30 @@ async function login(req, res) {
   }
 
   try {
-    const { token, role } = await authService.loginUser(userId, password);
+    // Changed variable name from 'res' to 'authResult' to avoid conflict
+    const authResult = await authService.loginUser(userId, password);
+
+    console.log("authResult", authResult);
+
+    // Make sure we have all required data from authResult
+    const { token, role, organisation_id, id } = authResult;
 
     return res.status(200).json({
+      success: true,
       message: "Login successful",
       data: {
         token,
         role,
-      },
+        organisation_id,
+        id
+      }
     });
   } catch (err) {
-    return res.status(401).json({ message: err.message });
+    console.error("Login error:", err);
+    return res.status(401).json({ 
+      success: false,
+      message: err.message 
+    });
   }
 }
 

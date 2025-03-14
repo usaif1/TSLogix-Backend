@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Origin {
@@ -16,11 +17,10 @@ model Origin {
 }
 
 model DocumentType {
-    document_type_id String @id @default(uuid()) @map("document_type_id")
-    name             String @unique
-
-    EntryOrder     EntryOrder[]
-    DepartureOrder DepartureOrder[]
+  document_type_id String           @id @default(uuid()) @map("document_type_id")
+  name             String           @unique
+  DepartureOrder   DepartureOrder[]
+  EntryOrder       EntryOrder[]
 
   @@map("document_types")
 }
@@ -116,27 +116,23 @@ model Organisation {
 }
 
 model User {
-    id              String       @id @default(uuid()) @map("id") // New UUID for relationships
-    user_id         String       @unique @map("user_id") // Used for login
-    organisation_id String
-    organisation    Organisation @relation(fields: [organisation_id], references: [organisation_id])
-    first_name      String?
-    middle_name     String?
-    last_name       String?
-    email           String       @unique
-    password_hash   String       @map("password_hash")
-
-    role_id String?
-    role    Role?   @relation(fields: [role_id], references: [role_id])
-
-    active_state_id String?
-    active_state    ActiveState? @relation(fields: [active_state_id], references: [state_id])
-
-    created_at DateTime @default(now())
-
-    orders         Order[]          @relation("OrderCreatedBy")
-    EntryOrder     EntryOrder[]
-    DepartureOrder DepartureOrder[]
+  created_at      DateTime         @default(now())
+  active_state_id String?
+  email           String           @unique
+  organisation_id String
+  user_id         String           @unique @map("user_id")
+  password_hash   String           @map("password_hash")
+  role_id         String?
+  id              String           @id @default(uuid()) @map("id")
+  first_name      String?
+  last_name       String?
+  middle_name     String?
+  DepartureOrder  DepartureOrder[]
+  EntryOrder      EntryOrder[]
+  orders          Order[]          @relation("OrderCreatedBy")
+  active_state    ActiveState?     @relation(fields: [active_state_id], references: [state_id])
+  organisation    Organisation     @relation(fields: [organisation_id], references: [organisation_id])
+  role            Role?            @relation(fields: [role_id], references: [role_id])
 
   @@map("users")
 }
@@ -150,31 +146,30 @@ model Role {
 }
 
 model Supplier {
-    supplier_id String   @id @default(uuid()) @map("supplier_id")
-    name        String
-    address     String? // Address field
-    city        String? // City field
-    phone       String? // Phone field
-    email       String? // Email field
-    ruc         String? // RUC field
-    country_id  String? // Foreign key to Country
-    country     Country? @relation(fields: [country_id], references: [country_id]) // Link to Country table
-
-    EntryOrder EntryOrder[] // Relation with EntryOrder model
+  supplier_id String       @id @default(uuid()) @map("supplier_id")
+  name        String
+  address     String?
+  city        String?
+  country_id  String?
+  email       String?
+  phone       String?
+  ruc         String?
+  EntryOrder  EntryOrder[]
+  country     Country?     @relation(fields: [country_id], references: [country_id])
 
   @@map("suppliers")
 }
 
 model Customer {
-    customer_id     String           @id @default(uuid()) @map("customer_id")
-    name            String?
-    type_id         String?
-    type            CustomerType?     @relation(fields: [type_id], references: [customer_type_id])
-    billing_address Json?
-    active_state_id String?
-    active_state    ActiveState?     @relation(fields: [active_state_id], references: [state_id])
-    created_at      DateTime?         @default(now())
-    DepartureOrder  DepartureOrder[]
+  customer_id     String           @id @default(uuid()) @map("customer_id")
+  name            String?
+  type_id         String?
+  billing_address Json?
+  active_state_id String?
+  created_at      DateTime?        @default(now())
+  active_state    ActiveState?     @relation(fields: [active_state_id], references: [state_id])
+  type            CustomerType?    @relation(fields: [type_id], references: [customer_type_id])
+  DepartureOrder  DepartureOrder[]
 
   @@index([type_id], map: "idx_customer_type")
   @@map("customers")
@@ -251,6 +246,14 @@ model EntryOrder {
   total_weight                  String?
   order_progress                String?
   certificate_protocol_analysis String?
+  comments                      String?
+  entry_date                    DateTime?     @default(now())
+  entry_transfer_note           String?
+  insured_value                 Decimal?      @db.Decimal(10, 2)
+  palettes                      String?
+  product_description           String?
+  status                        String?
+  type                          String?
   documentType                  DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
   order                         Order         @relation(fields: [order_id], references: [order_id])
   origin                        Origin?       @relation(fields: [origin_id], references: [origin_id])
@@ -261,48 +264,32 @@ model EntryOrder {
 }
 
 model DepartureOrder {
-    // Primary key also referencing orders.order_id
-     departure_order_id String @id @default(uuid()) @map("departure_order_id")
-
-    // One-to-one relationship with `Order`
-    order_id String @unique
-    order    Order  @relation(fields: [order_id], references: [order_id])
-
-    // Customer
-    customer_id String?
-    customer    Customer? @relation(fields: [customer_id], references: [customer_id])
-
-    // Document Type
-    document_type_id String?
-    documentType     DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
-
-    // Packaging (PackagingType)
-    packaging_id  String?
-    packagingType PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
-
-    // Label
-    label_id String?
-    label    Label?  @relation(fields: [label_id], references: [label_id])
-
-    // Additional fields derived from the UI
-    departure_order_no        String? // "Departure Order No"
-    registration_date         DateTime? // "Registration Date"
-    document_no               String? // "Document No"
-    document_date             DateTime? // "Document Date"
-    date_and_time_of_transfer DateTime? // "Date and Time of Transfer"
-
-    personnel_in_charge_id String?
-    personnel_in_charge    User?   @relation(fields: [personnel_in_charge_id], references: [id])
-
-    document_status            String? // "Document Status"
-    arrival_point              String?
-    id_responsible             String? // "ID Responsible"
-    responsible_for_collection String? // "Responsible for Collection"
-    order_progress             String? // e.g. "Order in Process" or "Send Order"
-    observation                String?
-
-    ExitOption               ExitOption? @relation(fields: [exit_option_id], references: [exit_option_id])
-    exit_option_id String?
+  customer_id                String?
+  departure_order_id         String         @id @default(uuid()) @map("departure_order_id")
+  label_id                   String?
+  packaging_id               String?
+  order_id                   String         @unique
+  arrival_point              String?
+  date_and_time_of_transfer  DateTime?
+  departure_order_no         String?
+  document_date              DateTime?
+  document_no                String?
+  document_status            String?
+  document_type_id           String?
+  id_responsible             String?
+  observation                String?
+  order_progress             String?
+  personnel_in_charge_id     String?
+  registration_date          DateTime?
+  responsible_for_collection String?
+  exit_option_id             String?
+  customer                   Customer?      @relation(fields: [customer_id], references: [customer_id])
+  documentType               DocumentType?  @relation(fields: [document_type_id], references: [document_type_id])
+  ExitOption                 ExitOption?    @relation(fields: [exit_option_id], references: [exit_option_id])
+  label                      Label?         @relation(fields: [label_id], references: [label_id])
+  order                      Order          @relation(fields: [order_id], references: [order_id])
+  packagingType              PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
+  personnel_in_charge        User?          @relation(fields: [personnel_in_charge_id], references: [id])
 
   @@map("departure_orders")
 }
