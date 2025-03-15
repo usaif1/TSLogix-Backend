@@ -1,5 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
 const crypto = require("crypto");
+import { toUTC } from "../../utils";
 
 const prisma = new PrismaClient();
 
@@ -305,7 +306,9 @@ async function createDepartureOrder(departureData) {
         registration_date: toUTC(departureData.registration_date),
         document_no: departureData.document_no,
         document_date: toUTC(departureData.document_date),
-        date_and_time_of_transfer: toUTC(departureData.date_and_time_of_transfer),
+        date_and_time_of_transfer: toUTC(
+          departureData.date_and_time_of_transfer
+        ),
         arrival_point: departureData.arrival_point,
         id_responsible: departureData.id_responsible,
         responsible_for_collection: departureData.responsible_for_collection,
