@@ -1,6 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
 const crypto = require("crypto");
-import { toUTC } from "../../utils/index";
+const { toUTC } = require("../../utils/index")
 
 const prisma = new PrismaClient();
 
