@@ -22,9 +22,9 @@ async function createEntryOrder(entryData) {
     const newEntryOrder = await prisma.entryOrder.create({
       data: {
         entry_order_no: entryData.entry_order_no,
-        registration_date: entryData.registration_date,
-        document_date: entryData.document_date,
-        admission_date_time: entryData.admission_date_time,
+        registration_date: toUTC(entryData.registration_date),
+        document_date: toUTC(entryData.document_date),
+        admission_date_time: toUTC(entryData.admission_date_time),
         document_status: entryData.document_status,
         order_progress: entryData.order_progress,
         observation: entryData.observation,
@@ -33,8 +33,8 @@ async function createEntryOrder(entryData) {
         cif_value: entryData.cif_value,
         product: entryData.product,
         certificate_protocol_analysis: entryData.certificate_protocol_analysis,
-        mfd_date_time: entryData.mfd_date_time,
-        expiration_date: entryData.expiration_date,
+        mfd_date_time: toUTC(entryData.mfd_date_time),
+        expiration_date: toUTC(entryData.expiration_date),
         lot_series: entryData.lot_series,
         quantity_packaging: entryData.quantity_packaging,
         presentation: entryData.presentation,
@@ -48,7 +48,7 @@ async function createEntryOrder(entryData) {
         insured_value: entryData.insured_value
           ? parseFloat(entryData.insured_value)
           : null,
-        entry_date: entryData.entry_date || new Date(),
+        entry_date: toUTC(entryData.entry_date) || new Date(),
         entry_transfer_note: entryData.entry_transfer_note,
         type: entryData.type,
         status: entryData.status,
@@ -125,6 +125,9 @@ async function getAllEntryOrders(organisationId = null) {
             },
           },
         },
+      },
+      orderBy: {
+        entry_date: "desc",
       },
     };
 
@@ -299,10 +302,10 @@ async function createDepartureOrder(departureData) {
 
         // Fields from your UI:
         departure_order_no: departureData.departure_order_no,
-        registration_date: departureData.registration_date,
+        registration_date: toUTC(departureData.registration_date),
         document_no: departureData.document_no,
-        document_date: departureData.document_date,
-        date_and_time_of_transfer: departureData.date_and_time_of_transfer,
+        document_date: toUTC(departureData.document_date),
+        date_and_time_of_transfer: toUTC(departureData.date_and_time_of_transfer),
         arrival_point: departureData.arrival_point,
         id_responsible: departureData.id_responsible,
         responsible_for_collection: departureData.responsible_for_collection,

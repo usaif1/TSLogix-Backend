@@ -39,7 +39,7 @@ async function createEntryOrder(req, res) {
 }
 
 /**
- * Handle request to fetch all EntryOrders
+ * Handle request to fetch all EntryOrders, sorted with newest first
  * @param {Request} req - Express request object
  * @param {Response} res - Express response object
  */
@@ -60,9 +60,16 @@ async function getAllEntryOrders(req, res) {
     // - For ADMIN users: Pass null to see all orders across all organizations
     // - For regular users: Pass their organization ID to see only their org's orders
     const filterOrganisationId = userRole === "ADMIN" ? null : organisationId;
+    
+    // Add sorting parameter to show newest orders first
+    const sortOptions = {
+      orderBy: 'entry_date',
+      direction: 'desc'
+    };
 
     const entryOrders = await processesService.getAllEntryOrders(
-      filterOrganisationId
+      filterOrganisationId,
+      sortOptions
     );
 
     return res.status(200).json({
