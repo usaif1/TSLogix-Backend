@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
 // Configure CORS
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://127.0.0.1:3000", "http://localhost:6969"],
+    origin: ["http://localhost:5173", "http://127.0.0.1:3000", "http://localhost:6969", "http://localhost:7070"],
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
     optionsSuccessStatus: 204,

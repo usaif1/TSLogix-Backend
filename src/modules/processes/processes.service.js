@@ -11,7 +11,7 @@ async function createEntryOrder(entryData) {
     // Create the Order first
     const newOrder = await prisma.order.create({
       data: {
-        order_type: entryData.order_type, // 'ENTRY' or 'DEPARTURE'
+        order_type: entryData.order_type || "ENTRY",
         status: entryData.status || "PENDING",
         organisation_id: entryData.organisation_id,
         created_by: entryData.created_by, // Assuming it's the user creating the order
@@ -43,13 +43,23 @@ async function createEntryOrder(entryData) {
         temperature: entryData.temperature,
         humidity: entryData.humidity,
 
+        palettes: entryData.palettes,
+        product_description: entryData.product_description,
+        insured_value: entryData.insured_value
+          ? parseFloat(entryData.insured_value)
+          : null,
+        entry_date: entryData.entry_date || new Date(),
+        entry_transfer_note: entryData.entry_transfer_note,
+        type: entryData.type,
+        status: entryData.status,
+        comments: entryData.comments,
         // Link EntryOrder to the created Order
         order_id: newOrder.order_id,
 
         // Additional relations
         origin_id: entryData.origin_id,
-        document_type_id: entryData.document_type_id,
-        personnel_incharge_id: entryData.personnel_incharge_id,
+        // document_type_id: entryData.document_type_id,
+        // personnel_incharge_id: entryData.personnel_incharge_id,
         supplier_id: entryData.supplier_id,
       },
     });
@@ -63,43 +73,75 @@ async function createEntryOrder(entryData) {
 }
 
 /**
- * Fetch all EntryOrders
- * @returns {Promise<Array>} - List of all EntryOrders
+ * Fetch EntryOrders filtered by organization
+ * @param {string} organisationId - ID of the organization to filter by
+ * @returns {Promise<Array>} - List of EntryOrders for the specified organization
  */
-async function getAllEntryOrders() {
+async function getAllEntryOrders(organisationId = null) {
   try {
-    const entryOrders = await prisma.entryOrder.findMany({
+    // Build the query based on whether an organization ID is provided
+    const query = {
       select: {
+        entry_order_id: true,
         entry_order_no: true,
+        total_qty: true,
+        palettes: true,
+        total_volume: true,
+        total_weight: true,
+        entry_transfer_note: true,
+        presentation: true,
+        status: true,
+        comments: true,
+        type: true,
+        insured_value: true,
+        entry_date: true,
         documentType: {
           select: {
-            name: true, // Only select the 'name' of the documentType
+            name: true,
             document_type_id: true,
           },
         },
         supplier: {
           select: {
-            name: true, // Only select the 'name' of the supplier
+            name: true,
             supplier_id: true,
           },
         },
         origin: {
           select: {
-            name: true, // Only select the 'name' of the origin
+            name: true,
             origin_id: true,
           },
         },
         order: {
           select: {
-            created_at: true, // Select 'created_at' from the related Order model
+            created_at: true,
+            order_id: true,
+            organisation_id: true,
+            organisation: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
       },
-    });
+    };
+
+    // Add organization filter if provided
+    if (organisationId) {
+      query.where = {
+        order: {
+          organisation_id: organisationId,
+        },
+      };
+    }
+
+    const entryOrders = await prisma.entryOrder.findMany(query);
     return entryOrders;
   } catch (error) {
     console.error("Error fetching entry orders:", error);
-    throw new Error("Error fetching entry orders");
+    throw new Error(`Error fetching entry orders: ${error.message}`);
   }
 }
 

@@ -90,11 +90,13 @@ async function loginUser(userId, plainPassword) {
         userId: user.user_id,
         email: user.email,
         role: user.role.name, // Attach role name in the token
+        organisation_id: user.organisation_id,
+        id: user.id,
       },
       SECRET_KEY
     );
 
-    return { token, role: user.role.name };
+    return { token, role: user.role.name, organisation_id: user.organisation_id, id: user.id };
   } catch (error) {
     console.error("❌ Error logging in:", error.message);
     throw new Error("Login failed: " + error.message);
