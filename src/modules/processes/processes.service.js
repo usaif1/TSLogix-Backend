@@ -180,11 +180,19 @@ async function getEntryFormFields() {
     // Fetching all data from the Supplier table
     const suppliers = await prisma.supplier.findMany();
 
+    const customers = await prisma.customer.findMany({
+      select: {
+        customer_id: true,
+        name: true,
+      },
+    });
+
     return {
       origins,
       users,
       suppliers,
       documentTypes,
+      customers,
     };
   } catch (error) {
     console.error("Error fetching data:", error);
@@ -272,6 +280,21 @@ async function getAllDepartureOrders() {
           created_at: true, // Select 'created_at' from the related Order model
         },
       },
+      palettes: true,
+      total_qty: true,
+      total_volume: true,
+      total_weight: true,
+      departure_date: true,
+      status: true,
+      arrival_point: true,
+      type: true,
+      insured_value: true,
+      departure_transfer_note: true,
+      product_description: true,
+
+    },
+    orderBy: {
+      departure_date: "desc",
     },
   });
   console.log("departureOrders", departureOrders);
@@ -314,6 +337,16 @@ async function createDepartureOrder(departureData) {
         responsible_for_collection: departureData.responsible_for_collection,
         order_progress: departureData.order_progress,
         observation: departureData.observation,
+        total_qty: departureData.total_qty,
+        total_volume: departureData.total_volume,
+        palettes: departureData.palettes,
+        total_weight: departureData.total_weight,
+        insured_value: departureData.insured_value,
+        product_description: departureData.product_description,
+        departure_date: toUTC(departureData.departure_date),
+        type: departureData.type,
+        status: departureData.status,
+        departure_transfer_note: departureData.departure_transfer_note,
 
         // Relations
         customer_id: departureData.customer_id,

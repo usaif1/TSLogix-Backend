@@ -283,6 +283,16 @@ model DepartureOrder {
   registration_date          DateTime?
   responsible_for_collection String?
   exit_option_id             String?
+  palettes                   String?
+  status                     String?
+  product_description        String?
+  type                       String?
+  departure_transfer_note    String?
+  total_qty                  String?
+  total_volume               String?
+  total_weight               String?
+  departure_date             DateTime?     @default(now())
+  insured_value              Decimal?       @db.Decimal(10, 2)
   customer                   Customer?      @relation(fields: [customer_id], references: [customer_id])
   documentType               DocumentType?  @relation(fields: [document_type_id], references: [document_type_id])
   ExitOption                 ExitOption?    @relation(fields: [exit_option_id], references: [exit_option_id])
