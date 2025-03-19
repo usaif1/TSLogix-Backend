@@ -293,9 +293,6 @@ async function getAllDepartureOrders() {
       product_description: true,
 
     },
-    orderBy: {
-      departure_date: "desc",
-    },
   });
   console.log("departureOrders", departureOrders);
   return departureOrders;
