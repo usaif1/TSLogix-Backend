@@ -115,6 +115,16 @@ model Organisation {
   @@map("organisations")
 }
 
+
+model Status {
+  status_id      String           @id @default(uuid()) @map("status_id")
+  name           String           @unique 
+  EntryOrder     EntryOrder[]
+  DepartureOrder DepartureOrder[]
+
+  @@map("statuses")
+}
+
 model User {
   created_at      DateTime         @default(now())
   active_state_id String?
@@ -251,7 +261,7 @@ model EntryOrder {
   insured_value                 Decimal?      @db.Decimal(10, 2)
   palettes                      String?
   product_description           String?
-  status                        String?
+  status_id                     String?
   type                          String?
   max_temperature               String?
   min_temperature               String?
@@ -260,6 +270,7 @@ model EntryOrder {
   origin                        Origin?       @relation(fields: [origin_id], references: [origin_id])
   personnel_incharge            User?         @relation(fields: [personnel_incharge_id], references: [id])
   supplier                      Supplier?     @relation(fields: [supplier_id], references: [supplier_id])
+  entry_status                  Status?       @relation(fields: [status_id], references: [status_id])
 
   @@map("entry_orders")
 }
@@ -288,7 +299,7 @@ model DepartureOrder {
   insured_value              Decimal?       @db.Decimal(10, 2)
   palettes                   String?
   product_description        String?
-  status                     String?
+  status_id                  String?
   type                       String?
   total_qty                  String?
   total_volume               String?
@@ -301,6 +312,7 @@ model DepartureOrder {
   order                      Order          @relation(fields: [order_id], references: [order_id])
   packagingType              PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
   personnel_in_charge        User?          @relation(fields: [personnel_in_charge_id], references: [id])
+  departure_status           Status?        @relation(fields: [status_id], references: [status_id])
 
   @@map("departure_orders")
 }
