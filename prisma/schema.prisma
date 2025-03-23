@@ -240,8 +240,6 @@ model EntryOrder {
   quantity_packaging            String?
   registration_date             DateTime?
   technical_specification       String?
-  max_temperature               String?
-  min_temperature               String?
   total_qty                     String?
   total_volume                  String?
   total_weight                  String?
@@ -255,6 +253,8 @@ model EntryOrder {
   product_description           String?
   status                        String?
   type                          String?
+  max_temperature               String?
+  min_temperature               String?
   documentType                  DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
   order                         Order         @relation(fields: [order_id], references: [order_id])
   origin                        Origin?       @relation(fields: [origin_id], references: [origin_id])
@@ -284,16 +284,16 @@ model DepartureOrder {
   registration_date          DateTime?
   responsible_for_collection String?
   exit_option_id             String?
-  palettes                   String?
-  status                     String?
-  product_description        String?
-  type                       String?
   departure_transfer_note    String?
+  insured_value              Decimal?       @db.Decimal(10, 2)
+  palettes                   String?
+  product_description        String?
+  status                     String?
+  type                       String?
   total_qty                  String?
   total_volume               String?
   total_weight               String?
   departure_date             DateTime?      @default(now())
-  insured_value              Decimal?       @db.Decimal(10, 2)
   customer                   Customer?      @relation(fields: [customer_id], references: [customer_id])
   documentType               DocumentType?  @relation(fields: [document_type_id], references: [document_type_id])
   ExitOption                 ExitOption?    @relation(fields: [exit_option_id], references: [exit_option_id])
