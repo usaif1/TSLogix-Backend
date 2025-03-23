@@ -388,7 +388,7 @@ async function getCurrentEntryOrderNo() {
     });
 
     // Determine the next count; if none exists, start at 1.
-    let nextCount = 0;
+    let nextCount = 1;
     // Check if we have a previous entry order and it has an order number
     if (lastEntryOrder && lastEntryOrder.entry_order_no) {
       // Split the entry order number by the "/" character
