@@ -165,6 +165,23 @@ async function createDepartureOrder(req, res) {
   }
 }
 
+
+/**
+ * Handles request to get the next entry order number.
+ */
+async function getCurrentEntryOrderNo(req, res) {
+  try {
+    const currentOrderNo = await processesService.getCurrentEntryOrderNo();
+    return res.status(200).json({ currentOrderNo });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error generating next entry order number",
+      error: error.message,
+    });
+  }
+}
+
+
 module.exports = {
   // entry orders
   createEntryOrder,
@@ -176,4 +193,5 @@ module.exports = {
   getDepartureExitOptions,
   getAllDepartureOrders,
   createDepartureOrder,
+  getCurrentEntryOrderNo,
 };

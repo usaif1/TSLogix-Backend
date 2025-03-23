@@ -240,7 +240,8 @@ model EntryOrder {
   quantity_packaging            String?
   registration_date             DateTime?
   technical_specification       String?
-  temperature                   String?
+  max_temperature               String?
+  min_temperature               String?
   total_qty                     String?
   total_volume                  String?
   total_weight                  String?

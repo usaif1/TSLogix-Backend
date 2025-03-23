@@ -41,9 +41,9 @@ async function createEntryOrder(entryData) {
         presentation: entryData.presentation,
         total_qty: entryData.total_qty,
         technical_specification: entryData.technical_specification,
-        temperature: entryData.temperature,
+        max_temperature: entryData.max_temperature,
+        min_temperature: entryData.min_temperature,
         humidity: entryData.humidity,
-
         palettes: entryData.palettes,
         product_description: entryData.product_description,
         insured_value: entryData.insured_value
@@ -187,12 +187,15 @@ async function getEntryFormFields() {
       },
     });
 
+    const products = await prisma.product.findMany();
+
     return {
       origins,
       users,
       suppliers,
       documentTypes,
       customers,
+      products,
     };
   } catch (error) {
     console.error("Error fetching data:", error);
@@ -363,6 +366,50 @@ async function createDepartureOrder(departureData) {
   }
 }
 
+
+/**
+ * Returns the next entry order number in the format "YY/increment"
+ */
+async function getCurrentEntryOrderNo() {
+  try {
+    // Get current year in two-digit format (e.g., "25")
+    const currentYear = new Date().getFullYear().toString().slice(-2);
+
+    // Find the last created EntryOrder for the current year
+    const lastEntryOrder = await prisma.entryOrder.findFirst({
+      where: {
+        entry_order_no: {
+          startsWith: `${currentYear}/`,
+        },
+      },
+      orderBy: {
+        entry_date: "desc",
+      },
+    });
+
+    // Determine the next count; if none exists, start at 1.
+    let nextCount = 0;
+    // Check if we have a previous entry order and it has an order number
+    if (lastEntryOrder && lastEntryOrder.entry_order_no) {
+      // Split the entry order number by the "/" character
+      // Example: If entry_order_no is "25/42", parts will be ["25", "42"]
+      const parts = lastEntryOrder.entry_order_no.split("/");
+      // Verify that the split resulted in exactly 2 parts AND the second part is a valid number
+      // This ensures we're working with a properly formatted entry_order_no (YY/123)
+      if (parts.length === 2 && !isNaN(parts[1])) {
+      // Extract the numeric part after the slash, convert to integer, and increment by 1
+      // Example: If parts[1] is "42", nextCount will be 43
+        nextCount = parseInt(parts[1], 10) + 1;
+      }
+    }
+
+    return `${currentYear}/${nextCount}`;
+  } catch (error) {
+    console.error("Error generating next entry order number:", error);
+    throw new Error("Error generating next entry order number");
+  }
+}
+
 module.exports = {
   createEntryOrder,
   getAllEntryOrders,
@@ -373,4 +420,5 @@ module.exports = {
   getDepartureExitOptions,
   getAllDepartureOrders,
   createDepartureOrder,
+  getCurrentEntryOrderNo,
 };

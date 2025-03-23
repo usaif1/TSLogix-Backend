@@ -530,7 +530,7 @@ async function createEntryOrders() {
         status: faker.helpers.arrayElement(['New', 'Processing', 'Completed', 'On Hold']),
         comments: faker.lorem.paragraph(),
         observation: faker.lorem.sentence(),
-        order_progress: faker.helpers.arrayElement(['0%', '25%', '50%', '75%', '100%'])
+        order_progress: faker.helpers.arrayElement(['0%', '25%', '50%', '75%', '100%'])   
       }
     });
   }

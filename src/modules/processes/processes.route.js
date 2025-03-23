@@ -26,4 +26,5 @@ router.get("/departure-orders", processController.getAllDepartureOrders);
 
 router.post("/create-departure-order", processController.createDepartureOrder);
 
+router.get("/current-order-number", processController.getCurrentEntryOrderNo);
 module.exports = router;
