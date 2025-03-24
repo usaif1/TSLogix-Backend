@@ -189,6 +189,8 @@ async function getEntryFormFields() {
 
     const products = await prisma.product.findMany();
 
+    const orderStatus = await prisma.status.findMany();
+
     return {
       origins,
       users,
@@ -196,6 +198,7 @@ async function getEntryFormFields() {
       documentTypes,
       customers,
       products,
+      orderStatus,
     };
   } catch (error) {
     console.error("Error fetching data:", error);

@@ -26,17 +26,28 @@ const COUNT = {
   DEPARTURE_ORDERS: 25,
 };
 
+async function createStatuses() {
+  console.log("Creating statuses...");
+  const statuses = [
+    { name: "order in process" },
+    { name: "send order" },
+    { name: "approved" },
+    { name: "internal damage" },
+    { name: "external damage" },
+  ];
+
+  await prisma.status.createMany({
+    data: statuses,
+    skipDuplicates: true,
+  });
+
+  console.log("✅ Statuses created");
+}
+
 async function createOrigins() {
   console.log("Creating origins...");
   const origins = [];
 
-  for (let i = 0; i < COUNT.ORIGINS; i++) {
-    origins.push({
-      name: faker.location.city() + " Warehouse",
-    });
-  }
-
-  // Include some standard origins
   const standardOrigins = [
     "Buy Local",
     "Import",
@@ -45,7 +56,6 @@ async function createOrigins() {
     "Warehouse Transfer",
     "Transfer between establishments of the same company",
     "Fractional",
-
   ];
 
   standardOrigins.forEach((name) => {
@@ -64,7 +74,7 @@ async function createDocumentTypes() {
   console.log("Creating document types...");
   const documentTypes = [
     { name: "Referral Guide" },
-    { name: "Bill"}
+    { name: "Bill" }
   ];
 
   await prisma.documentType.createMany({
@@ -257,14 +267,12 @@ async function createOrganisations() {
   console.log("Creating organisations...");
   const organisations = [];
 
-  // Standard organization
   organisations.push({
     name: "TSLogix Corporation",
     address: { street: "123 Main St", city: "New York", zip: "10001" },
     tax_id: "TAX12345678",
   });
 
-  // Generate random organizations
   for (let i = 0; i < COUNT.ORGANISATIONS - 1; i++) {
     organisations.push({
       name: faker.company.name(),
@@ -304,18 +312,12 @@ async function createRoles() {
 async function createUsers() {
   console.log("Creating users...");
 
-  // Fetch required related entities
   const organisations = await prisma.organisation.findMany();
   const roles = await prisma.role.findMany();
   const activeStates = await prisma.activeState.findMany();
 
-  if (!organisations.length || !roles.length || !activeStates.length) {
-    throw new Error("Cannot create users: Missing required related entities");
-  }
-
   const users = [];
 
-  // Admin user
   const hashedPassword = await bcrypt.hash("admin123", 10);
   users.push({
     user_id: "admin",
@@ -328,12 +330,10 @@ async function createUsers() {
     active_state_id: activeStates.find((s) => s.name === "Active").state_id,
   });
 
-  // Generate random users
   for (let i = 0; i < COUNT.USERS - 1; i++) {
     const firstName = faker.person.firstName();
     const lastName = faker.person.lastName();
-    const password = faker.internet.password();
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(faker.internet.password(), 10);
 
     users.push({
       user_id: faker.internet.userName({ firstName, lastName }).toLowerCase(),
@@ -344,14 +344,12 @@ async function createUsers() {
       middle_name: faker.helpers.maybe(() => faker.person.middleName(), {
         probability: 0.3,
       }),
-      organisation_id:
-        faker.helpers.arrayElement(organisations).organisation_id,
+      organisation_id: faker.helpers.arrayElement(organisations).organisation_id,
       role_id: faker.helpers.arrayElement(roles).role_id,
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
     });
   }
 
-  // Create users one by one to avoid unique constraint violations
   for (const user of users) {
     await prisma.user.upsert({
       where: { user_id: user.user_id },
@@ -367,11 +365,6 @@ async function createSuppliers() {
   console.log("Creating suppliers...");
 
   const countries = await prisma.country.findMany();
-
-  if (!countries.length) {
-    throw new Error("Cannot create suppliers: Missing countries");
-  }
-
   const suppliers = [];
 
   for (let i = 0; i < COUNT.SUPPLIERS; i++) {
@@ -399,13 +392,6 @@ async function createCustomers() {
 
   const customerTypes = await prisma.customerType.findMany();
   const activeStates = await prisma.activeState.findMany();
-
-  if (!customerTypes.length || !activeStates.length) {
-    throw new Error(
-      "Cannot create customers: Missing required related entities"
-    );
-  }
-
   const customers = [];
 
   for (let i = 0; i < COUNT.CUSTOMERS; i++) {
@@ -437,18 +423,6 @@ async function createProducts() {
   const groupNames = await prisma.groupName.findMany();
   const temperatureRanges = await prisma.temperatureRange.findMany();
   const activeStates = await prisma.activeState.findMany();
-
-  if (
-    !productLines.length ||
-    !groupNames.length ||
-    !temperatureRanges.length ||
-    !activeStates.length
-  ) {
-    throw new Error(
-      "Cannot create products: Missing required related entities"
-    );
-  }
-
   const products = [];
 
   for (let i = 0; i < COUNT.PRODUCTS; i++) {
@@ -456,8 +430,7 @@ async function createProducts() {
       name: faker.commerce.productName(),
       product_line_id: faker.helpers.arrayElement(productLines).product_line_id,
       group_id: faker.helpers.arrayElement(groupNames).group_id,
-      temperature_range_id:
-        faker.helpers.arrayElement(temperatureRanges).temperature_range_id,
+      temperature_range_id: faker.helpers.arrayElement(temperatureRanges).temperature_range_id,
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
       humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
       manufacturer: faker.company.name(),
@@ -487,95 +460,46 @@ async function createEntryOrders() {
   const suppliers = await prisma.supplier.findMany();
   const origins = await prisma.origin.findMany();
   const documentTypes = await prisma.documentType.findMany();
-
-  if (
-    !organisations.length ||
-    !users.length ||
-    !origins.length ||
-    !documentTypes.length
-  ) {
-    throw new Error(
-      "Cannot create entry orders: Missing required related entities"
-    );
-  }
+  const statuses = await prisma.status.findMany();
 
   for (let i = 0; i < COUNT.ENTRY_ORDERS; i++) {
     const orderDate = faker.date.recent({ days: 60 });
     const expirationDate = faker.date.future({ years: 2, refDate: orderDate });
 
-    // First create the order
     const order = await prisma.order.create({
       data: {
         order_type: "ENTRY",
-        status: faker.helpers.arrayElement([
-          "PENDING",
-          "PROCESSING",
-          "COMPLETED",
-          "CANCELLED",
-        ]),
-        organisation_id:
-          faker.helpers.arrayElement(organisations).organisation_id,
+        status: "PENDING",
+        organisation_id: faker.helpers.arrayElement(organisations).organisation_id,
         created_by: faker.helpers.arrayElement(users).id,
         created_at: orderDate,
       },
     });
 
-    // Generate random temperatures ensuring min < max
     const maxTemp = faker.number.int({ min: 15, max: 30 });
     const minTemp = faker.number.int({ min: 0, max: maxTemp - 1 });
 
-    // Then create the entry order with additional fields according to your schema
     await prisma.entryOrder.create({
       data: {
         order_id: order.order_id,
         entry_order_no: `ENTRY-${faker.string.numeric(5)}`,
         registration_date: orderDate,
         document_date: orderDate,
-        document_status: faker.helpers.arrayElement([
-          "Active",
-          "Draft",
-          "Archived",
-        ]),
-        supplier_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(suppliers).supplier_id
-        ),
-        origin_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(origins).origin_id
-        ),
-        document_type_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(documentTypes).document_type_id
-        ),
-        personnel_incharge_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(users).id
-        ),
-        // Additional fields per your schema
-        admission_date_time: faker.helpers.maybe(() =>
-          faker.date.recent({ days: 30 })
-        ),
+        document_status: faker.helpers.arrayElement(["Active", "Draft", "Archived"]),
+        supplier_id: faker.helpers.maybe(() => faker.helpers.arrayElement(suppliers).supplier_id),
+        origin_id: faker.helpers.maybe(() => faker.helpers.arrayElement(origins).origin_id),
+        document_type_id: faker.helpers.maybe(() => faker.helpers.arrayElement(documentTypes).document_type_id),
+        personnel_incharge_id: faker.helpers.maybe(() => faker.helpers.arrayElement(users).id),
+        admission_date_time: faker.helpers.maybe(() => faker.date.recent({ days: 30 })),
         cif_value: faker.helpers.maybe(() => faker.string.numeric(6)),
         max_temperature: `${maxTemp}°C`,
         min_temperature: `${minTemp}°C`,
         product: faker.commerce.productName(),
         product_description: faker.commerce.productDescription(),
-        quantity_packaging: `${faker.number.int({
-          min: 1,
-          max: 100,
-        })} ${faker.helpers.arrayElement([
-          "boxes",
-          "crates",
-          "pallets",
-          "containers",
-        ])}`,
+        quantity_packaging: `${faker.number.int({ min: 1, max: 100 })} ${faker.helpers.arrayElement(["boxes", "crates", "pallets", "containers"])}`,
         total_qty: faker.number.int({ min: 10, max: 10000 }).toString(),
-        presentation: faker.helpers.arrayElement([
-          "Boxed",
-          "Loose",
-          "Wrapped",
-          "Vacuum Sealed",
-        ]),
-        insured_value: parseFloat(
-          faker.commerce.price({ min: 1000, max: 100000 })
-        ),
+        presentation: faker.helpers.arrayElement(["Boxed", "Loose", "Wrapped", "Vacuum Sealed"]),
+        insured_value: parseFloat(faker.commerce.price({ min: 1000, max: 100000 })),
         palettes: faker.number.int({ min: 1, max: 50 }).toString(),
         lot_series: `LOT-${faker.string.alphanumeric(8)}`,
         technical_specification: faker.lorem.paragraph(1),
@@ -584,31 +508,13 @@ async function createEntryOrders() {
         total_weight: `${faker.number.int({ min: 10, max: 50000 })} kg`,
         mfd_date_time: faker.date.past({ years: 1, refDate: orderDate }),
         expiration_date: expirationDate,
-        certificate_protocol_analysis: faker.helpers.maybe(
-          () => `CERT-${faker.string.alphanumeric(10)}`
-        ),
+        certificate_protocol_analysis: faker.helpers.maybe(() => `CERT-${faker.string.alphanumeric(10)}`),
         entry_transfer_note: faker.lorem.sentence(),
-        type: faker.helpers.arrayElement([
-          "Regular",
-          "Urgent",
-          "Special",
-          "Return",
-        ]),
-        status: faker.helpers.arrayElement([
-          "New",
-          "Processing",
-          "Completed",
-          "On Hold",
-        ]),
+        type: faker.helpers.arrayElement(["Regular", "Urgent", "Special", "Return"]),
+        status_id: faker.helpers.arrayElement(statuses).status_id,
         comments: faker.lorem.paragraph(),
         observation: faker.lorem.sentence(),
-        order_progress: faker.helpers.arrayElement([
-          "0%",
-          "25%",
-          "50%",
-          "75%",
-          "100%",
-        ]),
+        order_progress: faker.helpers.arrayElement(["0%", "25%", "50%", "75%", "100%"]),
       },
     });
   }
@@ -626,44 +532,22 @@ async function createDepartureOrders() {
   const packagingTypes = await prisma.packagingType.findMany();
   const labels = await prisma.label.findMany();
   const exitOptions = await prisma.exitOption.findMany();
-
-  if (
-    !organisations.length ||
-    !users.length ||
-    !customers.length ||
-    !documentTypes.length ||
-    !packagingTypes.length ||
-    !labels.length ||
-    !exitOptions.length
-  ) {
-    throw new Error(
-      "Cannot create departure orders: Missing required related entities"
-    );
-  }
+  const statuses = await prisma.status.findMany();
 
   for (let i = 0; i < COUNT.DEPARTURE_ORDERS; i++) {
     const orderDate = faker.date.recent({ days: 30 });
     const transferDate = faker.date.soon({ days: 14, refDate: orderDate });
 
-    // First create the order
     const order = await prisma.order.create({
       data: {
         order_type: "DEPARTURE",
-        status: faker.helpers.arrayElement([
-          "PENDING",
-          "PROCESSING",
-          "COMPLETED",
-          "SHIPPED",
-          "DELIVERED",
-        ]),
-        organisation_id:
-          faker.helpers.arrayElement(organisations).organisation_id,
+        status: "PENDING",
+        organisation_id: faker.helpers.arrayElement(organisations).organisation_id,
         created_by: faker.helpers.arrayElement(users).id,
         created_at: orderDate,
       },
     });
 
-    // Then create the departure order with additional fields as per your schema
     await prisma.departureOrder.create({
       data: {
         order_id: order.order_id,
@@ -671,56 +555,23 @@ async function createDepartureOrders() {
         registration_date: orderDate,
         document_no: `DOC-${faker.string.alphanumeric(8)}`,
         document_date: orderDate,
-        document_status: faker.helpers.arrayElement([
-          "Active",
-          "Draft",
-          "Processed",
-        ]),
-        customer_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(customers).customer_id
-        ),
-        document_type_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(documentTypes).document_type_id
-        ),
-        packaging_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(packagingTypes).packaging_type_id
-        ),
-        label_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(labels).label_id
-        ),
-        exit_option_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(exitOptions).exit_option_id
-        ),
-        personnel_in_charge_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(users).id
-        ),
+        document_status: faker.helpers.arrayElement(["Active", "Draft", "Processed"]),
+        customer_id: faker.helpers.maybe(() => faker.helpers.arrayElement(customers).customer_id),
+        document_type_id: faker.helpers.maybe(() => faker.helpers.arrayElement(documentTypes).document_type_id),
+        packaging_id: faker.helpers.maybe(() => faker.helpers.arrayElement(packagingTypes).packaging_type_id),
+        label_id: faker.helpers.maybe(() => faker.helpers.arrayElement(labels).label_id),
+        exit_option_id: faker.helpers.maybe(() => faker.helpers.arrayElement(exitOptions).exit_option_id),
+        personnel_in_charge_id: faker.helpers.maybe(() => faker.helpers.arrayElement(users).id),
         date_and_time_of_transfer: transferDate,
         arrival_point: faker.location.streetAddress(),
         id_responsible: `ID-${faker.string.numeric(6)}`,
         responsible_for_collection: faker.person.fullName(),
-        order_progress: faker.helpers.arrayElement([
-          "0%",
-          "25%",
-          "50%",
-          "75%",
-          "100%",
-        ]),
+        order_progress: faker.helpers.arrayElement(["0%", "25%", "50%", "75%", "100%"]),
         observation: faker.lorem.sentence(),
-        // Additional fields per your schema
         palettes: faker.number.int({ min: 1, max: 50 }).toString(),
         product_description: faker.commerce.productDescription(),
-        status: faker.helpers.arrayElement([
-          "New",
-          "Processing",
-          "Completed",
-          "On Hold",
-        ]),
-        type: faker.helpers.arrayElement([
-          "Regular",
-          "Urgent",
-          "Special",
-          "Return",
-        ]),
+        status_id: faker.helpers.arrayElement(statuses).status_id,
+        type: faker.helpers.arrayElement(["Regular", "Urgent", "Special", "Return"]),
         total_qty: faker.number.int({ min: 10, max: 10000 }).toString(),
         total_volume: `${faker.number.int({ min: 1, max: 1000 })} m³`,
         total_weight: `${faker.number.int({ min: 10, max: 50000 })} kg`,
@@ -735,9 +586,9 @@ async function main() {
   try {
     console.log("Starting database seed...");
 
-    // Create all reference data first
     await createRoles();
     await createActiveStates();
+    await createStatuses();
     await createOrigins();
     await createDocumentTypes();
     await createExitOptions();
@@ -748,17 +599,11 @@ async function main() {
     await createGroupNames();
     await createCountries();
     await createTemperatureRanges();
-
-    // Then create organizations and users
     await createOrganisations();
     await createUsers();
-
-    // Then create suppliers, customers, products
     await createSuppliers();
     await createCustomers();
     await createProducts();
-
-    // Finally create orders
     await createEntryOrders();
     await createDepartureOrders();
 
