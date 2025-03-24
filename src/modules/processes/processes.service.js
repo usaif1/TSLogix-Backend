@@ -91,7 +91,13 @@ async function getAllEntryOrders(organisationId = null) {
         total_weight: true,
         entry_transfer_note: true,
         presentation: true,
-        status: true,
+        status_id: true,
+        entry_status: {
+          select: {
+            name: true,
+            status_id: true
+          }
+        },
         comments: true,
         type: true,
         insured_value: true,
