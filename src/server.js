@@ -33,12 +33,16 @@ const authRoutes = require("@/modules/auth/auth.route");
 const organisationRoutes = require("@/modules/organisation/organisation.route");
 const processesRoutes = require("@/modules/processes/processes.route");
 const maintenanceRoutes = require("@/modules/maintenance/maintenance.route");
+const supplierRoutes = require("@/modules/supplier/supplier.route");
+const productRoutes = require("@/modules/product/product.route");
 
 // Mount your module routes
 app.use("/auth", authRoutes);
 app.use("/organisation", organisationRoutes);
 app.use("/processes", authenticateToken, processesRoutes);
 app.use("/maintenance", authenticateToken, maintenanceRoutes);
+app.use("/suppliers", authenticateToken, supplierRoutes);
+app.use("/products", authenticateToken, productRoutes);
 
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);
