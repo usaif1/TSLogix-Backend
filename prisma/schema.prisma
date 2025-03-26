@@ -265,6 +265,7 @@ model EntryOrder {
   type                          String?
   max_temperature               String?
   min_temperature               String?
+  departure_orders              DepartureOrder[]
   documentType                  DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
   order                         Order         @relation(fields: [order_id], references: [order_id])
   origin                        Origin?       @relation(fields: [origin_id], references: [origin_id])
@@ -281,6 +282,8 @@ model DepartureOrder {
   label_id                   String?
   packaging_id               String?
   order_id                   String         @unique
+  // Add entry order reference
+  entry_order_id             String?        @map("entry_order_id")
   arrival_point              String?
   date_and_time_of_transfer  DateTime?
   departure_order_no         String?
@@ -313,6 +316,7 @@ model DepartureOrder {
   packagingType              PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
   personnel_in_charge        User?          @relation(fields: [personnel_in_charge_id], references: [id])
   departure_status           Status?        @relation(fields: [status_id], references: [status_id])
+  entry_order                EntryOrder?    @relation(fields: [entry_order_id], references: [entry_order_id])
 
   @@map("departure_orders")
 }

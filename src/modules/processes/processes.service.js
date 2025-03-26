@@ -1,6 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
 const crypto = require("crypto");
-const { toUTC } = require("../../utils/index")
+const { toUTC } = require("../../utils/index");
 
 const prisma = new PrismaClient();
 
@@ -74,13 +74,15 @@ async function createEntryOrder(entryData) {
 }
 
 /**
- * Fetch EntryOrders filtered by organization
+ * Fetch EntryOrders filtered by organization and search criteria
  * @param {string} organisationId - ID of the organization to filter by
- * @returns {Promise<Array>} - List of EntryOrders for the specified organization
+ * @param {Object} sortOptions - Sorting options (orderBy field and direction)
+ * @param {string} entryOrderNo - Optional order number to search by
+ * @returns {Promise<Array>} - List of EntryOrders matching criteria
  */
-async function getAllEntryOrders(organisationId = null) {
+async function getAllEntryOrders(organisationId = null, sortOptions = null, entryOrderNo = null) {
   try {
-    // Build the query based on whether an organization ID is provided
+    // Build the query based on filters
     const query = {
       select: {
         entry_order_id: true,
@@ -95,8 +97,8 @@ async function getAllEntryOrders(organisationId = null) {
         entry_status: {
           select: {
             name: true,
-            status_id: true
-          }
+            status_id: true,
+          },
         },
         comments: true,
         type: true,
@@ -134,21 +136,51 @@ async function getAllEntryOrders(organisationId = null) {
         },
       },
       orderBy: {
-        entry_date: "desc",
+        entry_date: "desc", // Default sort
       },
+      where: {},
     };
 
-    // Add organization filter if provided
-    if (organisationId) {
-      query.where = {
-        order: {
-          organisation_id: organisationId,
-        },
+    // Apply custom sorting if provided
+    if (sortOptions && sortOptions.orderBy) {
+      query.orderBy = {
+        [sortOptions.orderBy]: sortOptions.direction || "desc"
       };
     }
 
+    // Initialize where conditions
+    const whereConditions = {};
+
+    // Add organization filter if provided
+    if (organisationId) {
+      whereConditions.order = {
+        organisation_id: organisationId,
+      };
+    }
+
+    // Add entry order number search if provided
+    if (entryOrderNo) {
+      whereConditions.entry_order_no = {
+        contains: entryOrderNo,
+        mode: 'insensitive' // Case insensitive search
+      };
+    }
+
+    // Apply conditions to query if any exist
+    if (Object.keys(whereConditions).length > 0) {
+      query.where = whereConditions;
+    }
+
+    // Execute the query
     const entryOrders = await prisma.entryOrder.findMany(query);
-    return entryOrders;
+    
+    // Add a derived status field for compatibility with frontend
+    const transformedOrders = entryOrders.map(order => ({
+      ...order,
+      status: order.entry_status?.name || null,
+    }));
+    
+    return transformedOrders;
   } catch (error) {
     console.error("Error fetching entry orders:", error);
     throw new Error(`Error fetching entry orders: ${error.message}`);
@@ -277,7 +309,7 @@ async function getAllDepartureOrders() {
       departure_order_no: true,
       documentType: {
         select: {
-          name: true, // Only select the 'name' of the documentType
+          name: true,
           document_type_id: true,
         },
       },
@@ -289,7 +321,7 @@ async function getAllDepartureOrders() {
       },
       order: {
         select: {
-          created_at: true, // Select 'created_at' from the related Order model
+          created_at: true,
         },
       },
       palettes: true,
@@ -297,13 +329,19 @@ async function getAllDepartureOrders() {
       total_volume: true,
       total_weight: true,
       departure_date: true,
-      status: true,
+      // Replace 'status' with status_id and the relation
+      status_id: true,
+      departure_status: {
+        select: {
+          name: true,
+          status_id: true,
+        },
+      },
       arrival_point: true,
       type: true,
       insured_value: true,
       departure_transfer_note: true,
       product_description: true,
-
     },
   });
   console.log("departureOrders", departureOrders);
@@ -375,7 +413,6 @@ async function createDepartureOrder(departureData) {
   }
 }
 
-
 /**
  * Returns the next entry order number in the format "YY/increment"
  */
@@ -406,8 +443,8 @@ async function getCurrentEntryOrderNo() {
       // Verify that the split resulted in exactly 2 parts AND the second part is a valid number
       // This ensures we're working with a properly formatted entry_order_no (YY/123)
       if (parts.length === 2 && !isNaN(parts[1])) {
-      // Extract the numeric part after the slash, convert to integer, and increment by 1
-      // Example: If parts[1] is "42", nextCount will be 43
+        // Extract the numeric part after the slash, convert to integer, and increment by 1
+        // Example: If parts[1] is "42", nextCount will be 43
         nextCount = parseInt(parts[1], 10) + 1;
       }
     }

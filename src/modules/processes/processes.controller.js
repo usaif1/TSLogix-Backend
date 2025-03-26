@@ -47,7 +47,12 @@ async function getAllEntryOrders(req, res) {
   try {
     const organisationId = req.user?.organisation_id;
     const userRole = req.user?.role;
+    
+    // Extract search parameter from query string
+    const searchOrderNo = req.query.orderNo || null;
+    
     console.log("req.user", req.user);
+    console.log("Search params:", { orderNo: searchOrderNo });
 
     if (!organisationId) {
       return res.status(403).json({
@@ -69,7 +74,8 @@ async function getAllEntryOrders(req, res) {
 
     const entryOrders = await processesService.getAllEntryOrders(
       filterOrganisationId,
-      sortOptions
+      sortOptions,
+      searchOrderNo 
     );
 
     return res.status(200).json({

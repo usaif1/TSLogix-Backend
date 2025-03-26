@@ -72,10 +72,7 @@ async function createOrigins() {
 
 async function createDocumentTypes() {
   console.log("Creating document types...");
-  const documentTypes = [
-    { name: "Referral Guide" },
-    { name: "Bill" }
-  ];
+  const documentTypes = [{ name: "Referral Guide" }, { name: "Bill" }];
 
   await prisma.documentType.createMany({
     data: documentTypes,
@@ -344,7 +341,8 @@ async function createUsers() {
       middle_name: faker.helpers.maybe(() => faker.person.middleName(), {
         probability: 0.3,
       }),
-      organisation_id: faker.helpers.arrayElement(organisations).organisation_id,
+      organisation_id:
+        faker.helpers.arrayElement(organisations).organisation_id,
       role_id: faker.helpers.arrayElement(roles).role_id,
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
     });
@@ -430,7 +428,8 @@ async function createProducts() {
       name: faker.commerce.productName(),
       product_line_id: faker.helpers.arrayElement(productLines).product_line_id,
       group_id: faker.helpers.arrayElement(groupNames).group_id,
-      temperature_range_id: faker.helpers.arrayElement(temperatureRanges).temperature_range_id,
+      temperature_range_id:
+        faker.helpers.arrayElement(temperatureRanges).temperature_range_id,
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
       humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
       manufacturer: faker.company.name(),
@@ -470,7 +469,8 @@ async function createEntryOrders() {
       data: {
         order_type: "ENTRY",
         status: "PENDING",
-        organisation_id: faker.helpers.arrayElement(organisations).organisation_id,
+        organisation_id:
+          faker.helpers.arrayElement(organisations).organisation_id,
         created_by: faker.helpers.arrayElement(users).id,
         created_at: orderDate,
       },
@@ -485,21 +485,50 @@ async function createEntryOrders() {
         entry_order_no: `ENTRY-${faker.string.numeric(5)}`,
         registration_date: orderDate,
         document_date: orderDate,
-        document_status: faker.helpers.arrayElement(["Active", "Draft", "Archived"]),
-        supplier_id: faker.helpers.maybe(() => faker.helpers.arrayElement(suppliers).supplier_id),
-        origin_id: faker.helpers.maybe(() => faker.helpers.arrayElement(origins).origin_id),
-        document_type_id: faker.helpers.maybe(() => faker.helpers.arrayElement(documentTypes).document_type_id),
-        personnel_incharge_id: faker.helpers.maybe(() => faker.helpers.arrayElement(users).id),
-        admission_date_time: faker.helpers.maybe(() => faker.date.recent({ days: 30 })),
+        document_status: faker.helpers.arrayElement([
+          "Active",
+          "Draft",
+          "Archived",
+        ]),
+        supplier_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(suppliers).supplier_id
+        ),
+        origin_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(origins).origin_id
+        ),
+        document_type_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(documentTypes).document_type_id
+        ),
+        personnel_incharge_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(users).id
+        ),
+        admission_date_time: faker.helpers.maybe(() =>
+          faker.date.recent({ days: 30 })
+        ),
         cif_value: faker.helpers.maybe(() => faker.string.numeric(6)),
         max_temperature: `${maxTemp}°C`,
         min_temperature: `${minTemp}°C`,
         product: faker.commerce.productName(),
         product_description: faker.commerce.productDescription(),
-        quantity_packaging: `${faker.number.int({ min: 1, max: 100 })} ${faker.helpers.arrayElement(["boxes", "crates", "pallets", "containers"])}`,
+        quantity_packaging: `${faker.number.int({
+          min: 1,
+          max: 100,
+        })} ${faker.helpers.arrayElement([
+          "boxes",
+          "crates",
+          "pallets",
+          "containers",
+        ])}`,
         total_qty: faker.number.int({ min: 10, max: 10000 }).toString(),
-        presentation: faker.helpers.arrayElement(["Boxed", "Loose", "Wrapped", "Vacuum Sealed"]),
-        insured_value: parseFloat(faker.commerce.price({ min: 1000, max: 100000 })),
+        presentation: faker.helpers.arrayElement([
+          "Boxed",
+          "Loose",
+          "Wrapped",
+          "Vacuum Sealed",
+        ]),
+        insured_value: parseFloat(
+          faker.commerce.price({ min: 1000, max: 100000 })
+        ),
         palettes: faker.number.int({ min: 1, max: 50 }).toString(),
         lot_series: `LOT-${faker.string.alphanumeric(8)}`,
         technical_specification: faker.lorem.paragraph(1),
@@ -508,13 +537,26 @@ async function createEntryOrders() {
         total_weight: `${faker.number.int({ min: 10, max: 50000 })} kg`,
         mfd_date_time: faker.date.past({ years: 1, refDate: orderDate }),
         expiration_date: expirationDate,
-        certificate_protocol_analysis: faker.helpers.maybe(() => `CERT-${faker.string.alphanumeric(10)}`),
+        certificate_protocol_analysis: faker.helpers.maybe(
+          () => `CERT-${faker.string.alphanumeric(10)}`
+        ),
         entry_transfer_note: faker.lorem.sentence(),
-        type: faker.helpers.arrayElement(["Regular", "Urgent", "Special", "Return"]),
+        type: faker.helpers.arrayElement([
+          "Regular",
+          "Urgent",
+          "Special",
+          "Return",
+        ]),
         status_id: faker.helpers.arrayElement(statuses).status_id,
         comments: faker.lorem.paragraph(),
         observation: faker.lorem.sentence(),
-        order_progress: faker.helpers.arrayElement(["0%", "25%", "50%", "75%", "100%"]),
+        order_progress: faker.helpers.arrayElement([
+          "0%",
+          "25%",
+          "50%",
+          "75%",
+          "100%",
+        ]),
       },
     });
   }
@@ -534,6 +576,11 @@ async function createDepartureOrders() {
   const exitOptions = await prisma.exitOption.findMany();
   const statuses = await prisma.status.findMany();
 
+  // Get entry orders to link some departure orders to them
+  const entryOrders = await prisma.entryOrder.findMany({
+    take: Math.floor(COUNT.ENTRY_ORDERS / 2), // Link about half of departure orders to entry orders
+  });
+
   for (let i = 0; i < COUNT.DEPARTURE_ORDERS; i++) {
     const orderDate = faker.date.recent({ days: 30 });
     const transferDate = faker.date.soon({ days: 14, refDate: orderDate });
@@ -542,11 +589,16 @@ async function createDepartureOrders() {
       data: {
         order_type: "DEPARTURE",
         status: "PENDING",
-        organisation_id: faker.helpers.arrayElement(organisations).organisation_id,
+        organisation_id:
+          faker.helpers.arrayElement(organisations).organisation_id,
         created_by: faker.helpers.arrayElement(users).id,
         created_at: orderDate,
       },
     });
+
+    // Link to an entry order for some departure orders
+    // Only link if we're in the first half of departure orders and have entry orders
+    const linkedEntryOrder = i < entryOrders.length ? entryOrders[i] : null;
 
     await prisma.departureOrder.create({
       data: {
@@ -555,26 +607,57 @@ async function createDepartureOrders() {
         registration_date: orderDate,
         document_no: `DOC-${faker.string.alphanumeric(8)}`,
         document_date: orderDate,
-        document_status: faker.helpers.arrayElement(["Active", "Draft", "Processed"]),
-        customer_id: faker.helpers.maybe(() => faker.helpers.arrayElement(customers).customer_id),
-        document_type_id: faker.helpers.maybe(() => faker.helpers.arrayElement(documentTypes).document_type_id),
-        packaging_id: faker.helpers.maybe(() => faker.helpers.arrayElement(packagingTypes).packaging_type_id),
-        label_id: faker.helpers.maybe(() => faker.helpers.arrayElement(labels).label_id),
-        exit_option_id: faker.helpers.maybe(() => faker.helpers.arrayElement(exitOptions).exit_option_id),
-        personnel_in_charge_id: faker.helpers.maybe(() => faker.helpers.arrayElement(users).id),
+        document_status: faker.helpers.arrayElement([
+          "Active",
+          "Draft",
+          "Processed",
+        ]),
+        customer_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(customers).customer_id
+        ),
+        document_type_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(documentTypes).document_type_id
+        ),
+        packaging_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(packagingTypes).packaging_type_id
+        ),
+        label_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(labels).label_id
+        ),
+        exit_option_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(exitOptions).exit_option_id
+        ),
+        personnel_in_charge_id: faker.helpers.maybe(
+          () => faker.helpers.arrayElement(users).id
+        ),
         date_and_time_of_transfer: transferDate,
         arrival_point: faker.location.streetAddress(),
         id_responsible: `ID-${faker.string.numeric(6)}`,
         responsible_for_collection: faker.person.fullName(),
-        order_progress: faker.helpers.arrayElement(["0%", "25%", "50%", "75%", "100%"]),
+        order_progress: faker.helpers.arrayElement([
+          "0%",
+          "25%",
+          "50%",
+          "75%",
+          "100%",
+        ]),
         observation: faker.lorem.sentence(),
         palettes: faker.number.int({ min: 1, max: 50 }).toString(),
         product_description: faker.commerce.productDescription(),
         status_id: faker.helpers.arrayElement(statuses).status_id,
-        type: faker.helpers.arrayElement(["Regular", "Urgent", "Special", "Return"]),
+        type: faker.helpers.arrayElement([
+          "Regular",
+          "Urgent",
+          "Special",
+          "Return",
+        ]),
         total_qty: faker.number.int({ min: 10, max: 10000 }).toString(),
         total_volume: `${faker.number.int({ min: 1, max: 1000 })} m³`,
         total_weight: `${faker.number.int({ min: 10, max: 50000 })} kg`,
+        // Add entry_order_id if we have a linked entry order
+        entry_order_id: linkedEntryOrder
+          ? linkedEntryOrder.entry_order_id
+          : null,
       },
     });
   }
