@@ -47,10 +47,10 @@ async function getAllEntryOrders(req, res) {
   try {
     const organisationId = req.user?.organisation_id;
     const userRole = req.user?.role;
-    
+
     // Extract search parameter from query string
     const searchOrderNo = req.query.orderNo || null;
-    
+
     console.log("req.user", req.user);
     console.log("Search params:", { orderNo: searchOrderNo });
 
@@ -65,17 +65,17 @@ async function getAllEntryOrders(req, res) {
     // - For ADMIN users: Pass null to see all orders across all organizations
     // - For regular users: Pass their organization ID to see only their org's orders
     const filterOrganisationId = userRole === "ADMIN" ? null : organisationId;
-    
+
     // Add sorting parameter to show newest orders first
     const sortOptions = {
-      orderBy: 'entry_date',
-      direction: 'desc'
+      orderBy: "entry_date",
+      direction: "desc",
     };
 
     const entryOrders = await processesService.getAllEntryOrders(
       filterOrganisationId,
       sortOptions,
-      searchOrderNo 
+      searchOrderNo
     );
 
     return res.status(200).json({
@@ -144,7 +144,8 @@ async function getDepartureExitOptions(req, res) {
 // get all departure order
 async function getAllDepartureOrders(req, res) {
   try {
-    const data = await processesService.getAllDepartureOrders();
+    const searchQuery = req.query.orderNo || "";
+    const data = await processesService.getAllDepartureOrders(searchQuery);
     return res.status(200).json({
       message: "Data fetched successfully",
       data: data,
@@ -171,7 +172,6 @@ async function createDepartureOrder(req, res) {
   }
 }
 
-
 /**
  * Handles request to get the next entry order number.
  */
@@ -186,7 +186,6 @@ async function getCurrentEntryOrderNo(req, res) {
     });
   }
 }
-
 
 module.exports = {
   // entry orders

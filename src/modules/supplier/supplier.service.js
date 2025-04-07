@@ -37,26 +37,37 @@ async function createSupplier(supplierData) {
  * Get all suppliers
  * @returns {Promise<Array>} - List of suppliers
  */
-async function getAllSuppliers() {
+async function getAllSuppliers(search) {
   try {
+    // Build filter condition if search term is provided
+    const filter = search
+      ? {
+          name: {
+            contains: search,
+            mode: "insensitive",
+          },
+        }
+      : {};
+
     const suppliers = await prisma.supplier.findMany({
+      where: filter,
       include: {
         country: {
           select: {
             country_id: true,
-            name: true
-          }
+            name: true,
+          },
         },
         EntryOrder: {
           select: {
             entry_order_id: true,
-            entry_order_no: true
-          }
-        }
+            entry_order_no: true,
+          },
+        },
       },
       orderBy: {
-        name: 'asc'
-      }
+        name: "asc",
+      },
     });
     return suppliers;
   } catch (error) {

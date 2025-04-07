@@ -302,8 +302,18 @@ async function getDepartureFormFields() {
   }
 }
 
-async function getAllDepartureOrders() {
+async function getAllDepartureOrders(searchQuery = "") {
+  const whereClause = searchQuery
+    ? {
+        departure_order_no: {
+          contains: searchQuery,
+          mode: "insensitive",
+        },
+      }
+    : {};
+
   const departureOrders = await prisma.departureOrder.findMany({
+    where: whereClause,
     select: {
       departure_order_id: true,
       departure_order_no: true,
@@ -329,7 +339,6 @@ async function getAllDepartureOrders() {
       total_volume: true,
       total_weight: true,
       departure_date: true,
-      // Replace 'status' with status_id and the relation
       status_id: true,
       departure_status: {
         select: {

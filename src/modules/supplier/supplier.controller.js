@@ -41,20 +41,21 @@ async function createSupplier(req, res) {
  */
 async function getAllSuppliers(req, res) {
   try {
-    const suppliers = await supplierService.getAllSuppliers();
-    
+    const search = req.query.search;
+    const suppliers = await supplierService.getAllSuppliers(search);
+
     return res.status(200).json({
       success: true,
       message: "Suppliers retrieved successfully",
       data: suppliers,
-      count: suppliers.length
+      count: suppliers.length,
     });
   } catch (error) {
     console.error("Error in getAllSuppliers controller:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to retrieve suppliers",
-      error: error.message
+      error: error.message,
     });
   }
 }
