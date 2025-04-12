@@ -351,6 +351,9 @@ async function getAllDepartureOrders(searchQuery = "") {
       insured_value: true,
       departure_transfer_note: true,
       product_description: true,
+      orderBy: {
+        entry_date: "desc", 
+      },
     },
   });
   console.log("departureOrders", departureOrders);
