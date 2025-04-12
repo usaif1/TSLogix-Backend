@@ -312,8 +312,13 @@ async function getAllDepartureOrders(searchQuery = "") {
       }
     : {};
 
+    
+
   const departureOrders = await prisma.departureOrder.findMany({
     where: whereClause,
+    orderBy: {
+      departure_date: "desc",
+    },
     select: {
       departure_order_id: true,
       departure_order_no: true,
@@ -351,12 +356,8 @@ async function getAllDepartureOrders(searchQuery = "") {
       insured_value: true,
       departure_transfer_note: true,
       product_description: true,
-      orderBy: {
-        entry_date: "desc", 
-      },
     },
   });
-  console.log("departureOrders", departureOrders);
   return departureOrders;
 }
 
