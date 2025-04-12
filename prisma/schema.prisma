@@ -156,6 +156,7 @@ model Role {
 }
 
 model Supplier {
+  created_at   DateTime     @default(now())
   supplier_id String       @id @default(uuid()) @map("supplier_id")
   name        String
   address     String?

@@ -66,7 +66,7 @@ async function getAllSuppliers(search) {
         },
       },
       orderBy: {
-        name: "asc",
+        created_at: "desc",
       },
     });
     return suppliers;
