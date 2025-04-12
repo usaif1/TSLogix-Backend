@@ -45,6 +45,9 @@ const getAllProducts = async (filters = {}) => {
       temperature_range: true,
       active_state: { select: { name: true } },
     },
+    orderBy: {
+      created_at: "desc",
+    },
   });
 };
 
