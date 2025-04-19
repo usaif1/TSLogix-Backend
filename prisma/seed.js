@@ -24,6 +24,35 @@ const COUNT = {
   PRODUCTS: 30,
   ENTRY_ORDERS: 25,
   DEPARTURE_ORDERS: 25,
+  LOCATIONS: 10,
+};
+
+const LocationType = {
+  STORAGE: "STORAGE",
+  LOADING: "LOADING",
+  UNLOADING: "UNLOADING",
+  TRANSIT: "TRANSIT",
+  REPACKAGING: "REPACKAGING",
+  INSPECTION: "INSPECTION",
+  RETURN: "RETURN",
+  REPAIR: "REPAIR",
+  WAREHOUSE: "WAREHOUSE",
+  DISTRIBUTION: "DISTRIBUTION",
+};
+
+// Define these enums as well since they're used in createEntryOrders and createDepartureOrders
+const MovementType = {
+  ENTRY: "ENTRY",
+  DEPARTURE: "DEPARTURE",
+  TRANSFER: "TRANSFER",
+  ADJUSTMENT: "ADJUSTMENT"
+};
+
+const InventoryStatus = {
+  AVAILABLE: "AVAILABLE",
+  RESERVED: "RESERVED",
+  DAMAGED: "DAMAGED",
+  EXPIRED: "EXPIRED"
 };
 
 async function createStatuses() {
@@ -313,26 +342,114 @@ async function createUsers() {
   const roles = await prisma.role.findMany();
   const activeStates = await prisma.activeState.findMany();
 
-  const users = [];
+  const adminRole = roles.find((r) => r.name === RoleName.ADMIN).role_id;
+  const clientRole = roles.find((r) => r.name === RoleName.CLIENT).role_id;
+  const activeState = activeStates.find((s) => s.name === "Active").state_id;
+  const mainOrg = organisations[0].organisation_id;
 
-  const hashedPassword = await bcrypt.hash("admin123", 10);
-  users.push({
-    user_id: "admin",
-    email: "admin@tslogix.com",
-    password_hash: hashedPassword,
-    first_name: "Admin",
-    last_name: "User",
-    organisation_id: organisations[0].organisation_id,
-    role_id: roles.find((r) => r.name === RoleName.ADMIN).role_id,
-    active_state_id: activeStates.find((s) => s.name === "Active").state_id,
-  });
+  // Create admin users with visible passwords
+  const adminUsers = [
+    {
+      user_id: "admin1",
+      email: "admin1@tslogix.com",
+      password_hash: await bcrypt.hash("Admin123!", 10),
+      first_name: "Admin",
+      last_name: "One",
+      organisation_id: mainOrg,
+      role_id: adminRole,
+      active_state_id: activeState,
+    },
+    {
+      user_id: "admin2",
+      email: "admin2@tslogix.com",
+      password_hash: await bcrypt.hash("Admin456!", 10),
+      first_name: "Admin",
+      last_name: "Two",
+      organisation_id: mainOrg,
+      role_id: adminRole,
+      active_state_id: activeState,
+    },
+    {
+      user_id: "admin3",
+      email: "admin3@tslogix.com",
+      password_hash: await bcrypt.hash("Admin789!", 10),
+      first_name: "Admin",
+      last_name: "Three",
+      organisation_id: mainOrg,
+      role_id: adminRole,
+      active_state_id: activeState,
+    },
+  ];
 
-  for (let i = 0; i < COUNT.USERS - 1; i++) {
+  // Create client users with visible passwords
+  const clientUsers = [
+    {
+      user_id: "client1",
+      email: "client1@company.com",
+      password_hash: await bcrypt.hash("Client123!", 10),
+      first_name: "Client",
+      last_name: "One",
+      organisation_id: organisations[1].organisation_id,
+      role_id: clientRole,
+      active_state_id: activeState,
+    },
+    {
+      user_id: "client2",
+      email: "client2@company.com",
+      password_hash: await bcrypt.hash("Client456!", 10),
+      first_name: "Client",
+      last_name: "Two",
+      organisation_id: organisations[1].organisation_id,
+      role_id: clientRole,
+      active_state_id: activeState,
+    },
+    {
+      user_id: "client3",
+      email: "client3@company.com",
+      password_hash: await bcrypt.hash("Client789!", 10),
+      first_name: "Client",
+      last_name: "Three",
+      organisation_id: organisations[2].organisation_id,
+      role_id: clientRole,
+      active_state_id: activeState,
+    },
+  ];
+
+  // Create all admin and client users first
+  for (const user of [...adminUsers, ...clientUsers]) {
+    await prisma.user.upsert({
+      where: { user_id: user.user_id },
+      update: {},
+      create: user,
+    });
+  }
+
+  console.log("✅ Admin and Client users created with visible passwords:");
+  console.log("Admin Users:");
+  adminUsers.forEach((u) =>
+    console.log(
+      `- ${u.user_id}: ${u.email} / Password: Admin123!|Admin456!|Admin789!`
+    )
+  );
+  console.log("Client Users:");
+  clientUsers.forEach((u) =>
+    console.log(
+      `- ${u.user_id}: ${u.email} / Password: Client123!|Client456!|Client789!`
+    )
+  );
+
+  // Create regular staff users
+  const regularUsers = [];
+  for (
+    let i = 0;
+    i < COUNT.USERS - (adminUsers.length + clientUsers.length);
+    i++
+  ) {
     const firstName = faker.person.firstName();
     const lastName = faker.person.lastName();
     const passwordHash = await bcrypt.hash(faker.internet.password(), 10);
 
-    users.push({
+    regularUsers.push({
       user_id: faker.internet.userName({ firstName, lastName }).toLowerCase(),
       email: faker.internet.email({ firstName, lastName }),
       password_hash: passwordHash,
@@ -343,12 +460,13 @@ async function createUsers() {
       }),
       organisation_id:
         faker.helpers.arrayElement(organisations).organisation_id,
-      role_id: faker.helpers.arrayElement(roles).role_id,
+      role_id: roles.find((r) => r.name === RoleName.STAFF).role_id,
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
     });
   }
 
-  for (const user of users) {
+  // Create the regular users
+  for (const user of regularUsers) {
     await prisma.user.upsert({
       where: { user_id: user.user_id },
       update: {},
@@ -356,7 +474,7 @@ async function createUsers() {
     });
   }
 
-  console.log("✅ Users created");
+  console.log(`✅ ${regularUsers.length} regular users created`);
 }
 
 async function createSuppliers() {
@@ -428,8 +546,9 @@ async function createProducts() {
       name: faker.commerce.productName(),
       product_line_id: faker.helpers.arrayElement(productLines).product_line_id,
       group_id: faker.helpers.arrayElement(groupNames).group_id,
-      temperature_range_id:
-        faker.helpers.arrayElement(temperatureRanges).temperature_range_id,
+      temperature_range_id: faker.helpers.maybe(
+        () => faker.helpers.arrayElement(temperatureRanges).temperature_range_id
+      ),
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
       humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
       manufacturer: faker.company.name(),
@@ -440,6 +559,8 @@ async function createProducts() {
         "Store in original packaging",
         "Keep container tightly closed",
       ]),
+      unit_weight: parseFloat(faker.commerce.price({ min: 0.1, max: 50 })),
+      unit_volume: parseFloat(faker.commerce.price({ min: 0.1, max: 10 })),
     });
   }
 
@@ -451,6 +572,31 @@ async function createProducts() {
   console.log("✅ Products created");
 }
 
+async function createLocations() {
+  console.log("Creating locations...");
+
+  const locationTypes = Object.values(LocationType);
+  const locations = [];
+
+  for (let i = 0; i < COUNT.LOCATIONS; i++) {
+    const locationType = faker.helpers.arrayElement(locationTypes);
+    const name = `${locationType}-${String(i).padStart(3, "0")}`;
+
+    locations.push({
+      name,
+      type: locationType,
+      capacity: faker.number.int({ min: 100, max: 10000 }),
+    });
+  }
+
+  await prisma.location.createMany({
+    data: locations,
+    skipDuplicates: true,
+  });
+
+  console.log("✅ Locations created");
+}
+
 async function createEntryOrders() {
   console.log("Creating entry orders...");
 
@@ -460,6 +606,10 @@ async function createEntryOrders() {
   const origins = await prisma.origin.findMany();
   const documentTypes = await prisma.documentType.findMany();
   const statuses = await prisma.status.findMany();
+  const products = await prisma.product.findMany();
+  const locations = await prisma.location.findMany({
+    where: { type: LocationType.STORAGE },
+  });
 
   for (let i = 0; i < COUNT.ENTRY_ORDERS; i++) {
     const orderDate = faker.date.recent({ days: 60 });
@@ -479,7 +629,7 @@ async function createEntryOrders() {
     const maxTemp = faker.number.int({ min: 15, max: 30 });
     const minTemp = faker.number.int({ min: 0, max: maxTemp - 1 });
 
-    await prisma.entryOrder.create({
+    const entryOrder = await prisma.entryOrder.create({
       data: {
         order_id: order.order_id,
         entry_order_no: `ENTRY-${faker.string.numeric(5)}`,
@@ -559,9 +709,42 @@ async function createEntryOrders() {
         ]),
       },
     });
+
+    // Create inventory and inventory logs for this entry
+    if (i % 2 === 0) {
+      // Only create inventory for half the entries
+      const productToUse = faker.helpers.arrayElement(products);
+      const quantity = faker.number.int({ min: 10, max: 1000 });
+      const location = faker.helpers.arrayElement(locations);
+      const user = faker.helpers.arrayElement(users);
+
+      // Create inventory record
+      const inventory = await prisma.inventory.create({
+        data: {
+          product_id: productToUse.product_id,
+          entry_order_id: entryOrder.entry_order_id,
+          location_id: location.location_id,
+          quantity,
+          expiration_date: expirationDate,
+          status: InventoryStatus.AVAILABLE,
+        },
+      });
+
+      // Create inventory log
+      await prisma.inventoryLog.create({
+        data: {
+          user_id: user.id,
+          product_id: productToUse.product_id,
+          quantity_change: quantity,
+          movement_type: MovementType.ENTRY,
+          entry_order_id: entryOrder.entry_order_id,
+          location_id: location.location_id,
+        },
+      });
+    }
   }
 
-  console.log("✅ Entry Orders created");
+  console.log("✅ Entry Orders and related Inventory records created");
 }
 
 async function createDepartureOrders() {
@@ -575,10 +758,23 @@ async function createDepartureOrders() {
   const labels = await prisma.label.findMany();
   const exitOptions = await prisma.exitOption.findMany();
   const statuses = await prisma.status.findMany();
+  const products = await prisma.product.findMany();
 
   // Get entry orders to link some departure orders to them
   const entryOrders = await prisma.entryOrder.findMany({
     take: Math.floor(COUNT.ENTRY_ORDERS / 2), // Link about half of departure orders to entry orders
+  });
+
+  // Get inventory with products that have stock
+  const inventoryItems = await prisma.inventory.findMany({
+    where: {
+      quantity: {
+        gt: 0,
+      },
+    },
+    include: {
+      location: true,
+    },
   });
 
   for (let i = 0; i < COUNT.DEPARTURE_ORDERS; i++) {
@@ -593,6 +789,7 @@ async function createDepartureOrders() {
           faker.helpers.arrayElement(organisations).organisation_id,
         created_by: faker.helpers.arrayElement(users).id,
         created_at: orderDate,
+        priority: faker.helpers.arrayElement(["HIGH", "NORMAL"]),
       },
     });
 
@@ -600,7 +797,7 @@ async function createDepartureOrders() {
     // Only link if we're in the first half of departure orders and have entry orders
     const linkedEntryOrder = i < entryOrders.length ? entryOrders[i] : null;
 
-    await prisma.departureOrder.create({
+    const departureOrder = await prisma.departureOrder.create({
       data: {
         order_id: order.order_id,
         departure_order_no: `DEP-${faker.string.numeric(5)}`,
@@ -660,9 +857,43 @@ async function createDepartureOrders() {
           : null,
       },
     });
+
+    // Create inventory logs for this departure if we have inventory items
+    if (inventoryItems.length > 0 && i % 3 === 0) {
+      const inventoryItem = faker.helpers.arrayElement(inventoryItems);
+      const quantityToRemove = faker.number.int({
+        min: 1,
+        max: Math.min(inventoryItem.quantity, 100),
+      });
+      const user = faker.helpers.arrayElement(users);
+
+      // Create inventory log for departure
+      await prisma.inventoryLog.create({
+        data: {
+          user_id: user.id,
+          product_id: inventoryItem.product_id,
+          quantity_change: -quantityToRemove, // Negative for departures
+          movement_type: MovementType.DEPARTURE,
+          departure_order_id: departureOrder.departure_order_id,
+          location_id: inventoryItem.location_id,
+        },
+      });
+
+      // Update inventory quantity
+      await prisma.inventory.update({
+        where: {
+          inventory_id: inventoryItem.inventory_id,
+        },
+        data: {
+          quantity: {
+            decrement: quantityToRemove,
+          },
+        },
+      });
+    }
   }
 
-  console.log("✅ Departure Orders created");
+  console.log("✅ Departure Orders and related inventory logs created");
 }
 
 async function main() {
@@ -687,6 +918,7 @@ async function main() {
     await createSuppliers();
     await createCustomers();
     await createProducts();
+    await createLocations();
     await createEntryOrders();
     await createDepartureOrders();
 

@@ -401,21 +401,29 @@ enum DocumentApplicableTo {
 }
 
 
-enum InventoryStatus {
-  AVAILABLE
-  RESERVED
-  DAMAGED
+enum LocationType {
+  STORAGE
+  LOADING
+  UNLOADING
+  TRANSIT
+  REPACKAGING
+  INSPECTION
+  RETURN
+  REPAIR
+  WAREHOUSE
+  DISTRIBUTION
 }
 
 enum MovementType {
   ENTRY
   DEPARTURE
+  TRANSFER
   ADJUSTMENT
 }
 
-
-enum LocationType {
-  STORAGE
-  PICKING
+enum InventoryStatus {
+  AVAILABLE
+  RESERVED
   DAMAGED
+  EXPIRED
 }
