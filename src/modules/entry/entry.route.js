@@ -1,0 +1,10 @@
+const express = require("express");
+const processController = require("./entry.controller");
+
+const router = express.Router();
+
+router.get("/entry-formfields", processController.getEntryFormFields);
+router.post("/create-entry-order", processController.createEntryOrder);
+router.get("/entry-orders", processController.getAllEntryOrders);
+router.get("/current-order-number", processController.getCurrentEntryOrderNo);
+module.exports = router;

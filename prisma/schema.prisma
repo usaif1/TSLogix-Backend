@@ -208,6 +208,8 @@ model Product {
   temperature_range    TemperatureRange? @relation(fields: [temperature_range_id], references: [temperature_range_id])
   inventory            Inventory[]      @relation(name: "ProductInventory")     
   inventoryLogs        InventoryLog[]   @relation(name: "ProductInventoryLogs")
+  entryOrders          EntryOrder[]
+  departureOrders      DepartureOrder[]
 
   @@map("products")
 }
@@ -256,7 +258,8 @@ model EntryOrder {
   observation                   String?
   personnel_incharge_id         String?
   presentation                  String?
-  product                       String?
+  product_id                    String?       @map("product_id")
+  product                       Product?      @relation(fields: [product_id], references: [product_id])
   quantity_packaging            String?
   registration_date             DateTime?
   technical_specification       String?
@@ -289,6 +292,8 @@ model EntryOrder {
 }
 
 model DepartureOrder {
+  product_id                    String?       @map("product_id")
+  product                       Product?      @relation(fields: [product_id], references: [product_id])
   customer_id                String?
   departure_order_id         String         @id @default(uuid()) @map("departure_order_id")
   label_id                   String?
@@ -337,16 +342,15 @@ model Inventory {
   inventory_id         String           @id @default(uuid()) @map("inventory_id")
   product_id           String
   entry_order_id       String?          @map("entry_order_id")
-  location_id          String?          @map("location_id")
   quantity             Int
   expiration_date      DateTime?
   status               InventoryStatus  @default(AVAILABLE)
 
   product              Product          @relation(fields: [product_id], references: [product_id], name: "ProductInventory")
   entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryInventory")
-  location             Location?        @relation(fields: [location_id], references: [location_id], name: "LocationInventory")
 
-  @@index([product_id, location_id], map: "idx_inventory_product_location")
+
+  @@unique([product_id, expiration_date], name: "product_location_expiry")
   @@map("inventory")
 }
 
@@ -360,31 +364,14 @@ model InventoryLog {
   movement_type        MovementType
   entry_order_id       String?          @map("entry_order_id")
   departure_order_id   String?          @map("departure_order_id")
-  location_id          String?          @map("location_id")
 
   user                 User             @relation(fields: [user_id], references: [id])
   product              Product          @relation(fields: [product_id], references: [product_id], name: "ProductInventoryLogs")
   entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryOrderLogs")
   departure_order      DepartureOrder?  @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureOrderLogs")
-  location             Location?        @relation(fields: [location_id], references: [location_id], name: "LocationLogs")
 
   @@index([timestamp, product_id], map: "idx_log_timestamp_product")
   @@map("inventory_logs")
-}
-
-model Location {
-  location_id          String           @id @default(uuid()) @map("location_id")
-  name                 String           @unique
-  type                 LocationType?
-  capacity             Int?
-
-  // Current stock at this location
-  inventory            Inventory[]      @relation(name: "LocationInventory")
-
-  // Logs at this location
-  inventoryLogs        InventoryLog[]   @relation(name: "LocationLogs")
-
-  @@map("locations")
 }
 
 
@@ -413,12 +400,15 @@ enum LocationType {
   WAREHOUSE
   DISTRIBUTION
 }
-
 enum MovementType {
   ENTRY
   DEPARTURE
   TRANSFER
   ADJUSTMENT
+  RETURN        
+  DISPOSAL         
+  RECALL         
+  INSPECTION       
 }
 
 enum InventoryStatus {
@@ -426,4 +416,9 @@ enum InventoryStatus {
   RESERVED
   DAMAGED
   EXPIRED
+  IN_TRANSIT      
+  PENDING_INSPECTION 
+  QUARANTINED 
+  RETURNED       
+  DISPOSED        
 }
