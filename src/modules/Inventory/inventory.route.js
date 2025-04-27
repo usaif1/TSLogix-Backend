@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const inventoryController = require("../Inventory/inventory.controller");
+const inventoryController = require("./inventory.controller");
 
 router
   .route("/")

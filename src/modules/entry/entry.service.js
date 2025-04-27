@@ -39,7 +39,9 @@ async function createEntryOrder(entryData) {
       humidity: entryData.humidity,
       palettes: entryData.palettes,
       product_description: entryData.product_description,
-      insured_value: entryData.insured_value ? parseFloat(entryData.insured_value) : null,
+      insured_value: entryData.insured_value
+        ? parseFloat(entryData.insured_value)
+        : null,
       entry_date: toUTC(entryData.entry_date) || new Date(),
       entry_transfer_note: entryData.entry_transfer_note,
       type: entryData.type,
@@ -51,29 +53,15 @@ async function createEntryOrder(entryData) {
     },
   });
 
-  const expiry = entryData.expiration_date ? toUTC(entryData.expiration_date) : null;
-  const inventoryRecord = await prisma.inventory.upsert({
-    where: {
-      product_location_expiry: {
-        product_id: newEntryOrder.product_id,
-        expiration_date: expiry,
-      },
-    },
-    update: { quantity: { increment: Number(newEntryOrder.total_qty) } },
-    create: {
-      product_id: newEntryOrder.product_id,
-      entry_order_id: newEntryOrder.entry_order_id,
-      quantity: Number(newEntryOrder.total_qty),
-      expiration_date: expiry,
-      status: "AVAILABLE",
-    },
-  });
-
-  return { entryOrder: newEntryOrder, inventory: inventoryRecord };
+  return { entryOrder: newEntryOrder };
 }
 
 // Fetches and transforms EntryOrders
-async function getAllEntryOrders(organisationId = null, sortOptions = null, entryOrderNo = null) {
+async function getAllEntryOrders(
+  organisationId = null,
+  sortOptions = null,
+  entryOrderNo = null
+) {
   const query = {
     select: {
       entry_order_id: true,
@@ -90,37 +78,62 @@ async function getAllEntryOrders(organisationId = null, sortOptions = null, entr
       type: true,
       insured_value: true,
       entry_date: true,
+      product: { select: { name: true } },
       documentType: { select: { name: true } },
       supplier: { select: { name: true } },
       origin: { select: { name: true } },
-      order: { select: { created_at: true, organisation: { select: { name: true } } } },
+      order: {
+        select: { created_at: true, organisation: { select: { name: true } } },
+      },
     },
-    orderBy: { [sortOptions?.orderBy || "entry_date"]: sortOptions?.direction || "desc" },
+    orderBy: {
+      [sortOptions?.orderBy || "entry_date"]: sortOptions?.direction || "desc",
+    },
     where: {},
   };
 
   const whereConds = {};
   if (organisationId) whereConds.order = { organisation_id: organisationId };
-  if (entryOrderNo) whereConds.entry_order_no = { contains: entryOrderNo, mode: "insensitive" };
+  if (entryOrderNo)
+    whereConds.entry_order_no = { contains: entryOrderNo, mode: "insensitive" };
   if (Object.keys(whereConds).length) query.where = whereConds;
 
   const orders = await prisma.entryOrder.findMany(query);
-  return orders.map(o => ({ ...o, status: o.entry_status?.name || null }));
+  return orders.map((o) => ({ ...o, status: o.entry_status?.name || null }));
 }
 
 // Dropdown data for Entry form
 async function getEntryFormFields() {
-  const [origins, documentTypes, users, suppliers, customers, products, orderStatus] =
-    await Promise.all([
-      prisma.origin.findMany(),
-      prisma.documentType.findMany({ select: { document_type_id: true, name: true } }),
-      prisma.user.findMany({ select: { user_id: true, first_name: true, last_name: true } }),
-      prisma.supplier.findMany(),
-      prisma.customer.findMany({ select: { customer_id: true, name: true } }),
-      prisma.product.findMany(),
-      prisma.status.findMany(),
-    ]);
-  return { origins, documentTypes, users, suppliers, customers, products, orderStatus };
+  const [
+    origins,
+    documentTypes,
+    users,
+    suppliers,
+    customers,
+    products,
+    orderStatus,
+  ] = await Promise.all([
+    prisma.origin.findMany(),
+    prisma.documentType.findMany({
+      select: { document_type_id: true, name: true },
+    }),
+    prisma.user.findMany({
+      select: { user_id: true, first_name: true, last_name: true },
+    }),
+    prisma.supplier.findMany(),
+    prisma.customer.findMany({ select: { customer_id: true, name: true } }),
+    prisma.product.findMany(),
+    prisma.status.findMany(),
+  ]);
+  return {
+    origins,
+    documentTypes,
+    users,
+    suppliers,
+    customers,
+    products,
+    orderStatus,
+  };
 }
 
 // Generates next EntryOrder number
@@ -133,9 +146,49 @@ async function getCurrentEntryOrderNo() {
   let nextCount = 1;
   if (last?.entry_order_no) {
     const parts = last.entry_order_no.split("/");
-    if (parts.length === 2 && !isNaN(parts[1])) nextCount = parseInt(parts[1]) + 1;
+    if (parts.length === 2 && !isNaN(parts[1]))
+      nextCount = parseInt(parts[1]) + 1;
   }
   return `${currentYear}/${nextCount}`;
+}
+
+async function getEntryOrderByNo(orderNo, organisationId = null) {
+  const where = { entry_order_no: orderNo };
+  if (organisationId) {
+    where.order = { organisation_id: organisationId };
+  }
+
+  const order = await prisma.entryOrder.findFirst({
+    where,
+    select: {
+      entry_order_id: true,
+      entry_order_no: true,
+      total_qty: true,
+      palettes: true,
+      total_weight: true,
+      entry_transfer_note: true,
+      presentation: true,
+      comments: true,
+      type: true,
+      insured_value: true,
+      entry_date: true,
+      document_date: true,
+      admission_date_time: true,
+      registration_date: true,
+      document_status: true,
+      order_progress: true,
+      product: { select: { name: true } },
+      documentType: { select: { name: true } },
+      supplier: { select: { name: true } },
+      origin: { select: { name: true } },
+      entry_status: { select: { name: true } },
+      order: { select: { organisation: { select: { name: true } } } },
+      audit_status: { select: { name: true } },
+    },
+  });
+
+  if (!order) return null;
+  return { ...order, status: order.entry_status?.name || null };
 }
 
 module.exports = {
@@ -143,4 +196,5 @@ module.exports = {
   getAllEntryOrders,
   getEntryFormFields,
   getCurrentEntryOrderNo,
+  getEntryOrderByNo,
 };

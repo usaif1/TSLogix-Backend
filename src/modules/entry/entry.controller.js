@@ -70,9 +70,37 @@ async function getCurrentEntryOrderNo(req, res) {
   }
 }
 
+
+// Fetch single Entry Order by order number
+async function getEntryOrderByNo(req, res) {
+  try {
+    const { orderNo } = req.params;
+    const organisationId = req.user?.organisation_id;
+    const userRole = req.user?.role;
+
+    if (!organisationId) {
+      return res.status(403).json({ message: "Authorization required" });
+    }
+
+    const filterOrg = userRole === "ADMIN" ? null : organisationId;
+    const entryOrder = await entryService.getEntryOrderByNo(orderNo, filterOrg);
+
+    if (!entryOrder) {
+      return res.status(404).json({ message: "Entry order not found" });
+    }
+
+    return res.status(200).json({ success: true, data: entryOrder });
+  } catch (error) {
+    return res.status(500).json({ message: "Error fetching entry order", error: error.message });
+  }
+}
+
+
+
 module.exports = {
   createEntryOrder,
   getAllEntryOrders,
   getEntryFormFields,
   getCurrentEntryOrderNo,
+  getEntryOrderByNo,
 };

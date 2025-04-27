@@ -1,4 +1,4 @@
-const inventoryService = require("../Inventory/inventory.service");
+const inventoryService = require("./inventory.service");
 
 /**
  * Create a new inventory record

@@ -1,4 +1,11 @@
-const { PrismaClient, RoleName } = require("@prisma/client");
+const {
+  PrismaClient,
+  RoleName,
+  CellStatus,
+  MovementType,
+  InventoryStatus,
+  AuditResult,
+} = require("@prisma/client");
 const { faker } = require("@faker-js/faker");
 const bcrypt = require("bcrypt");
 
@@ -22,37 +29,10 @@ const COUNT = {
   SUPPLIERS: 15,
   CUSTOMERS: 20,
   PRODUCTS: 30,
+  WAREHOUSES: 3,
+  WAREHOUSE_CELLS: 100,
   ENTRY_ORDERS: 25,
   DEPARTURE_ORDERS: 25,
-  LOCATIONS: 10,
-};
-
-const LocationType = {
-  STORAGE: "STORAGE",
-  LOADING: "LOADING",
-  UNLOADING: "UNLOADING",
-  TRANSIT: "TRANSIT",
-  REPACKAGING: "REPACKAGING",
-  INSPECTION: "INSPECTION",
-  RETURN: "RETURN",
-  REPAIR: "REPAIR",
-  WAREHOUSE: "WAREHOUSE",
-  DISTRIBUTION: "DISTRIBUTION",
-};
-
-// Define these enums as well since they're used in createEntryOrders and createDepartureOrders
-const MovementType = {
-  ENTRY: "ENTRY",
-  DEPARTURE: "DEPARTURE",
-  TRANSFER: "TRANSFER",
-  ADJUSTMENT: "ADJUSTMENT"
-};
-
-const InventoryStatus = {
-  AVAILABLE: "AVAILABLE",
-  RESERVED: "RESERVED",
-  DAMAGED: "DAMAGED",
-  EXPIRED: "EXPIRED"
 };
 
 async function createStatuses() {
@@ -342,8 +322,9 @@ async function createUsers() {
   const roles = await prisma.role.findMany();
   const activeStates = await prisma.activeState.findMany();
 
-  const adminRole = roles.find((r) => r.name === RoleName.ADMIN).role_id;
-  const clientRole = roles.find((r) => r.name === RoleName.CLIENT).role_id;
+  const adminRole = roles.find((r) => r.name === "ADMIN").role_id;
+  const clientRole = roles.find((r) => r.name === "CLIENT").role_id;
+  const staffRole = roles.find((r) => r.name === "STAFF").role_id;
   const activeState = activeStates.find((s) => s.name === "Active").state_id;
   const mainOrg = organisations[0].organisation_id;
 
@@ -460,7 +441,7 @@ async function createUsers() {
       }),
       organisation_id:
         faker.helpers.arrayElement(organisations).organisation_id,
-      role_id: roles.find((r) => r.name === RoleName.STAFF).role_id,
+      role_id: staffRole,
       active_state_id: faker.helpers.arrayElement(activeStates).state_id,
     });
   }
@@ -572,34 +553,102 @@ async function createProducts() {
   console.log("✅ Products created");
 }
 
-async function createLocations() {
-  console.log("Creating locations...");
+async function createWarehouses() {
+  console.log("Creating warehouses...");
+  const warehouses = [];
 
-  const locationTypes = Object.values(LocationType);
-  const locations = [];
+  const warehouseNames = [
+    "Central Warehouse",
+    "North Distribution Center",
+    "South Logistics Hub",
+  ];
 
-  for (let i = 0; i < COUNT.LOCATIONS; i++) {
-    const locationType = faker.helpers.arrayElement(locationTypes);
-    const name = `${locationType}-${String(i).padStart(3, "0")}`;
-
-    locations.push({
-      name,
-      type: locationType,
-      capacity: faker.number.int({ min: 100, max: 10000 }),
+  for (let i = 0; i < COUNT.WAREHOUSES; i++) {
+    warehouses.push({
+      name: warehouseNames[i] || `Warehouse-${i + 1}`,
+      address: {
+        street: faker.location.streetAddress(),
+        city: faker.location.city(),
+        state: faker.location.state(),
+        zip: faker.location.zipCode(),
+        country: faker.location.country(),
+      },
+      location: faker.location.city(),
+      capacity: faker.number.int({ min: 5000, max: 20000 }),
+      max_occupancy: faker.number.int({ min: 4000, max: 5000 }),
+      status: faker.helpers.arrayElement([
+        "Active",
+        "Maintenance",
+        "Expanding",
+      ]),
     });
   }
 
-  await prisma.location.createMany({
-    data: locations,
+  await prisma.warehouse.createMany({
+    data: warehouses,
     skipDuplicates: true,
   });
 
-  console.log("✅ Locations created");
+  console.log("✅ Warehouses created");
+}
+
+async function createWarehouseCells() {
+  console.log("Creating warehouse cells...");
+
+  const warehouses = await prisma.warehouse.findMany();
+  const cells = [];
+
+  // Distribute cells among warehouses
+  const cellsPerWarehouse = Math.ceil(
+    COUNT.WAREHOUSE_CELLS / warehouses.length
+  );
+
+  warehouses.forEach((warehouse) => {
+    const zones = ["A", "B", "C", "D"];
+
+    for (let i = 0; i < cellsPerWarehouse; i++) {
+      const row = String.fromCharCode(65 + (Math.floor(i / 25) % 6)); // A-F
+      const column = String(Math.floor(i % 25) + 1).padStart(2, "0"); // 01-25
+      const level = String(Math.floor(i / 150) + 1);
+      const zone = faker.helpers.arrayElement(zones);
+
+      cells.push({
+        warehouse_id: warehouse.warehouse_id,
+        cell_number: `${zone}${row}${column}${level}`,
+        zone: zone,
+        row: row,
+        column: column,
+        level: level,
+        capacity: faker.number.float({ min: 10, max: 50, precision: 0.01 }),
+        current_usage: faker.number.float({ min: 0, max: 5, precision: 0.01 }),
+        temperature: faker.helpers.maybe(() =>
+          faker.number.float({ min: -5, max: 30, precision: 0.1 })
+        ),
+        humidity: faker.helpers.maybe(() =>
+          faker.number.float({ min: 35, max: 70, precision: 0.1 })
+        ),
+        status: faker.helpers.weightedArrayElement([
+          { weight: 5, value: CellStatus.AVAILABLE },
+          { weight: 3, value: CellStatus.PARTIALLY_OCCUPIED },
+          { weight: 1, value: CellStatus.OCCUPIED },
+          { weight: 0.5, value: CellStatus.MAINTENANCE },
+          { weight: 0.3, value: CellStatus.RESERVED },
+          { weight: 0.2, value: CellStatus.BLOCKED },
+        ]),
+      });
+    }
+  });
+
+  await prisma.warehouseCell.createMany({
+    data: cells,
+    skipDuplicates: true,
+  });
+
+  console.log("✅ Warehouse Cells created");
 }
 
 async function createEntryOrders() {
-  console.log("Creating entry orders...");
-
+  console.log("🌱 Creating detailed entry orders...");
   const organisations = await prisma.organisation.findMany();
   const users = await prisma.user.findMany();
   const suppliers = await prisma.supplier.findMany();
@@ -607,14 +656,32 @@ async function createEntryOrders() {
   const documentTypes = await prisma.documentType.findMany();
   const statuses = await prisma.status.findMany();
   const products = await prisma.product.findMany();
-  const locations = await prisma.location.findMany({
-    where: { type: LocationType.STORAGE },
-  });
+  const warehouses = await prisma.warehouse.findMany();
+  const cells = await prisma.warehouseCell.findMany();
 
   for (let i = 0; i < COUNT.ENTRY_ORDERS; i++) {
-    const orderDate = faker.date.recent({ days: 60 });
-    const expirationDate = faker.date.future({ years: 2, refDate: orderDate });
+    // 1. Select product and calculate metrics
+    const product = faker.helpers.arrayElement(products);
+    const quantity = faker.number.int({ min: 100, max: 1000 });
+    const unitWeight =
+      product.unit_weight ?? faker.number.float({ min: 0.5, max: 10 });
+    const unitVolume =
+      product.unit_volume ?? faker.number.float({ min: 0.1, max: 2 });
 
+    // 2. Calculate derived fields
+    const totalQty = `${quantity} ${faker.helpers.arrayElement([
+      "units",
+      "boxes",
+      "crates",
+    ])}`;
+    const totalWeight = `${(unitWeight * quantity).toFixed(2)} kg`;
+    const totalVolume = `${(unitVolume * quantity).toFixed(2)} m³`;
+    const palettes = `${Math.ceil(
+      quantity / faker.number.int({ min: 20, max: 50 })
+    )} pallets`;
+    const technicalSpec = `Specifications:\n- ${faker.lorem.sentence()}\n- ${faker.lorem.sentence()}\n- ${faker.lorem.sentence()}`;
+
+    // 3. Create base order
     const order = await prisma.order.create({
       data: {
         order_type: "ENTRY",
@@ -622,278 +689,289 @@ async function createEntryOrders() {
         organisation_id:
           faker.helpers.arrayElement(organisations).organisation_id,
         created_by: faker.helpers.arrayElement(users).id,
-        created_at: orderDate,
+        created_at: faker.date.recent({ days: 60 }),
       },
     });
 
-    const maxTemp = faker.number.int({ min: 15, max: 30 });
-    const minTemp = faker.number.int({ min: 0, max: maxTemp - 1 });
-
+    // 4. Create entry order with all fields
+    const warehouse = faker.helpers.arrayElement(warehouses);
     const entryOrder = await prisma.entryOrder.create({
       data: {
         order_id: order.order_id,
+        product_id: product.product_id,
         entry_order_no: `ENTRY-${faker.string.numeric(5)}`,
-        registration_date: orderDate,
-        document_date: orderDate,
-        document_status: faker.helpers.arrayElement([
-          "Active",
-          "Draft",
-          "Archived",
-        ]),
-        supplier_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(suppliers).supplier_id
-        ),
-        origin_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(origins).origin_id
-        ),
-        document_type_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(documentTypes).document_type_id
-        ),
-        personnel_incharge_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(users).id
-        ),
-        admission_date_time: faker.helpers.maybe(() =>
-          faker.date.recent({ days: 30 })
-        ),
-        cif_value: faker.helpers.maybe(() => faker.string.numeric(6)),
-        max_temperature: `${maxTemp}°C`,
-        min_temperature: `${minTemp}°C`,
-        product: faker.commerce.productName(),
-        product_description: faker.commerce.productDescription(),
-        quantity_packaging: `${faker.number.int({
-          min: 1,
-          max: 100,
-        })} ${faker.helpers.arrayElement([
-          "boxes",
-          "crates",
-          "pallets",
-          "containers",
-        ])}`,
-        total_qty: faker.number.int({ min: 10, max: 10000 }).toString(),
+        registration_date: new Date(),
+        document_date: faker.date.past({ years: 1 }),
+        document_status: "ACTIVE",
+        status_id: faker.helpers.arrayElement(statuses).status_id,
+        warehouse_id: warehouse.warehouse_id,
+        supplier_id: faker.helpers.arrayElement(suppliers).supplier_id,
+        origin_id: faker.helpers.arrayElement(origins).origin_id,
+        document_type_id:
+          faker.helpers.arrayElement(documentTypes).document_type_id,
+        personnel_incharge_id: faker.helpers.arrayElement(users).id,
+
+        // Detailed fields
+        total_qty: totalQty,
+        total_weight: totalWeight,
+        total_volume: totalVolume,
+        technical_specification: technicalSpec,
+        palettes: palettes,
         presentation: faker.helpers.arrayElement([
           "Boxed",
+          "Palletized",
           "Loose",
-          "Wrapped",
-          "Vacuum Sealed",
         ]),
-        insured_value: parseFloat(
-          faker.commerce.price({ min: 1000, max: 100000 })
-        ),
-        palettes: faker.number.int({ min: 1, max: 50 }).toString(),
         lot_series: `LOT-${faker.string.alphanumeric(8)}`,
-        technical_specification: faker.lorem.paragraph(1),
+        mfd_date_time: faker.date.past({ years: 1 }),
+        expiration_date: faker.date.future({ years: 2 }),
         humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
-        total_volume: `${faker.number.int({ min: 1, max: 1000 })} m³`,
-        total_weight: `${faker.number.int({ min: 10, max: 50000 })} kg`,
-        mfd_date_time: faker.date.past({ years: 1, refDate: orderDate }),
-        expiration_date: expirationDate,
-        certificate_protocol_analysis: faker.helpers.maybe(
-          () => `CERT-${faker.string.alphanumeric(10)}`
-        ),
-        entry_transfer_note: faker.lorem.sentence(),
-        type: faker.helpers.arrayElement([
-          "Regular",
-          "Urgent",
-          "Special",
-          "Return",
-        ]),
-        status_id: faker.helpers.arrayElement(statuses).status_id,
-        comments: faker.lorem.paragraph(),
+        insured_value: faker.number.float({ min: 1000, max: 100000 }),
         observation: faker.lorem.sentence(),
-        order_progress: faker.helpers.arrayElement([
-          "0%",
-          "25%",
-          "50%",
-          "75%",
-          "100%",
-        ]),
+        comments: faker.lorem.paragraph(),
       },
     });
 
-    // Create inventory and inventory logs for this entry
-    if (i % 2 === 0) {
-      // Only create inventory for half the entries
-      const productToUse = faker.helpers.arrayElement(products);
-      const quantity = faker.number.int({ min: 10, max: 1000 });
-      const location = faker.helpers.arrayElement(locations);
-      const user = faker.helpers.arrayElement(users);
+    // 5. Audit and inventory flow (same as before)
+    const audit = await prisma.entryOrderAudit.create({
+      data: {
+        entry_order_id: entryOrder.entry_order_id,
+        audited_by: faker.helpers.arrayElement(users).id,
+        audit_result: faker.helpers.arrayElement([
+          AuditResult.PASSED,
+          AuditResult.FAILED,
+          AuditResult.PENDING,
+        ]),
+        comments: faker.lorem.sentence(),
+      },
+    });
 
-      // Create inventory record
-      const inventory = await prisma.inventory.create({
+    await prisma.entryOrder.update({
+      where: { entry_order_id: entryOrder.entry_order_id },
+      data: { audit_status: audit.audit_result },
+    });
+
+    if (audit.audit_result === AuditResult.PASSED) {
+      const cell = faker.helpers.arrayElement(
+        cells.filter((c) => c.warehouse_id === warehouse.warehouse_id)
+      );
+
+      // Create inventory with precise quantity
+      await prisma.inventory.create({
         data: {
-          product_id: productToUse.product_id,
+          product_id: product.product_id,
           entry_order_id: entryOrder.entry_order_id,
-          location_id: location.location_id,
-          quantity,
-          expiration_date: expirationDate,
+          warehouse_id: warehouse.warehouse_id,
+          cell_id: cell.cell_id,
+          quantity: quantity, // Numeric value from total_qty calculation
           status: InventoryStatus.AVAILABLE,
+          expiration_date: entryOrder.expiration_date,
         },
       });
 
-      // Create inventory log
+      // Inventory log with audit reference
       await prisma.inventoryLog.create({
         data: {
-          user_id: user.id,
-          product_id: productToUse.product_id,
+          audit_id: audit.audit_id,
+          user_id: order.created_by,
+          product_id: product.product_id,
           quantity_change: quantity,
           movement_type: MovementType.ENTRY,
           entry_order_id: entryOrder.entry_order_id,
-          location_id: location.location_id,
+          warehouse_id: warehouse.warehouse_id,
+          cell_id: cell.cell_id,
+          notes: `Initial entry: ${totalQty} (${totalWeight}, ${totalVolume})`,
+        },
+      });
+
+      // Update warehouse cell capacity
+      await prisma.warehouseCell.update({
+        where: { cell_id: cell.cell_id },
+        data: {
+          current_usage: {
+            increment: unitVolume * quantity,
+          },
+          status: CellStatus.PARTIALLY_OCCUPIED,
         },
       });
     }
   }
-
-  console.log("✅ Entry Orders and related Inventory records created");
+  console.log("✅ Detailed entry orders created with all fields");
 }
 
 async function createDepartureOrders() {
-  console.log("Creating departure orders...");
-
-  const organisations = await prisma.organisation.findMany();
+  console.log("🌱 Creating detailed departure orders...");
   const users = await prisma.user.findMany();
   const customers = await prisma.customer.findMany();
-  const documentTypes = await prisma.documentType.findMany();
   const packagingTypes = await prisma.packagingType.findMany();
   const labels = await prisma.label.findMany();
   const exitOptions = await prisma.exitOption.findMany();
   const statuses = await prisma.status.findMany();
-  const products = await prisma.product.findMany();
+  const organisations = await prisma.organisation.findMany();
 
-  // Get entry orders to link some departure orders to them
-  const entryOrders = await prisma.entryOrder.findMany({
-    take: Math.floor(COUNT.ENTRY_ORDERS / 2), // Link about half of departure orders to entry orders
-  });
-
-  // Get inventory with products that have stock
-  const inventoryItems = await prisma.inventory.findMany({
+  // Get valid inventory with proper relations
+  const validInventory = await prisma.inventory.findMany({
     where: {
-      quantity: {
-        gt: 0,
-      },
+      status: InventoryStatus.AVAILABLE,
+      quantity: { gt: 0 },
+      entry_order: { audit_status: AuditResult.PASSED },
     },
     include: {
-      location: true,
+      product: true,
+      entry_order: {
+        include: {
+          audits: true,
+          order: {
+            include: {
+              organisation: true
+            }
+          },
+          product: true,
+        },
+      },
+      warehouse: true,
+      cell: true,
     },
   });
 
-  for (let i = 0; i < COUNT.DEPARTURE_ORDERS; i++) {
-    const orderDate = faker.date.recent({ days: 30 });
-    const transferDate = faker.date.soon({ days: 14, refDate: orderDate });
+  if (validInventory.length === 0) {
+    console.log("⏹️ No available inventory for departure orders");
+    return;  // Exit the function if no valid inventory
+  }
 
+  for (let i = 0; i < COUNT.DEPARTURE_ORDERS; i++) {
+    if (validInventory.length === 0) {
+      console.log("⏹️ No more available inventory for departure orders");
+      break;
+    }
+
+    // 1. Select inventory and calculate shipment details
+    const inventoryIndex = faker.number.int({
+      min: 0,
+      max: validInventory.length - 1,
+    });
+    const inventory = validInventory[inventoryIndex];
+    const quantity = faker.number.int({
+      min: 1,
+      max: inventory.quantity,
+    });
+
+    // 2. Calculate derived values
+    const product = inventory.product;
+    const unitWeight =
+      product.unit_weight || faker.number.float({ min: 0.5, max: 10 });
+    const unitVolume =
+      product.unit_volume || faker.number.float({ min: 0.1, max: 2 });
+    const totalWeight = unitWeight * quantity;
+    const totalVolume = unitVolume * quantity;
+
+    // Get the organization ID safely
+    const organisationId = inventory.entry_order.order?.organisation?.organisation_id;
+    // If we don't have an organization ID, use a default
+    const finalOrgId = organisationId || organisations[0].organisation_id;
+
+    // 3. Create base order with proper relations
     const order = await prisma.order.create({
       data: {
         order_type: "DEPARTURE",
-        status: "PENDING",
-        organisation_id:
-          faker.helpers.arrayElement(organisations).organisation_id,
-        created_by: faker.helpers.arrayElement(users).id,
-        created_at: orderDate,
-        priority: faker.helpers.arrayElement(["HIGH", "NORMAL"]),
+        status: "PROCESSING",
+        priority: faker.helpers.arrayElement(["HIGH", "NORMAL", "LOW"]),
+        created_at: faker.date.recent({ days: 30 }),
+        organisation: {
+          connect: {
+            organisation_id: finalOrgId,
+          },
+        },
+        createdBy: {
+          connect: { id: faker.helpers.arrayElement(users).id },
+        },
       },
     });
 
-    // Link to an entry order for some departure orders
-    // Only link if we're in the first half of departure orders and have entry orders
-    const linkedEntryOrder = i < entryOrders.length ? entryOrders[i] : null;
-
+    // 4. Create departure order with all fields
     const departureOrder = await prisma.departureOrder.create({
       data: {
         order_id: order.order_id,
-        departure_order_no: `DEP-${faker.string.numeric(5)}`,
-        registration_date: orderDate,
-        document_no: `DOC-${faker.string.alphanumeric(8)}`,
-        document_date: orderDate,
-        document_status: faker.helpers.arrayElement([
-          "Active",
-          "Draft",
-          "Processed",
-        ]),
-        customer_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(customers).customer_id
-        ),
-        document_type_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(documentTypes).document_type_id
-        ),
-        packaging_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(packagingTypes).packaging_type_id
-        ),
+        entry_order_id: inventory.entry_order_id,
+        product_id: product.product_id,
+        customer_id: faker.helpers.arrayElement(customers).customer_id,
+        packaging_id:
+          faker.helpers.arrayElement(packagingTypes).packaging_type_id,
+        exit_option_id: faker.helpers.arrayElement(exitOptions).exit_option_id,
         label_id: faker.helpers.maybe(
           () => faker.helpers.arrayElement(labels).label_id
         ),
-        exit_option_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(exitOptions).exit_option_id
-        ),
-        personnel_in_charge_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(users).id
-        ),
-        date_and_time_of_transfer: transferDate,
-        arrival_point: faker.location.streetAddress(),
-        id_responsible: `ID-${faker.string.numeric(6)}`,
-        responsible_for_collection: faker.person.fullName(),
-        order_progress: faker.helpers.arrayElement([
-          "0%",
-          "25%",
-          "50%",
-          "75%",
-          "100%",
-        ]),
-        observation: faker.lorem.sentence(),
-        palettes: faker.number.int({ min: 1, max: 50 }).toString(),
-        product_description: faker.commerce.productDescription(),
         status_id: faker.helpers.arrayElement(statuses).status_id,
-        type: faker.helpers.arrayElement([
-          "Regular",
-          "Urgent",
-          "Special",
-          "Return",
-        ]),
-        total_qty: faker.number.int({ min: 10, max: 10000 }).toString(),
-        total_volume: `${faker.number.int({ min: 1, max: 1000 })} m³`,
-        total_weight: `${faker.number.int({ min: 10, max: 50000 })} kg`,
-        // Add entry_order_id if we have a linked entry order
-        entry_order_id: linkedEntryOrder
-          ? linkedEntryOrder.entry_order_id
-          : null,
+        total_qty: `${quantity} units`,
+        total_weight: `${totalWeight.toFixed(2)} kg`,
+        total_volume: `${totalVolume.toFixed(2)} m³`,
+        palettes: `${Math.ceil(quantity / 50)} pallets`,
+        insured_value: totalWeight * faker.number.float({ min: 5, max: 20 }),
+        arrival_point: `${faker.location.city()}, ${faker.location.country()}`,
+        responsible_for_collection: faker.person.fullName(),
+        departure_transfer_note: `TN-${faker.string.alphanumeric(10)}`,
+        document_no: `DOC-${faker.string.numeric(8)}`,
+        document_date: faker.date.recent({ days: 7 }),
+        personnel_in_charge_id: faker.helpers.arrayElement(users).id,
+        date_and_time_of_transfer: faker.date.soon({ days: 3 }),
+        warehouse_id: inventory.warehouse_id,  // Connect to the same warehouse
       },
     });
 
-    // Create inventory logs for this departure if we have inventory items
-    if (inventoryItems.length > 0 && i % 3 === 0) {
-      const inventoryItem = faker.helpers.arrayElement(inventoryItems);
-      const quantityToRemove = faker.number.int({
-        min: 1,
-        max: Math.min(inventoryItem.quantity, 100),
-      });
-      const user = faker.helpers.arrayElement(users);
+    // 5. Get associated audit from entry order if it exists
+    const entryOrderAudit = inventory.entry_order.audits[0] || null;
+    const auditId = entryOrderAudit ? entryOrderAudit.audit_id : null;
 
-      // Create inventory log for departure
-      await prisma.inventoryLog.create({
-        data: {
-          user_id: user.id,
-          product_id: inventoryItem.product_id,
-          quantity_change: -quantityToRemove, // Negative for departures
-          movement_type: MovementType.DEPARTURE,
-          departure_order_id: departureOrder.departure_order_id,
-          location_id: inventoryItem.location_id,
-        },
-      });
+    // 6. Create inventory log with audit reference
+    await prisma.inventoryLog.create({
+      data: {
+        audit_id: auditId,
+        user_id: order.created_by,
+        product_id: inventory.product_id,
+        quantity_change: -quantity,
+        movement_type: MovementType.DEPARTURE,
+        departure_order_id: departureOrder.departure_order_id,
+        warehouse_id: inventory.warehouse_id,
+        cell_id: inventory.cell_id,
+        notes: `Shipped ${quantity} units to ${departureOrder.arrival_point}`,
+      },
+    });
 
-      // Update inventory quantity
-      await prisma.inventory.update({
-        where: {
-          inventory_id: inventoryItem.inventory_id,
-        },
+    // 7. Update inventory
+    const updatedInventory = await prisma.inventory.update({
+      where: { inventory_id: inventory.inventory_id },
+      data: {
+        quantity: { decrement: quantity },
+        status:
+          inventory.quantity - quantity <= 0
+            ? InventoryStatus.DEPLETED
+            : InventoryStatus.AVAILABLE,
+      },
+    });
+
+    // 8. Update warehouse cell capacity if cell exists
+    if (inventory.cell_id) {
+      await prisma.warehouseCell.update({
+        where: { cell_id: inventory.cell_id },
         data: {
-          quantity: {
-            decrement: quantityToRemove,
-          },
+          current_usage: { decrement: totalVolume },
+          status:
+            updatedInventory.quantity > 0
+              ? CellStatus.PARTIALLY_OCCUPIED
+              : CellStatus.AVAILABLE,
         },
       });
     }
-  }
 
-  console.log("✅ Departure Orders and related inventory logs created");
+    // 9. Remove depleted inventory from available stock
+    if (updatedInventory.quantity <= 0) {
+      validInventory.splice(inventoryIndex, 1);
+    } else {
+      // Update the quantity in our local array to reflect the database
+      validInventory[inventoryIndex].quantity = updatedInventory.quantity;
+    }
+  }
+  console.log("✅ Departure orders created with inventory tracking");
 }
 
 async function main() {
@@ -917,8 +995,9 @@ async function main() {
     await createUsers();
     await createSuppliers();
     await createCustomers();
+    await createWarehouses();
+    await createWarehouseCells();
     await createProducts();
-    await createLocations();
     await createEntryOrders();
     await createDepartureOrders();
 

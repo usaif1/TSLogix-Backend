@@ -146,6 +146,7 @@ model User {
   organisation    Organisation     @relation(fields: [organisation_id], references: [organisation_id])
   role            Role?            @relation(fields: [role_id], references: [role_id])
   inventoryLogs   InventoryLog[]
+  entryOrderAudits EntryOrderAudit[] @relation("UserAudits")
 
   @@map("users")
 }
@@ -278,6 +279,10 @@ model EntryOrder {
   type                          String?
   max_temperature               String?
   min_temperature               String?
+  cell_id                       String?
+  cell_assigned_at              DateTime?
+  warehouse_id                  String? 
+  audit_status AuditResult? @default(PENDING)
   departure_orders              DepartureOrder[]
   documentType                  DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
   order                         Order         @relation(fields: [order_id], references: [order_id])
@@ -287,6 +292,9 @@ model EntryOrder {
   entry_status                  Status?       @relation(fields: [status_id], references: [status_id])
   inventory                     Inventory[]      @relation(name: "EntryInventory")
   inventoryLogs                 InventoryLog[]         @relation(name: "EntryOrderLogs")
+  cell                        WarehouseCell? @relation(fields: [cell_id], references: [cell_id])
+  warehouse                 Warehouse?    @relation(fields: [warehouse_id], references: [warehouse_id])
+  audits                     EntryOrderAudit[]
 
   @@map("entry_orders")
 }
@@ -324,6 +332,7 @@ model DepartureOrder {
   total_volume               String?
   total_weight               String?
   departure_date             DateTime?      @default(now())
+  warehouse_id               String? 
   customer                   Customer?      @relation(fields: [customer_id], references: [customer_id])
   documentType               DocumentType?  @relation(fields: [document_type_id], references: [document_type_id])
   ExitOption                 ExitOption?    @relation(fields: [exit_option_id], references: [exit_option_id])
@@ -334,23 +343,32 @@ model DepartureOrder {
   departure_status           Status?        @relation(fields: [status_id], references: [status_id])
   entry_order                EntryOrder?    @relation(fields: [entry_order_id], references: [entry_order_id])
   inventoryLogs        InventoryLog[]       @relation(name: "DepartureOrderLogs")
+  warehouse                 Warehouse?      @relation(fields: [warehouse_id], references: [warehouse_id])
+  inventory                  Inventory[]    @relation(name: "DepartureInventory")
 
   @@map("departure_orders")
 }
+
 
 model Inventory {
   inventory_id         String           @id @default(uuid()) @map("inventory_id")
   product_id           String
   entry_order_id       String?          @map("entry_order_id")
+  departure_order_id   String?          @map("departure_order_id")
+  cell_id              String?          // Link to the cell where inventory is stored
   quantity             Int
   expiration_date      DateTime?
+  warehouse_id         String? 
   status               InventoryStatus  @default(AVAILABLE)
 
   product              Product          @relation(fields: [product_id], references: [product_id], name: "ProductInventory")
   entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryInventory")
+  departure_order      DepartureOrder?  @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureInventory")
+  cell                 WarehouseCell?   @relation(fields: [cell_id], references: [cell_id])
+  warehouse            Warehouse?       @relation(fields: [warehouse_id], references: [warehouse_id]) // Add this relation
 
-
-  @@unique([product_id, expiration_date], name: "product_location_expiry")
+  @@index([departure_order_id], map: "idx_inventory_departure_order")
+  @@index([cell_id], map: "idx_inventory_cell")
   @@map("inventory")
 }
 
@@ -360,20 +378,93 @@ model InventoryLog {
   timestamp            DateTime         @default(now())
   user_id              String
   product_id           String
+  last_updated         DateTime?      @updatedAt 
+  audit_id String?  @map("audit_id")
+  audit    EntryOrderAudit? @relation(fields: [audit_id], references: [audit_id])
   quantity_change      Int
   movement_type        MovementType
   entry_order_id       String?          @map("entry_order_id")
   departure_order_id   String?          @map("departure_order_id")
+  warehouse_id         String?          // Add this field
+  cell_id              String?          // Add this field
+  notes                String?          // Add this field
 
   user                 User             @relation(fields: [user_id], references: [id])
   product              Product          @relation(fields: [product_id], references: [product_id], name: "ProductInventoryLogs")
   entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryOrderLogs")
   departure_order      DepartureOrder?  @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureOrderLogs")
+  warehouse            Warehouse?       @relation(fields: [warehouse_id], references: [warehouse_id]) // Add this relation
+  cell                 WarehouseCell?   @relation(fields: [cell_id], references: [cell_id]) // Add this relation
 
   @@index([timestamp, product_id], map: "idx_log_timestamp_product")
   @@map("inventory_logs")
 }
 
+
+
+model WarehouseCell {
+  cell_id         String       @id @default(uuid()) @map("cell_id")
+  warehouse_id    String
+  cell_number     String       // Unique identifier within warehouse
+  zone            String?      // Optional zone designation (cold storage, bulk, etc.)
+  row             String?      
+  column          String?
+  level           String?      
+  capacity        Decimal      @db.Decimal(10, 2) 
+  current_usage   Decimal      @db.Decimal(10, 2) @default(0)
+  temperature     Decimal?     @db.Decimal(5, 2)  
+  humidity        Decimal?     @db.Decimal(5, 2)  
+  status          CellStatus   @default(AVAILABLE)
+  
+  warehouse       Warehouse    @relation(fields: [warehouse_id], references: [warehouse_id])
+  inventory       Inventory[]
+  entryOrders     EntryOrder[]
+  inventoryLogs   InventoryLog[]
+  
+  @@unique([warehouse_id, cell_number])
+  @@map("warehouse_cells")
+}
+
+model EntryOrderAudit {
+  audit_id          String    @id @default(uuid()) @map("audit_id")
+  entry_order_id    String    @map("entry_order_id")
+  audited_by        String    @map("audited_by")
+  audit_date        DateTime  @default(now())
+  audit_result      AuditResult
+  comments          String?
+  entry_order       EntryOrder @relation(fields: [entry_order_id], references: [entry_order_id])
+  auditor           User       @relation("UserAudits", fields: [audited_by], references: [id])
+  inventoryLogs     InventoryLog[]
+  
+  @@map("entry_order_audits")
+}
+
+model Warehouse {
+  warehouse_id       String          @id @default(uuid()) @map("warehouse_id")
+  name               String          @unique
+  address            Json?
+  location           String?
+  capacity           Int?
+  max_occupancy      Int?
+  status             String?
+  inventory          Inventory[]
+  entryOrders        EntryOrder[]
+  departureOrders    DepartureOrder[]
+  cells              WarehouseCell[]  
+  inventoryLogs      InventoryLog[]
+
+
+  @@map("warehouses")
+}
+
+enum CellStatus {
+  AVAILABLE
+  OCCUPIED
+  PARTIALLY_OCCUPIED
+  MAINTENANCE
+  RESERVED
+  BLOCKED
+}
 
 enum RoleName {
   ADMIN
@@ -415,6 +506,7 @@ enum InventoryStatus {
   AVAILABLE
   RESERVED
   DAMAGED
+  DEPLETED
   EXPIRED
   IN_TRANSIT      
   PENDING_INSPECTION 
@@ -422,3 +514,12 @@ enum InventoryStatus {
   RETURNED       
   DISPOSED        
 }
+
+
+enum AuditResult {
+  PASSED
+  FAILED
+  PENDING
+}
+
+
