@@ -82,6 +82,7 @@ async function getAllEntryOrders(
       documentType: { select: { name: true } },
       supplier: { select: { name: true } },
       origin: { select: { name: true } },
+      audit_status: { select: { name: true } },
       order: {
         select: { created_at: true, organisation: { select: { name: true } } },
       },
