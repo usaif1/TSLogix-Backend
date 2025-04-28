@@ -97,31 +97,7 @@ async function createDepartureOrder(departureData) {
     },
   });
 
-  const inv = await prisma.inventory.findFirst({
-    where: {
-      product_id: departureData.product_id,
-      quantity: { gte: Number(departureData.total_qty) },
-    },
-  });
-  if (!inv) throw new Error("Insufficient stock");
-
-  const updatedInv = await prisma.inventory.update({
-    where: { inventory_id: inv.inventory_id },
-    data: { quantity: Number(inv.quantity) - Number(departureData.total_qty) },
-  });
-
-  await prisma.inventoryLog.create({
-    data: {
-      user_id: departureData.created_by,
-      product_id: departureData.product_id,
-      quantity_change: -Number(departureData.total_qty),
-      movement_type: "DEPARTURE",
-      departure_order_id: newDepartureOrder.departure_order_id,
-      notes: departureData.reason || "Stock dispatched",
-    },
-  });
-
-  return { departureOrder: newDepartureOrder, inventory: updatedInv };
+  return { departureOrder: newDepartureOrder };
 }
 
 module.exports = {
