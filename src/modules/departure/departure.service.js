@@ -11,7 +11,7 @@ async function getDepartureFormFields() {
         select: { document_type_id: true, name: true },
       }),
       prisma.user.findMany({
-        select: { user_id: true, first_name: true, last_name: true },
+        select: { id: true, first_name: true, last_name: true },
       }),
       prisma.packagingType.findMany(),
       prisma.label.findMany(),
