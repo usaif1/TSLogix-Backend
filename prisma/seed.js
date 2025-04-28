@@ -869,6 +869,11 @@ async function createDepartureOrders() {
     const organisationId = inventory.entry_order.order?.organisation?.organisation_id;
     // If we don't have an organization ID, use a default
     const finalOrgId = organisationId || organisations[0].organisation_id;
+    
+    // Generate a year-based departure order number (similar to entry orders)
+    const currentYear = new Date().getFullYear().toString().slice(-2);
+    const departureNumber = faker.string.numeric(6);
+    const departureOrderNo = `DEP-${currentYear}/${departureNumber}`;
 
     // 3. Create base order with proper relations
     const order = await prisma.order.create({
@@ -894,6 +899,7 @@ async function createDepartureOrders() {
         order_id: order.order_id,
         entry_order_id: inventory.entry_order_id,
         product_id: product.product_id,
+        departure_order_no: departureOrderNo,  // Add the departure order number
         customer_id: faker.helpers.arrayElement(customers).customer_id,
         packaging_id:
           faker.helpers.arrayElement(packagingTypes).packaging_type_id,
