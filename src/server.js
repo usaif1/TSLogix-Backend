@@ -35,7 +35,6 @@ const organisationRoutes = require("@/modules/organisation/organisation.route");
 const maintenanceRoutes = require("@/modules/maintenance/maintenance.route");
 const supplierRoutes = require("@/modules/supplier/supplier.route");
 const productRoutes = require("@/modules/product/product.route");
-const inventoryRoutes = require("@/modules/Inventory/inventory.route")
 const entryRoutes = require("@/modules/entry/entry.route");
 const departureRoutes = require("@/modules/departure/departure.route");
 const auditRoutes = require("@/modules/audit/audit.route");
@@ -47,7 +46,6 @@ app.use("/organisation", organisationRoutes);
 app.use("/maintenance", authenticateToken, maintenanceRoutes);
 app.use("/suppliers", authenticateToken, supplierRoutes);
 app.use("/products", authenticateToken, productRoutes);
-app.use("/inventory", authenticateToken, inventoryRoutes);
 app.use("/entry", authenticateToken, entryRoutes);
 app.use("/departure", authenticateToken, departureRoutes);
 app.use("/audit", authenticateToken, auditRoutes);
