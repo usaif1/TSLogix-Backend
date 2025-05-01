@@ -365,8 +365,10 @@ model Inventory {
   entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryInventory")
   departure_order      DepartureOrder?  @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureInventory")
   cell                 WarehouseCell?   @relation(fields: [cell_id], references: [cell_id])
-  warehouse            Warehouse?       @relation(fields: [warehouse_id], references: [warehouse_id]) // Add this relation
+  warehouse            Warehouse?       @relation(fields: [warehouse_id], references: [warehouse_id])
 
+
+  @@unique([product_id, warehouse_id, cell_id], name: "product_wh_cell_idx")
   @@index([departure_order_id], map: "idx_inventory_departure_order")
   @@index([cell_id], map: "idx_inventory_cell")
   @@map("inventory")

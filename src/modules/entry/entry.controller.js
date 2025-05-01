@@ -44,9 +44,13 @@ async function getAllEntryOrders(req, res) {
       sortOptions,
       searchOrderNo
     );
-    return res.status(200).json({ success: true, data: entryOrders, count: entryOrders.length });
+    return res
+      .status(200)
+      .json({ success: true, data: entryOrders, count: entryOrders.length });
   } catch (error) {
-    return res.status(500).json({ message: "Error fetching entry orders", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error fetching entry orders", error: error.message });
   }
 }
 
@@ -70,7 +74,6 @@ async function getCurrentEntryOrderNo(req, res) {
   }
 }
 
-
 // Fetch single Entry Order by order number
 async function getEntryOrderByNo(req, res) {
   try {
@@ -91,11 +94,27 @@ async function getEntryOrderByNo(req, res) {
 
     return res.status(200).json({ success: true, data: entryOrder });
   } catch (error) {
-    return res.status(500).json({ message: "Error fetching entry order", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error fetching entry order", error: error.message });
   }
 }
 
-
+async function fetchPassedOrders(req, res) {
+  try {
+    const organisationId = req.user.organisation_id;
+    const searchNo = req.query.orderNo || null;
+    const data = await entryService.getPassedEntryOrders(
+      organisationId,
+      null,
+      searchNo
+    );
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
 
 module.exports = {
   createEntryOrder,
@@ -103,4 +122,5 @@ module.exports = {
   getEntryFormFields,
   getCurrentEntryOrderNo,
   getEntryOrderByNo,
+  fetchPassedOrders,
 };

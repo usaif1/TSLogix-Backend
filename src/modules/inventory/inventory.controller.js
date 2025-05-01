@@ -1,5 +1,15 @@
+const {
+  PrismaClient,
+  MovementType,
+  InventoryStatus,
+  CellStatus,
+} = require("@prisma/client");
+const prisma = new PrismaClient();
 const inventoryService = require("./inventory.service");
 
+/**
+ * Create a new inventory log entry
+ */
 async function createLog(req, res) {
   try {
     const data = { ...req.body, user_id: req.user.id };
@@ -11,6 +21,9 @@ async function createLog(req, res) {
   }
 }
 
+/**
+ * Get all inventory logs for a given entry order
+ */
 async function getByEntryOrder(req, res) {
   try {
     const logs = await inventoryService.getLogsByEntryOrder(
@@ -23,6 +36,9 @@ async function getByEntryOrder(req, res) {
   }
 }
 
+/**
+ * Get all inventory logs for a given departure order
+ */
 async function getByDepartureOrder(req, res) {
   try {
     const logs = await inventoryService.getLogsByDepartureOrder(
@@ -35,6 +51,9 @@ async function getByDepartureOrder(req, res) {
   }
 }
 
+/**
+ * Get an inventory log by its ID
+ */
 async function getLogById(req, res) {
   try {
     const log = await inventoryService.getInventoryLogById(req.params.log_id);
@@ -47,6 +66,9 @@ async function getLogById(req, res) {
   }
 }
 
+/**
+ * Get all inventory logs with optional filters
+ */
 async function getAllLogs(req, res) {
   try {
     const logs = await inventoryService.getAllInventoryLogs(req.query);
@@ -57,6 +79,9 @@ async function getAllLogs(req, res) {
   }
 }
 
+/**
+ * Get inventory log statistics
+ */
 async function getStats(req, res) {
   try {
     const stats = await inventoryService.getInventoryLogStatistics();
@@ -67,11 +92,79 @@ async function getStats(req, res) {
   }
 }
 
+/**
+ * Add inventory and log the movement in one transaction
+ */
+async function addInventoryAndLog(req, res) {
+  try {
+    const {
+      product_id,
+      quantity,
+      entry_order_id,
+      warehouse_id,
+      cell_id,
+      notes,
+    } = req.body;
+    const user_id = req.user.id;
+    const result = await inventoryService.addInventoryAndLog({
+      product_id,
+      quantity,
+      entry_order_id: entry_order_id || null,
+      user_id,
+      warehouse_id: warehouse_id || null,
+      cell_id: cell_id || null,
+      notes: notes || null,
+    });
+    return res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+/**
+ * Fetch all warehouses
+ */
+async function fetchWarehouses(req, res) {
+  try {
+    const warehouses = await inventoryService.getAllWarehouses();
+    return res.json({ success: true, data: warehouses });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+/**
+ * Fetch warehouse cells, optionally filtered by status
+ */
+async function fetchCells(req, res) {
+  try {
+    const warehouseId = req.params.warehouse_id || null;
+    const statusParam = req.query.status;
+    let statusFilter = null;
+    if (statusParam && CellStatus[statusParam]) {
+      statusFilter = CellStatus[statusParam];
+    }
+    const cells = await inventoryService.getWarehouseCells(
+      warehouseId,
+      statusFilter
+    );
+    return res.json({ success: true, count: cells.length, data: cells });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
 module.exports = {
-    createLog,
-    getByEntryOrder,
-    getByDepartureOrder,
-    getLogById,
-    getAllLogs,
-    getStats,
-  };
+  createLog,
+  getByEntryOrder,
+  getByDepartureOrder,
+  getLogById,
+  getAllLogs,
+  getStats,
+  addInventoryAndLog,
+  fetchWarehouses,
+  fetchCells,
+};

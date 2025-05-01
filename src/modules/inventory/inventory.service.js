@@ -9,33 +9,31 @@ const prisma = new PrismaClient();
  * Create a new inventory log entry
  */
 async function createInventoryLog(logData) {
-  const log = await prisma.inventoryLog.create({
+  return prisma.inventoryLog.create({
     data: {
       user_id: logData.user_id,
       product_id: logData.product_id,
       quantity_change: logData.quantity_change,
       movement_type: logData.movement_type,
-      entry_order_id: logData.entry_order_id,
-      departure_order_id: logData.departure_order_id,
-      warehouse_id: logData.warehouse_id,
-      cell_id: logData.cell_id,
-      notes: logData.notes,
+      entry_order_id: logData.entry_order_id || null,
+      departure_order_id: logData.departure_order_id || null,
+      warehouse_id: logData.warehouse_id || null,
+      cell_id: logData.cell_id || null,
+      notes: logData.notes || null,
     },
     include: {
       user: { select: { id: true, first_name: true, last_name: true } },
       product: { select: { product_id: true, name: true } },
     },
   });
-
-  return log;
 }
 
 /**
  * Get all inventory logs for a given entry order
  */
-async function getLogsByEntryOrder(entry_order_id) {
+async function getLogsByEntryOrder(entryOrderId) {
   return prisma.inventoryLog.findMany({
-    where: { entry_order_id },
+    where: { entry_order_id: entryOrderId },
     include: {
       user: { select: { id: true, first_name: true, last_name: true } },
       product: { select: { product_id: true, name: true } },
@@ -47,9 +45,9 @@ async function getLogsByEntryOrder(entry_order_id) {
 /**
  * Get all inventory logs for a given departure order
  */
-async function getLogsByDepartureOrder(departure_order_id) {
+async function getLogsByDepartureOrder(departureOrderId) {
   return prisma.inventoryLog.findMany({
-    where: { departure_order_id },
+    where: { departure_order_id: departureOrderId },
     include: {
       user: { select: { id: true, first_name: true, last_name: true } },
       product: { select: { product_id: true, name: true } },
@@ -59,11 +57,11 @@ async function getLogsByDepartureOrder(departure_order_id) {
 }
 
 /**
- * Get an inventory log by its ID
+ * Get a single inventory log by ID
  */
-async function getInventoryLogById(log_id) {
+async function getInventoryLogById(logId) {
   return prisma.inventoryLog.findUnique({
-    where: { log_id },
+    where: { log_id: logId },
     include: {
       user: { select: { id: true, first_name: true, last_name: true } },
       product: { select: { product_id: true, name: true } },
@@ -97,7 +95,7 @@ async function getAllInventoryLogs(filters = {}) {
 }
 
 /**
- * Get inventory log statistics
+ * Get summary counts by movement type
  */
 async function getInventoryLogStatistics() {
   const [entries, departures, transfers, adjustments, total] =
@@ -119,6 +117,101 @@ async function getInventoryLogStatistics() {
   return { entries, departures, transfers, adjustments, total };
 }
 
+/**
+ * Add inventory record and log the movement in a single transaction
+ */
+async function addInventoryAndLog({
+  product_id,
+  quantity,
+  entry_order_id = null,
+  user_id,
+  warehouse_id = null,
+  cell_id = null,
+  notes = null,
+}) {
+  return prisma.$transaction(async (tx) => {
+    // Upsert inventory: increment if exists, else create new
+    const inventoryRecord = await tx.inventory.upsert({
+      where: {
+        product_wh_cell_idx: {
+          product_id,
+          warehouse_id,
+          cell_id,
+        },
+      },
+      create: {
+        product_id,
+        entry_order_id,
+        warehouse_id,
+        cell_id,
+        quantity,
+        expiration_date: null,
+        status: InventoryStatus.AVAILABLE,
+      },
+      update: {
+        quantity: { increment: quantity },
+      },
+    });
+
+    // Create the log entry
+    const log = await tx.inventoryLog.create({
+      data: {
+        user_id,
+        product_id,
+        quantity_change: quantity,
+        movement_type: MovementType.ENTRY,
+        entry_order_id,
+        departure_order_id: null,
+        warehouse_id,
+        cell_id,
+        notes,
+      },
+    });
+
+    return { inventory: inventoryRecord, log };
+  });
+}
+
+/**
+ * Fetch all warehouses
+ */
+async function getAllWarehouses() {
+  return prisma.warehouse.findMany({
+    select: {
+      warehouse_id: true,
+      name: true,
+      location: true,
+      capacity: true,
+      status: true,
+    },
+  });
+}
+
+/**
+ * Fetch warehouse cells, optionally filtered by status
+ */
+async function getWarehouseCells(warehouseId = null, status = null) {
+  const where = {};
+  if (warehouseId) where.warehouse_id = warehouseId;
+  if (status) where.status = status;
+
+  return prisma.warehouseCell.findMany({
+    where,
+    select: {
+      cell_id: true,
+      warehouse_id: true,
+      cell_number: true,
+      zone: true,
+      row: true,
+      column: true,
+      level: true,
+      capacity: true,
+      current_usage: true,
+      status: true,
+    },
+  });
+}
+
 module.exports = {
   createInventoryLog,
   getLogsByEntryOrder,
@@ -126,4 +219,7 @@ module.exports = {
   getInventoryLogById,
   getAllInventoryLogs,
   getInventoryLogStatistics,
+  addInventoryAndLog,
+  getAllWarehouses,
+  getWarehouseCells,
 };

@@ -178,7 +178,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
       registration_date: true,
       document_status: true,
       order_progress: true,
-      product: { select: { name: true } },
+      product: { select: { name: true, product_id: true } },
       documentType: { select: { name: true } },
       supplier: { select: { name: true } },
       origin: { select: { name: true } },
@@ -192,10 +192,64 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
   return { ...order, status: order.entry_status?.name || null };
 }
 
+/**
+ * Fetch entry orders where audit_status.name = 'PASSED'
+ */
+async function getPassedEntryOrders(
+  organisationId = null,
+  sortOptions = null,
+  searchNo = null
+) {
+  const where = {
+    audit_status: "PASSED",
+  };
+
+  if (organisationId) {
+    where.order = { organisation_id: organisationId };
+  }
+  if (searchNo) {
+    where.entry_order_no = { contains: searchNo, mode: "insensitive" };
+  }
+
+  const query = {
+    select: {
+      entry_order_id: true,
+      entry_order_no: true,
+      total_qty: true,
+      palettes: true,
+      total_volume: true,
+      total_weight: true,
+      presentation: true,
+      status_id: true,
+      entry_status: { select: { name: true } },
+      comments: true,
+      type: true,
+      insured_value: true,
+      entry_date: true,
+      product: { select: { name: true } },
+      documentType: { select: { name: true } },
+      supplier: { select: { name: true } },
+      origin: { select: { name: true } },
+      audit_status: { select: { name: true } },
+      order: {
+        select: { created_at: true, organisation: { select: { name: true } } },
+      },
+    },
+    where,
+    orderBy: {
+      [sortOptions?.orderBy || "entry_date"]: sortOptions?.direction || "desc",
+    },
+  };
+
+  const orders = await prisma.entryOrder.findMany(query);
+  return orders.map((o) => ({ ...o, status: o.entry_status?.name || null }));
+}
+
 module.exports = {
   createEntryOrder,
   getAllEntryOrders,
   getEntryFormFields,
   getCurrentEntryOrderNo,
   getEntryOrderByNo,
+  getPassedEntryOrders,
 };

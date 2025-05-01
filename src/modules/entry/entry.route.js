@@ -8,4 +8,5 @@ router.post("/create-entry-order", processController.createEntryOrder);
 router.get("/entry-orders", processController.getAllEntryOrders);
 router.get("/entry-order/:orderNo", processController.getEntryOrderByNo);
 router.get("/current-order-number", processController.getCurrentEntryOrderNo);
+router.get("/entry-orders/passed", processController.fetchPassedOrders);
 module.exports = router;
