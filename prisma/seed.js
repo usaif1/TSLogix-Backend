@@ -594,50 +594,35 @@ async function createWarehouses() {
 
 async function createWarehouseCells() {
   console.log("Creating warehouse cells...");
-
   const warehouses = await prisma.warehouse.findMany();
   const cells = [];
+  const maxBays = 28;
+  const maxSlots = 10;
+  const rows = ["A", "B", "C", "D", "E", "F"]; // as you like
+  const kinds = ["NORMAL", "V", "T", "R"];
 
-  // Distribute cells among warehouses
-  const cellsPerWarehouse = Math.ceil(
-    COUNT.WAREHOUSE_CELLS / warehouses.length
-  );
-
-  warehouses.forEach((warehouse) => {
-    const zones = ["A", "B", "C", "D"];
-
-    for (let i = 0; i < cellsPerWarehouse; i++) {
-      const row = String.fromCharCode(65 + (Math.floor(i / 25) % 6)); // A-F
-      const column = String(Math.floor(i % 25) + 1).padStart(2, "0"); // 01-25
-      const level = String(Math.floor(i / 150) + 1);
-      const zone = faker.helpers.arrayElement(zones);
-
-      cells.push({
-        warehouse_id: warehouse.warehouse_id,
-        cell_number: `${zone}${row}${column}${level}`,
-        zone: zone,
-        row: row,
-        column: column,
-        level: level,
-        capacity: faker.number.float({ min: 10, max: 50, precision: 0.01 }),
-        current_usage: faker.number.float({ min: 0, max: 5, precision: 0.01 }),
-        temperature: faker.helpers.maybe(() =>
-          faker.number.float({ min: -5, max: 30, precision: 0.1 })
-        ),
-        humidity: faker.helpers.maybe(() =>
-          faker.number.float({ min: 35, max: 70, precision: 0.1 })
-        ),
-        status: faker.helpers.weightedArrayElement([
-          { weight: 5, value: CellStatus.AVAILABLE },
-          { weight: 3, value: CellStatus.PARTIALLY_OCCUPIED },
-          { weight: 1, value: CellStatus.OCCUPIED },
-          { weight: 0.5, value: CellStatus.MAINTENANCE },
-          { weight: 0.3, value: CellStatus.RESERVED },
-          { weight: 0.2, value: CellStatus.BLOCKED },
-        ]),
-      });
+  for (const wh of warehouses) {
+    for (const row of rows) {
+      for (let bay = 1; bay <= maxBays; bay++) {
+        for (let pos = 1; pos <= maxSlots; pos++) {
+          cells.push({
+            warehouse_id: wh.warehouse_id,
+            row: row,
+            bay: bay,
+            position: pos,
+            kind: faker.helpers.arrayElement(kinds),
+            capacity: 1,
+            currentUsage: 0, // Prisma field: currentUsage
+            status: faker.helpers.weightedArrayElement([
+              { weight: 5, value: CellStatus.AVAILABLE },
+              { weight: 3, value: CellStatus.PARTIALLY_OCCUPIED },
+              { weight: 1, value: CellStatus.OCCUPIED },
+            ]),
+          });
+        }
+      }
     }
-  });
+  }
 
   await prisma.warehouseCell.createMany({
     data: cells,
@@ -752,45 +737,51 @@ async function createEntryOrders() {
     });
 
     if (audit.audit_result === AuditResult.PASSED) {
-      const cell = faker.helpers.arrayElement(
-        cells.filter((c) => c.warehouse_id === warehouse.warehouse_id)
-      );
+      // pick any AVAILABLE slot in this warehouse
+      const cell = await prisma.warehouseCell.findFirst({
+        where: {
+          warehouse_id: warehouse.warehouse_id,
+          status: CellStatus.AVAILABLE,
+        },
+        orderBy: { row: "asc" }, // or bay/position if you want a specific traversal order
+      });
 
-      // Create inventory with precise quantity
+      // create the inventory record pointing at that slot
       await prisma.inventory.create({
         data: {
           product_id: product.product_id,
           entry_order_id: entryOrder.entry_order_id,
           warehouse_id: warehouse.warehouse_id,
-          cell_id: cell.cell_id,
-          quantity: quantity, // Numeric value from total_qty calculation
+          cell_id: cell.id,
+          quantity: quantity,
           status: InventoryStatus.AVAILABLE,
           expiration_date: entryOrder.expiration_date,
         },
       });
 
-      // Inventory log with audit reference
+      // log it
       await prisma.inventoryLog.create({
         data: {
           audit_id: audit.audit_id,
           user_id: order.created_by,
           product_id: product.product_id,
-          quantity_change: quantity,
           movement_type: MovementType.ENTRY,
+          quantity_change: quantity,
           entry_order_id: entryOrder.entry_order_id,
           warehouse_id: warehouse.warehouse_id,
-          cell_id: cell.cell_id,
-          notes: `Initial entry: ${totalQty} (${totalWeight}, ${totalVolume})`,
+          cell_id: cell.id,
+          notes: `Stored in ${cell.row}.${String(cell.bay).padStart(
+            2,
+            "0"
+          )}.${String(cell.position).padStart(2, "0")}`,
         },
       });
 
-      // Update warehouse cell capacity
+      // bump the cell’s usage and status
       await prisma.warehouseCell.update({
-        where: { cell_id: cell.cell_id },
+        where: { id: cell.id },
         data: {
-          current_usage: {
-            increment: unitVolume * quantity,
-          },
+          currentUsage: { increment: 1 },
           status: CellStatus.PARTIALLY_OCCUPIED,
         },
       });
@@ -801,6 +792,8 @@ async function createEntryOrders() {
 
 async function createDepartureOrders() {
   console.log("🌱 Creating detailed departure orders...");
+
+  // Fetch lookup data
   const users = await prisma.user.findMany();
   const customers = await prisma.customer.findMany();
   const packagingTypes = await prisma.packagingType.findMany();
@@ -809,73 +802,46 @@ async function createDepartureOrders() {
   const statuses = await prisma.status.findMany();
   const organisations = await prisma.organisation.findMany();
 
-  // Get valid inventory with proper relations
-  const validInventory = await prisma.inventory.findMany({
+  // Get all inventory items that are AVAILABLE and have passed audit
+  let validInventory = await prisma.inventory.findMany({
     where: {
       status: InventoryStatus.AVAILABLE,
       quantity: { gt: 0 },
       entry_order: { audit_status: AuditResult.PASSED },
     },
     include: {
-      product: true,
-      entry_order: {
-        include: {
-          audits: true,
-          order: {
-            include: {
-              organisation: true
-            }
-          },
-          product: true,
-        },
-      },
+      entry_order: true,
       warehouse: true,
       cell: true,
+      product: true,
     },
   });
 
   if (validInventory.length === 0) {
     console.log("⏹️ No available inventory for departure orders");
-    return;  // Exit the function if no valid inventory
+    return;
   }
 
   for (let i = 0; i < COUNT.DEPARTURE_ORDERS; i++) {
     if (validInventory.length === 0) {
-      console.log("⏹️ No more available inventory for departure orders");
+      console.log("⏹️ All inventory exhausted before reaching target");
       break;
     }
 
-    // 1. Select inventory and calculate shipment details
-    const inventoryIndex = faker.number.int({
-      min: 0,
-      max: validInventory.length - 1,
-    });
-    const inventory = validInventory[inventoryIndex];
-    const quantity = faker.number.int({
-      min: 1,
-      max: inventory.quantity,
-    });
+    // Pick a random inventory slot
+    const idx = faker.number.int({ min: 0, max: validInventory.length - 1 });
+    const inv = validInventory[idx];
+    const qtyToShip = faker.number.int({ min: 1, max: inv.quantity });
 
-    // 2. Calculate derived values
-    const product = inventory.product;
-    const unitWeight =
-      product.unit_weight || faker.number.float({ min: 0.5, max: 10 });
-    const unitVolume =
-      product.unit_volume || faker.number.float({ min: 0.1, max: 2 });
-    const totalWeight = unitWeight * quantity;
-    const totalVolume = unitVolume * quantity;
+    // Calculate weight/volume
+    const unitWgt =
+      inv.product.unit_weight || faker.number.float({ min: 0.5, max: 10 });
+    const unitVol =
+      inv.product.unit_volume || faker.number.float({ min: 0.1, max: 2 });
+    const totalWgt = (unitWgt * qtyToShip).toFixed(2);
+    const totalVol = (unitVol * qtyToShip).toFixed(2);
 
-    // Get the organization ID safely
-    const organisationId = inventory.entry_order.order?.organisation?.organisation_id;
-    // If we don't have an organization ID, use a default
-    const finalOrgId = organisationId || organisations[0].organisation_id;
-    
-    // Generate a year-based departure order number (similar to entry orders)
-    const currentYear = new Date().getFullYear().toString().slice(-2);
-    const departureNumber = faker.string.numeric(6);
-    const departureOrderNo = `DEP-${currentYear}/${departureNumber}`;
-
-    // 3. Create base order with proper relations
+    // Base Order
     const order = await prisma.order.create({
       data: {
         order_type: "DEPARTURE",
@@ -884,7 +850,9 @@ async function createDepartureOrders() {
         created_at: faker.date.recent({ days: 30 }),
         organisation: {
           connect: {
-            organisation_id: finalOrgId,
+            organisation_id:
+              inv.entry_order.order?.organisation_id ||
+              organisations[0].organisation_id,
           },
         },
         createdBy: {
@@ -893,13 +861,12 @@ async function createDepartureOrders() {
       },
     });
 
-    // 4. Create departure order with all fields
+    // DepartureOrder record
     const departureOrder = await prisma.departureOrder.create({
       data: {
         order_id: order.order_id,
-        entry_order_id: inventory.entry_order_id,
-        product_id: product.product_id,
-        departure_order_no: departureOrderNo,  // Add the departure order number
+        entry_order_id: inv.entry_order_id,
+        product_id: inv.product_id,
         customer_id: faker.helpers.arrayElement(customers).customer_id,
         packaging_id:
           faker.helpers.arrayElement(packagingTypes).packaging_type_id,
@@ -908,11 +875,12 @@ async function createDepartureOrders() {
           () => faker.helpers.arrayElement(labels).label_id
         ),
         status_id: faker.helpers.arrayElement(statuses).status_id,
-        total_qty: `${quantity} units`,
-        total_weight: `${totalWeight.toFixed(2)} kg`,
-        total_volume: `${totalVolume.toFixed(2)} m³`,
-        palettes: `${Math.ceil(quantity / 50)} pallets`,
-        insured_value: totalWeight * faker.number.float({ min: 5, max: 20 }),
+        total_qty: `${qtyToShip} units`,
+        total_weight: `${totalWgt} kg`,
+        total_volume: `${totalVol} m³`,
+        palettes: `${Math.ceil(qtyToShip / 50)} pallets`,
+        insured_value:
+          unitWgt * qtyToShip * faker.number.float({ min: 5, max: 20 }),
         arrival_point: `${faker.location.city()}, ${faker.location.country()}`,
         responsible_for_collection: faker.person.fullName(),
         departure_transfer_note: `TN-${faker.string.alphanumeric(10)}`,
@@ -920,63 +888,60 @@ async function createDepartureOrders() {
         document_date: faker.date.recent({ days: 7 }),
         personnel_in_charge_id: faker.helpers.arrayElement(users).id,
         date_and_time_of_transfer: faker.date.soon({ days: 3 }),
-        warehouse_id: inventory.warehouse_id,  // Connect to the same warehouse
+        warehouse_id: inv.warehouse_id,
       },
     });
 
-    // 5. Get associated audit from entry order if it exists
-    const entryOrderAudit = inventory.entry_order.audits[0] || null;
-    const auditId = entryOrderAudit ? entryOrderAudit.audit_id : null;
-
-    // 6. Create inventory log with audit reference
+    // Log the movement
     await prisma.inventoryLog.create({
       data: {
-        audit_id: auditId,
         user_id: order.created_by,
-        product_id: inventory.product_id,
-        quantity_change: -quantity,
+        product_id: inv.product_id,
         movement_type: MovementType.DEPARTURE,
+        quantity_change: -qtyToShip,
         departure_order_id: departureOrder.departure_order_id,
-        warehouse_id: inventory.warehouse_id,
-        cell_id: inventory.cell_id,
-        notes: `Shipped ${quantity} units to ${departureOrder.arrival_point}`,
+        warehouse_id: inv.warehouse_id,
+        cell_id: inv.cell_id,
+        notes: `Shipped ${qtyToShip} units (W:${totalWgt}kg, V:${totalVol}m³)`,
       },
     });
 
-    // 7. Update inventory
-    const updatedInventory = await prisma.inventory.update({
-      where: { inventory_id: inventory.inventory_id },
+    // Update the inventory record
+    const updatedInv = await prisma.inventory.update({
+      where: { inventory_id: inv.inventory_id },
       data: {
-        quantity: { decrement: quantity },
+        quantity: inv.quantity - qtyToShip,
         status:
-          inventory.quantity - quantity <= 0
-            ? InventoryStatus.DEPLETED
-            : InventoryStatus.AVAILABLE,
+          inv.quantity - qtyToShip > 0
+            ? InventoryStatus.AVAILABLE
+            : InventoryStatus.DEPLETED,
       },
     });
 
-    // 8. Update warehouse cell capacity if cell exists
-    if (inventory.cell_id) {
+    // Free up or update the cell
+    if (inv.cell_id) {
       await prisma.warehouseCell.update({
-        where: { cell_id: inventory.cell_id },
+        where: { id: inv.cell_id },
         data: {
-          current_usage: { decrement: totalVolume },
+          currentUsage: {
+            decrement: unitVol * qtyToShip,
+          },
           status:
-            updatedInventory.quantity > 0
+            updatedInv.quantity > 0
               ? CellStatus.PARTIALLY_OCCUPIED
               : CellStatus.AVAILABLE,
         },
       });
     }
 
-    // 9. Remove depleted inventory from available stock
-    if (updatedInventory.quantity <= 0) {
-      validInventory.splice(inventoryIndex, 1);
+    // Remove fully depleted from our local list
+    if (updatedInv.quantity <= 0) {
+      validInventory.splice(idx, 1);
     } else {
-      // Update the quantity in our local array to reflect the database
-      validInventory[inventoryIndex].quantity = updatedInventory.quantity;
+      validInventory[idx].quantity = updatedInv.quantity;
     }
   }
+
   console.log("✅ Departure orders created with inventory tracking");
 }
 
