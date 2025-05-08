@@ -1,25 +1,17 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const warehouseController = require('./warehouse.controller');
+const {
+  allocatePallets,
+  listWarehouseCells,
+  listWarehouses,
+} = require("./warehouse.controller");
 
-function checkAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'ADMIN') return res.status(403).json({ success: false, message: 'Admin role required' });
-  next();
-}
+// Allocate pallets to cells
+router.post("/allocate", allocatePallets);
 
-router
-  .route('/')
-  .post(checkAdmin, warehouseController.createWarehouse)
-  .get(warehouseController.getAllWarehouses);
+// List all cells (optional warehouse filter)
+router.get("/cells", listWarehouseCells);
 
-router
-  .route('/:id')
-  .get(warehouseController.getWarehouseById)
-  .put(checkAdmin, warehouseController.updateWarehouse)
-  .delete(checkAdmin, warehouseController.deleteWarehouse);
-
-router
-  .route('/:id/cells')
-  .post(checkAdmin, warehouseController.assignCell);
+router.get("/warehouses", listWarehouses);
 
 module.exports = router;

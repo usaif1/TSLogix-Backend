@@ -1,133 +1,98 @@
-const { PrismaClient } = require('@prisma/client');
+const {
+  PrismaClient,
+  CellStatus,
+  MovementType,
+  InventoryStatus,
+} = require("@prisma/client");
 const prisma = new PrismaClient();
 
-module.exports = {
-  /**
-   * Create a new warehouse
-   */
-  async createWarehouse(data) {
-    try {
-      return await prisma.warehouse.create({ data });
-    } catch (error) {
-      console.error('Error creating warehouse:', error);
-      throw new Error(`Error creating warehouse: ${error.message}`);
-    }
-  },
+/**
+ * Assign N pallets in a given row of a warehouse,
+ * filling A.01.01 → A.01.10, then A.02.01 → etc.
+ */
+async function assignPallets(
+  warehouse_id,
+  row,
+  palletCount,
+  product_id,
+  user_id
+) {
+  return await prisma.$transaction(async (tx) => {
+    const wh = await tx.warehouse.findUnique({ where: { warehouse_id } });
+    if (!wh) throw new Error("Warehouse not found");
+    if (!row) throw new Error("Row code is required");
+    if (palletCount < 1) throw new Error("palletCount must be ≥ 1");
 
-  /**
-   * Retrieve all warehouses, optionally filtering by name
-   */
-  async getAllWarehouses(filters = {}) {
-    try {
-      const where = {};
-      if (filters.name) where.name = { contains: filters.name, mode: 'insensitive' };
-      return await prisma.warehouse.findMany({
-        where,
-        include: { cells: true, inventory: true }
-      });
-    } catch (error) {
-      console.error('Error fetching warehouses:', error);
-      throw new Error(`Error fetching warehouses: ${error.message}`);
-    }
-  },
-
-  /**
-   * Retrieve a warehouse by its ID, including cells
-   */
-  async getWarehouseById(id) {
-    try {
-      const record = await prisma.warehouse.findUnique({
-        where: { warehouse_id: id },
-        include: { cells: true }
-      });
-      if (!record) throw new Error('Warehouse not found');
-      return record;
-    } catch (error) {
-      console.error(`Error fetching warehouse ${id}:`, error);
-      throw new Error(error.message.includes('not found') ? 'Warehouse not found' : error.message);
-    }
-  },
-
-  /**
-   * Update a warehouse's details
-   */
-  async updateWarehouse(id, data) {
-    try {
-      return await prisma.warehouse.update({ where: { warehouse_id: id }, data });
-    } catch (error) {
-      console.error(`Error updating warehouse ${id}:`, error);
-      throw new Error(error.message);
-    }
-  },
-
-  /**
-   * Delete a warehouse
-   */
-  async deleteWarehouse(id) {
-    try {
-      return await prisma.warehouse.delete({ where: { warehouse_id: id } });
-    } catch (error) {
-      console.error(`Error deleting warehouse ${id}:`, error);
-      throw new Error(error.message);
-    }
-  },
-
-  /**
-   * Assign a new cell to a warehouse and create related inventory/log entries
-   * @param {string} warehouseId
-   * @param {object} cellData - { cell_number, capacity, current_usage = 0 }
-   * @param {string} userId - ID performing the assignment
-   */
-  async assignCellToWarehouse(warehouseId, cellData, userId) {
-    return await prisma.$transaction(async (tx) => {
-      // Ensure warehouse exists
-      const wh = await tx.warehouse.findUnique({ where: { warehouse_id: warehouseId } });
-      if (!wh) throw new Error('Warehouse not found');
-
-      const { cell_number, capacity, current_usage = 0, product_id } = cellData;
-      if (!cell_number || capacity == null) throw new Error('Cell number and capacity are required');
-      if (capacity < 0 || current_usage < 0) throw new Error('Capacity and current usage must be non-negative');
-      if (current_usage > capacity) throw new Error('Current usage cannot exceed capacity');
-
-      // Ensure unique cell number
-      const existing = await tx.warehouseCell.findUnique({
-        where: { warehouse_id_cell_number: { warehouse_id: warehouseId, cell_number } }
-      });
-      if (existing) throw new Error(`Cell '${cell_number}' already exists in this warehouse`);
-
-      // Create the cell
-      const cell = await tx.warehouseCell.create({ data: { ...cellData, warehouse_id: warehouseId } });
-
-      // If initial stock, create inventory and log
-      if (product_id && current_usage > 0) {
-        // Inventory entry
-        const inventory = await tx.inventory.create({
-          data: {
-            product_id,
-            cell_id: cell.cell_id,
-            warehouse_id: warehouseId,
-            quantity: current_usage,
-            status: 'AVAILABLE'
-          }
-        });
-
-        // Inventory log entry
-        await tx.inventoryLog.create({
-          data: {
-            user_id: userId,
-            product_id,
-            quantity_change: current_usage,
-            movement_type: 'ENTRY',
-            entry_order_id: null,
-            departure_order_id: null,
-            warehouse_id: warehouseId,
-            cell_id: cell.cell_id,
-            notes: `Assigned cell '${cell_number}' with ${current_usage} units`
-          }
-        });
-      }
-
-      return cell;
+    const freeSlots = await tx.warehouseCell.findMany({
+      where: { warehouse_id, row, kind: "NORMAL", status: "AVAILABLE" },
+      orderBy: [{ bay: "asc" }, { position: "asc" }],
     });
-  }
-};
+    if (freeSlots.length < palletCount) {
+      throw new Error(
+        `Not enough free slots in row ${row}: requested ${palletCount}, found ${freeSlots.length}`
+      );
+    }
+
+    const assigned = [];
+    for (let i = 0; i < palletCount; i++) {
+      const slot = freeSlots[i];
+      await tx.inventory.create({
+        data: {
+          product_id,
+          warehouse_id,
+          cell_id: slot.id,
+          quantity: 1,
+          status: InventoryStatus.AVAILABLE,
+        },
+      });
+      await tx.inventoryLog.create({
+        data: {
+          user_id,
+          product_id,
+          quantity_change: 1,
+          movement_type: MovementType.ENTRY,
+          warehouse_id,
+          cell_id: slot.id,
+          notes: `Stored 1 pallet in ${row}.${String(slot.bay).padStart(
+            2,
+            "0"
+          )}.${String(slot.position).padStart(2, "0")}`,
+        },
+      });
+      await tx.warehouseCell.update({
+        where: { id: slot.id },
+        data: { currentUsage: { increment: 1 }, status: CellStatus.OCCUPIED },
+      });
+      assigned.push(slot);
+    }
+    return assigned;
+  });
+}
+
+/**
+ * Fetch all cells, optionally filtering by warehouse
+ */
+async function getAllWarehouseCells(filter = {}) {
+  const where = {};
+  if (filter.warehouse_id) where.warehouse_id = filter.warehouse_id;
+  return await prisma.warehouseCell.findMany({
+    where,
+    orderBy: [
+      { warehouse_id: "asc" },
+      { row: "asc" },
+      { bay: "asc" },
+      { position: "asc" },
+    ],
+  });
+}
+
+/**
+ * Fetch all warehouses for dropdown
+ */
+async function fetchWarehouses() {
+  return await prisma.warehouse.findMany({
+    select: { warehouse_id: true, name: true },
+  });
+}
+
+module.exports = { assignPallets, getAllWarehouseCells, fetchWarehouses };

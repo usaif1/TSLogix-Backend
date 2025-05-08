@@ -39,6 +39,7 @@ const entryRoutes = require("@/modules/entry/entry.route");
 const departureRoutes = require("@/modules/departure/departure.route");
 const auditRoutes = require("@/modules/audit/audit.route");
 const inventoryRoutes = require("@/modules/inventory/inventory.route");
+const warehouseRoutes = require("@/modules/warehouse/warehouse.route");
 
 // Mount your module routes
 app.use("/auth", authRoutes);
@@ -51,6 +52,7 @@ app.use("/entry", authenticateToken, entryRoutes);
 app.use("/departure", authenticateToken, departureRoutes);
 app.use("/audit", authenticateToken, auditRoutes);
 app.use("/inventory-logs", authenticateToken, inventoryRoutes);
+app.use("/warehouse", authenticateToken, warehouseRoutes);
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);
 
