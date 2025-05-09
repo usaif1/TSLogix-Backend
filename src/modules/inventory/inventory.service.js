@@ -2,12 +2,11 @@ const {
   PrismaClient,
   MovementType,
   InventoryStatus,
+  CellStatus,
 } = require("@prisma/client");
 const prisma = new PrismaClient();
 
-/**
- * Create a new inventory log entry
- */
+/** Create a new inventory log entry */
 async function createInventoryLog(logData) {
   return prisma.inventoryLog.create({
     data: {
@@ -28,9 +27,7 @@ async function createInventoryLog(logData) {
   });
 }
 
-/**
- * Get all inventory logs for a given entry order
- */
+/** Get all logs by entry order */
 async function getLogsByEntryOrder(entryOrderId) {
   return prisma.inventoryLog.findMany({
     where: { entry_order_id: entryOrderId },
@@ -42,9 +39,7 @@ async function getLogsByEntryOrder(entryOrderId) {
   });
 }
 
-/**
- * Get all inventory logs for a given departure order
- */
+/** Get all logs by departure order */
 async function getLogsByDepartureOrder(departureOrderId) {
   return prisma.inventoryLog.findMany({
     where: { departure_order_id: departureOrderId },
@@ -56,9 +51,7 @@ async function getLogsByDepartureOrder(departureOrderId) {
   });
 }
 
-/**
- * Get a single inventory log by ID
- */
+/** Get a single log by ID */
 async function getInventoryLogById(logId) {
   return prisma.inventoryLog.findUnique({
     where: { log_id: logId },
@@ -69,9 +62,7 @@ async function getInventoryLogById(logId) {
   });
 }
 
-/**
- * Get all inventory logs with optional filters
- */
+/** Get all logs with optional filters */
 async function getAllInventoryLogs(filters = {}) {
   const where = {};
   if (filters.movement_type) where.movement_type = filters.movement_type;
@@ -83,26 +74,18 @@ async function getAllInventoryLogs(filters = {}) {
       lte: new Date(filters.end_date),
     };
   }
-
   return prisma.inventoryLog.findMany({
     where,
     include: {
       user: { select: { id: true, first_name: true, last_name: true } },
       product: { select: { product_id: true, name: true } },
-      entry_order: {
-        select: {
-          entry_order_no: true,
-          entry_order_id: true,
-        },
-      },
+      entry_order: { select: { entry_order_no: true, entry_order_id: true } },
     },
     orderBy: { timestamp: filters.sort === "asc" ? "asc" : "desc" },
   });
 }
 
-/**
- * Get summary counts by movement type
- */
+/** Get statistics counts per movement type */
 async function getInventoryLogStatistics() {
   const [entries, departures, transfers, adjustments, total] =
     await prisma.$transaction([
@@ -124,63 +107,111 @@ async function getInventoryLogStatistics() {
 }
 
 /**
- * Add inventory record and log the movement in a single transaction
+ * Allocate pallets from an entry order into available row-A cells,
+ * log each pallet storage, and mark cells occupied.
  */
 async function addInventoryAndLog({
-  product_id,
-  quantity,
-  entry_order_id = null,
+  entry_order_id,
   user_id,
   warehouse_id = null,
-  cell_id = null,
   notes = null,
 }) {
-  return prisma.$transaction(async (tx) => {
-    // Upsert inventory: increment if exists, else create new
-    const inventoryRecord = await tx.inventory.upsert({
+  // Fetch entry order to get pallets and product
+  const entry = await prisma.entryOrder.findUnique({
+    where: { entry_order_id },
+    select: { palettes: true, product_id: true },
+  });
+  if (!entry) throw new Error(`EntryOrder ${entry_order_id} not found`);
+
+  const palletCount = parseInt(entry.palettes, 10);
+  if (isNaN(palletCount) || palletCount < 1)
+    throw new Error(`Invalid pallets count: ${entry.palettes}`);
+
+  // Select available row 'A' cells
+  const cells = await prisma.warehouseCell.findMany({
+    where: { warehouse_id, status: CellStatus.AVAILABLE, row: "A" },
+    orderBy: [{ bay: "asc" }, { position: "asc" }],
+    take: palletCount,
+  });
+  if (cells.length < palletCount)
+    throw new Error(`Not enough available cells for ${palletCount} pallets`);
+
+  // Generate cell labels for logging
+  const cellLabels = cells
+    .map(
+      (cell) =>
+        `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(
+          cell.position
+        ).padStart(2, "0")}`
+    )
+    .join(", ");
+
+  // Prepare transactional operations
+  const inventoryOps = cells.map((cell) =>
+    // upsert to avoid duplicate inventory per cell
+    prisma.inventory.upsert({
       where: {
         product_wh_cell_idx: {
-          product_id,
+          product_id: entry.product_id,
           warehouse_id,
-          cell_id,
+          cell_id: cell.id,
         },
       },
       create: {
-        product_id,
+        product_id: entry.product_id,
         entry_order_id,
         warehouse_id,
-        cell_id,
-        quantity,
+        cell_id: cell.id,
+        quantity: 1,
         expiration_date: null,
         status: InventoryStatus.AVAILABLE,
       },
       update: {
-        quantity: { increment: quantity },
+        // increment quantity if already exists
+        quantity: { increment: 1 },
       },
-    });
+    })
+  );
 
-    // Create the log entry
-    const log = await tx.inventoryLog.create({
-      data: {
-        user_id,
-        product_id,
-        quantity_change: quantity,
-        movement_type: MovementType.ENTRY,
-        entry_order_id,
-        departure_order_id: null,
-        warehouse_id,
-        cell_id,
-        notes,
-      },
-    });
+  const cellUpdateOps = cells.map((cell) =>
+    prisma.warehouseCell.update({
+      where: { id: cell.id },
+      data: { currentUsage: 1, status: CellStatus.OCCUPIED },
+    })
+  );
 
-    return { inventory: inventoryRecord, log };
+  // Single log entry summarizing all pallets
+  const logOp = prisma.inventoryLog.create({
+    data: {
+      user_id,
+      product_id: entry.product_id,
+      quantity_change: palletCount,
+      movement_type: MovementType.ENTRY,
+      entry_order_id,
+      departure_order_id: null,
+      warehouse_id,
+      cell_id: null,
+      notes: notes
+        ? `${notes} @ ${cellLabels}`
+        : `Stored ${palletCount} pallets in cells: ${cellLabels}`,
+    },
   });
+
+  // Execute all operations in one transaction
+  const results = await prisma.$transaction([
+    ...inventoryOps,
+    ...cellUpdateOps,
+    logOp,
+  ]);
+
+  // Extract created inventories and the single log
+  const inventories = results.slice(0, palletCount);
+  const log = results[results.length - 1];
+
+  return { inventories, log };
 }
 
-/**
- * Fetch all warehouses
- */
+/** Fetch all warehouses */
 async function getAllWarehouses() {
   return prisma.warehouse.findMany({
     select: {
@@ -193,26 +224,21 @@ async function getAllWarehouses() {
   });
 }
 
-/**
- * Fetch warehouse cells, optionally filtered by status
- */
+/** Fetch warehouse cells with optional status filter */
 async function getWarehouseCells(warehouseId = null, status = null) {
   const where = {};
   if (warehouseId) where.warehouse_id = warehouseId;
   if (status) where.status = status;
-
   return prisma.warehouseCell.findMany({
     where,
     select: {
-      cell_id: true,
+      id: true,
       warehouse_id: true,
-      cell_number: true,
-      zone: true,
       row: true,
-      column: true,
-      level: true,
+      bay: true,
+      position: true,
       capacity: true,
-      current_usage: true,
+      currentUsage: true,
       status: true,
     },
   });

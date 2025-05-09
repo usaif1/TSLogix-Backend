@@ -193,7 +193,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
 }
 
 /**
- * Fetch entry orders where audit_status.name = 'PASSED'
+ * Fetch entry orders where audit_status = 'PASSED' and don't have inventory records
  */
 async function getPassedEntryOrders(
   organisationId = null,
@@ -202,6 +202,14 @@ async function getPassedEntryOrders(
 ) {
   const where = {
     audit_status: "PASSED",
+    // Only fetch entry orders that DON'T have inventory records
+    // or where all inventory items are depleted
+    inventory: {
+      none: {
+        status: "AVAILABLE",
+        quantity: { gt: 0 },
+      },
+    },
   };
 
   if (organisationId) {
@@ -226,11 +234,16 @@ async function getPassedEntryOrders(
       type: true,
       insured_value: true,
       entry_date: true,
-      product: { select: { name: true } },
+      product: {
+        select: {
+          name: true,
+          product_id: true,
+        },
+      },
       documentType: { select: { name: true } },
       supplier: { select: { name: true } },
       origin: { select: { name: true } },
-      audit_status: { select: { name: true } },
+      audit_status: true,
       order: {
         select: { created_at: true, organisation: { select: { name: true } } },
       },
