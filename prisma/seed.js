@@ -596,30 +596,102 @@ async function createWarehouseCells() {
   console.log("Creating warehouse cells...");
   const warehouses = await prisma.warehouse.findMany();
   const cells = [];
+
+  // Configuration
+  const standardRows = [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+  ];
+  const specialRow = "Q";
   const maxBays = 28;
-  const maxSlots = 10;
-  const rows = ["A", "B", "C", "D", "E", "F"]; // as you like
+  const maxPositions = 10;
   const kinds = ["NORMAL", "V", "T", "R"];
 
   for (const wh of warehouses) {
-    for (const row of rows) {
+    // Create standard storage cells (rows A-P, all bays)
+    for (const row of standardRows) {
       for (let bay = 1; bay <= maxBays; bay++) {
-        for (let pos = 1; pos <= maxSlots; pos++) {
+        for (let pos = 1; pos <= maxPositions; pos++) {
           cells.push({
             warehouse_id: wh.warehouse_id,
             row: row,
             bay: bay,
             position: pos,
             kind: faker.helpers.arrayElement(kinds),
+            cell_role: "STANDARD",
             capacity: 1,
-            currentUsage: 0, // Prisma field: currentUsage
-            status: faker.helpers.weightedArrayElement([
-              { weight: 5, value: CellStatus.AVAILABLE },
-              { weight: 3, value: CellStatus.PARTIALLY_OCCUPIED },
-              { weight: 1, value: CellStatus.OCCUPIED },
-            ]),
+            currentUsage: 0,
+            status: CellStatus.AVAILABLE, // All cells start available
           });
         }
+      }
+    }
+
+    // Create special purpose cells in row Q
+    // Q row has 20 bays for standard, 4 bays for damaged, 4 bays for expired
+
+    // Standard cells in row Q (bays 1-20)
+    for (let bay = 1; bay <= 20; bay++) {
+      for (let pos = 1; pos <= maxPositions; pos++) {
+        cells.push({
+          warehouse_id: wh.warehouse_id,
+          row: specialRow,
+          bay: bay,
+          position: pos,
+          kind: "NORMAL",
+          cell_role: "STANDARD",
+          capacity: 1,
+          currentUsage: 0,
+          status: CellStatus.AVAILABLE,
+        });
+      }
+    }
+
+    // Damaged product cells (bays 21-24)
+    for (let bay = 21; bay <= 24; bay++) {
+      for (let pos = 1; pos <= maxPositions; pos++) {
+        cells.push({
+          warehouse_id: wh.warehouse_id,
+          row: specialRow,
+          bay: bay,
+          position: pos,
+          kind: "NORMAL",
+          cell_role: "DAMAGED",
+          capacity: 1,
+          currentUsage: 0,
+          status: CellStatus.AVAILABLE,
+        });
+      }
+    }
+
+    // Expired product cells (bays 25-28)
+    for (let bay = 25; bay <= 28; bay++) {
+      for (let pos = 1; pos <= maxPositions; pos++) {
+        cells.push({
+          warehouse_id: wh.warehouse_id,
+          row: specialRow,
+          bay: bay,
+          position: pos,
+          kind: "NORMAL",
+          cell_role: "EXPIRED",
+          capacity: 1,
+          currentUsage: 0,
+          status: CellStatus.AVAILABLE,
+        });
       }
     }
   }
@@ -629,7 +701,9 @@ async function createWarehouseCells() {
     skipDuplicates: true,
   });
 
-  console.log("✅ Warehouse Cells created");
+  console.log(
+    `✅ Warehouse Cells created: ${cells.length} cells across ${warehouses.length} warehouses`
+  );
 }
 
 async function createEntryOrders() {
@@ -777,12 +851,11 @@ async function createEntryOrders() {
         },
       });
 
-      // bump the cell’s usage and status
       await prisma.warehouseCell.update({
         where: { id: cell.id },
         data: {
-          currentUsage: { increment: 1 },
-          status: CellStatus.PARTIALLY_OCCUPIED,
+          currentUsage: 1, // Each cell either holds 1 pallet or nothing
+          status: CellStatus.OCCUPIED, // No more PARTIALLY_OCCUPIED status
         },
       });
     }
@@ -923,13 +996,8 @@ async function createDepartureOrders() {
       await prisma.warehouseCell.update({
         where: { id: inv.cell_id },
         data: {
-          currentUsage: {
-            decrement: unitVol * qtyToShip,
-          },
-          status:
-            updatedInv.quantity > 0
-              ? CellStatus.PARTIALLY_OCCUPIED
-              : CellStatus.AVAILABLE,
+          currentUsage: 0,
+          status: CellStatus.AVAILABLE,
         },
       });
     }

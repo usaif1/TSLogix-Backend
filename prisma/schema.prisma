@@ -424,6 +424,7 @@ model WarehouseCell {
   position      Int
   kind          CellKind  @default(NORMAL)
   status        CellStatus  @default(AVAILABLE)
+  cell_role     CellRole    @default(STANDARD)
   capacity      Decimal  @db.Decimal(10,2)  @default(1)  // one pallet per slot
   currentUsage  Decimal  @db.Decimal(10,2)  @default(0)
 
@@ -533,6 +534,13 @@ enum AuditResult {
   PASSED
   FAILED
   PENDING
+}
+
+enum CellRole {
+  STANDARD
+  DAMAGED
+  EXPIRED
+  RETURNS
 }
 
 
