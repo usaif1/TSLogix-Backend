@@ -4,7 +4,6 @@ const entryService = require("./entry.service");
 async function createEntryOrder(req, res) {
   const entryData = req.body;
   if (
-    !entryData.order_type ||
     !entryData.entry_order_no ||
     !entryData.organisation_id ||
     !entryData.created_by
@@ -16,7 +15,6 @@ async function createEntryOrder(req, res) {
     return res.status(201).json({
       message: "Entry order created successfully",
       entryOrder: result.entryOrder,
-      inventory: result.inventory,
     });
   } catch (error) {
     return res.status(500).json({
@@ -30,7 +28,7 @@ async function createEntryOrder(req, res) {
 async function getAllEntryOrders(req, res) {
   try {
     const organisationId = req.user?.organisation_id;
-    const userRole = req.user?.role;
+    const userRole = req.user?.role?.name; // Access role.name
     const searchOrderNo = req.query.orderNo || null;
 
     if (!organisationId) {
@@ -79,7 +77,7 @@ async function getEntryOrderByNo(req, res) {
   try {
     const { orderNo } = req.params;
     const organisationId = req.user?.organisation_id;
-    const userRole = req.user?.role;
+    const userRole = req.user?.role?.name; // Access role.name
 
     if (!organisationId) {
       return res.status(403).json({ message: "Authorization required" });
@@ -100,6 +98,7 @@ async function getEntryOrderByNo(req, res) {
   }
 }
 
+// Fetch entry orders that passed audit and have remaining inventory
 async function fetchPassedOrders(req, res) {
   try {
     const organisationId = req.user.organisation_id;
@@ -115,6 +114,7 @@ async function fetchPassedOrders(req, res) {
     return res.status(500).json({ success: false, message: error.message });
   }
 }
+
 
 module.exports = {
   createEntryOrder,

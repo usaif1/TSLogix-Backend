@@ -113,6 +113,46 @@ async function fetchCells(req, res) {
   }
 }
 
+
+/** Assign part of an entry order to a warehouse cell */
+async function assignToCell(req, res) {
+  try {
+    const {
+      entry_order_id,
+      cell_id,
+      packaging_quantity,
+      weight,
+      volume,
+      warehouse_id,        // <-- extract warehouse_id from request body
+    } = req.body;
+
+    // assigned_by comes from the authenticated user
+    const result = await inventoryService.assignToCell({
+      entry_order_id,
+      cell_id,
+      warehouse_id,        // <-- pass warehouse_id into service
+      assigned_by: req.user.id,
+      packaging_quantity,
+      weight,
+      volume,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        assignment: result.assignment,
+        cellReference: result.cellReference,
+        remainingPackaging: result.remainingPackaging,
+        remainingWeight: result.remainingWeight,
+      },
+    });
+  } catch (err) {
+    console.error("assignToCell error:", err);
+    // Map validation errors to 400 if desired
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 module.exports = {
   createLog,
   addInventoryAndLog,
@@ -123,4 +163,5 @@ module.exports = {
   getAllLogs,
   fetchWarehouses,
   fetchCells,
+  assignToCell,
 };

@@ -1,8 +1,8 @@
-const { PrismaClient } = require("@prisma/client");
+const { PrismaClient, AuditResult } = require("@prisma/client");
 const { toUTC } = require("../../utils/index");
 const prisma = new PrismaClient();
 
-// Creates Order, EntryOrder, and upserts Inventory
+// Creates Order and EntryOrder with proper handling of quantity fields
 async function createEntryOrder(entryData) {
   const newOrder = await prisma.order.create({
     data: {
@@ -13,6 +13,13 @@ async function createEntryOrder(entryData) {
     },
   });
 
+  // Parse numeric fields properly
+  const totalQty = parseInt(entryData.total_qty) || 0;
+  const totalWeight = parseFloat(entryData.total_weight) || 0;
+  const totalVolume = parseFloat(entryData.total_volume) || 0;
+  const palettes = parseInt(entryData.palettes) || 0;
+  const quantityPackaging = parseInt(entryData.quantity_packaging) || 0;
+
   const newEntryOrder = await prisma.entryOrder.create({
     data: {
       entry_order_no: entryData.entry_order_no,
@@ -20,24 +27,24 @@ async function createEntryOrder(entryData) {
       document_date: toUTC(entryData.document_date),
       admission_date_time: toUTC(entryData.admission_date_time),
       document_status: entryData.document_status,
-      order_progress: entryData.order_progress,
+      documentType: entryData.document_type,
       observation: entryData.observation,
-      total_volume: entryData.total_volume,
-      total_weight: entryData.total_weight,
+      total_volume: totalVolume,
+      total_weight: totalWeight,
       cif_value: entryData.cif_value,
       product_id: entryData.product,
       certificate_protocol_analysis: entryData.certificate_protocol_analysis,
       mfd_date_time: toUTC(entryData.mfd_date_time),
       expiration_date: toUTC(entryData.expiration_date),
       lot_series: entryData.lot_series,
-      quantity_packaging: entryData.quantity_packaging,
+      quantity_packaging: quantityPackaging,
       presentation: entryData.presentation,
-      total_qty: entryData.total_qty,
+      total_qty: totalQty,
       technical_specification: entryData.technical_specification,
       max_temperature: entryData.max_temperature,
       min_temperature: entryData.min_temperature,
       humidity: entryData.humidity,
-      palettes: entryData.palettes,
+      palettes: palettes,
       product_description: entryData.product_description,
       insured_value: entryData.insured_value
         ? parseFloat(entryData.insured_value)
@@ -45,11 +52,14 @@ async function createEntryOrder(entryData) {
       entry_date: toUTC(entryData.entry_date) || new Date(),
       entry_transfer_note: entryData.entry_transfer_note,
       type: entryData.type,
-      status: entryData.status,
+      status_id: entryData.status, // Changed from status to status_id
       comments: entryData.comments,
       order_id: newOrder.order_id,
       origin_id: entryData.origin,
       supplier_id: entryData.supplier,
+      // Set initial remaining quantities equal to total
+      remaining_packaging_qty: totalQty,
+      remaining_weight: totalWeight,
     },
   });
 
@@ -67,6 +77,8 @@ async function getAllEntryOrders(
       entry_order_id: true,
       entry_order_no: true,
       total_qty: true,
+      remaining_packaging_qty: true, // Add remaining quantities
+      remaining_weight: true,
       palettes: true,
       total_volume: true,
       total_weight: true,
@@ -78,13 +90,32 @@ async function getAllEntryOrders(
       type: true,
       insured_value: true,
       entry_date: true,
-      product: { select: { name: true } },
+      product: { select: { name: true, product_id: true } },
       documentType: { select: { name: true } },
       supplier: { select: { name: true } },
       origin: { select: { name: true } },
-      audit_status: { select: { name: true } },
+      audit_status: true, // Changed to direct enum value
+      warehouse: { select: { name: true, warehouse_id: true } }, // Added warehouse
       order: {
         select: { created_at: true, organisation: { select: { name: true } } },
+      },
+      // Get related cell assignments
+      cellAssignments: {
+        select: {
+          cell: {
+            select: {
+              row: true,
+              bay: true,
+              position: true,
+              status: true,
+              current_packaging_qty: true,
+              current_weight: true,
+            },
+          },
+          packaging_quantity: true,
+          weight: true,
+          assigned_at: true,
+        },
       },
     },
     orderBy: {
@@ -100,10 +131,29 @@ async function getAllEntryOrders(
   if (Object.keys(whereConds).length) query.where = whereConds;
 
   const orders = await prisma.entryOrder.findMany(query);
-  return orders.map((o) => ({ ...o, status: o.entry_status?.name || null }));
+
+  return orders.map((o) => {
+    // Transform cell data for easier consumption
+    const cellAssignments = o.cellAssignments?.map((ca) => ({
+      cellReference: `${ca.cell.row}.${String(ca.cell.bay).padStart(
+        2,
+        "0"
+      )}.${String(ca.cell.position).padStart(2, "0")}`,
+      packaging_quantity: ca.packaging_quantity,
+      weight: ca.weight,
+      assigned_at: ca.assigned_at,
+      cell_status: ca.cell.status,
+    }));
+
+    return {
+      ...o,
+      status: o.entry_status?.name || null,
+      cellAssignments,
+    };
+  });
 }
 
-// Dropdown data for Entry form
+// Dropdown data for Entry form with warehouses
 async function getEntryFormFields() {
   const [
     origins,
@@ -113,6 +163,7 @@ async function getEntryFormFields() {
     customers,
     products,
     orderStatus,
+    warehouses,
   ] = await Promise.all([
     prisma.origin.findMany(),
     prisma.documentType.findMany({
@@ -125,6 +176,9 @@ async function getEntryFormFields() {
     prisma.customer.findMany({ select: { customer_id: true, name: true } }),
     prisma.product.findMany(),
     prisma.status.findMany(),
+    prisma.warehouse.findMany({
+      select: { warehouse_id: true, name: true },
+    }),
   ]);
   return {
     origins,
@@ -134,6 +188,7 @@ async function getEntryFormFields() {
     customers,
     products,
     orderStatus,
+    warehouses,
   };
 }
 
@@ -165,8 +220,11 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
       entry_order_id: true,
       entry_order_no: true,
       total_qty: true,
+      remaining_packaging_qty: true, // Add remaining values
+      remaining_weight: true,
       palettes: true,
       total_weight: true,
+      total_volume: true,
       entry_transfer_note: true,
       presentation: true,
       comments: true,
@@ -179,21 +237,91 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
       document_status: true,
       order_progress: true,
       product: { select: { name: true, product_id: true } },
-      documentType: { select: { name: true } },
-      supplier: { select: { name: true } },
-      origin: { select: { name: true } },
-      entry_status: { select: { name: true } },
+      documentType: { select: { name: true, document_type_id: true } },
+      supplier: { select: { name: true, supplier_id: true } },
+      origin: { select: { name: true, origin_id: true } },
+      entry_status: { select: { name: true, status_id: true } },
+      warehouse: { select: { name: true, warehouse_id: true } }, // Add warehouse
       order: { select: { organisation: { select: { name: true } } } },
-      audit_status: { select: { name: true } },
+      audit_status: true,
+      // Get related cell assignments
+      cellAssignments: {
+        select: {
+          assignment_id: true,
+          cell: {
+            select: {
+              id: true,
+              row: true,
+              bay: true,
+              position: true,
+              status: true,
+              current_packaging_qty: true,
+              current_weight: true,
+            },
+          },
+          packaging_quantity: true,
+          weight: true,
+          volume: true,
+          assigned_at: true,
+          assigned_by: true,
+          user: {
+            select: {
+              first_name: true,
+              last_name: true,
+            },
+          },
+        },
+      },
+      // Include audit records
+      audits: {
+        select: {
+          audit_id: true,
+          audit_date: true,
+          audit_result: true,
+          comments: true,
+          discrepancy_notes: true,
+          auditor: {
+            select: {
+              first_name: true,
+              last_name: true,
+            },
+          },
+        },
+        orderBy: { audit_date: "desc" },
+      },
     },
   });
 
   if (!order) return null;
-  return { ...order, status: order.entry_status?.name || null };
+
+  // Transform cell references for easier consumption
+  const cellAssignments = order.cellAssignments?.map((ca) => ({
+    assignment_id: ca.assignment_id,
+    cellReference: `${ca.cell.row}.${String(ca.cell.bay).padStart(
+      2,
+      "0"
+    )}.${String(ca.cell.position).padStart(2, "0")}`,
+    cell_id: ca.cell.id,
+    packaging_quantity: ca.packaging_quantity,
+    weight: ca.weight,
+    volume: ca.volume,
+    assigned_at: ca.assigned_at,
+    assigned_by: ca.assigned_by,
+    assigned_by_name: `${ca.user.first_name || ""} ${
+      ca.user.last_name || ""
+    }`.trim(),
+    cell_status: ca.cell.status,
+  }));
+
+  return {
+    ...order,
+    status: order.entry_status?.name || null,
+    cellAssignments,
+  };
 }
 
 /**
- * Fetch entry orders where audit_status = 'PASSED' and don't have inventory records
+ * Fetch entry orders where audit_status = 'PASSED' and that have remaining inventory to assign
  */
 async function getPassedEntryOrders(
   organisationId = null,
@@ -201,15 +329,10 @@ async function getPassedEntryOrders(
   searchNo = null
 ) {
   const where = {
-    audit_status: "PASSED",
-    // Only fetch entry orders that DON'T have inventory records
-    // or where all inventory items are depleted
-    inventory: {
-      none: {
-        status: "AVAILABLE",
-        quantity: { gt: 0 },
-      },
-    },
+    audit_status: AuditResult.PASSED,
+    // Only include entry orders with remaining inventory to assign
+    remaining_packaging_qty: { gt: 0 },
+    remaining_weight: { gt: 0 },
   };
 
   if (organisationId) {
@@ -224,6 +347,8 @@ async function getPassedEntryOrders(
       entry_order_id: true,
       entry_order_no: true,
       total_qty: true,
+      remaining_packaging_qty: true,
+      remaining_weight: true,
       palettes: true,
       total_volume: true,
       total_weight: true,
@@ -234,6 +359,8 @@ async function getPassedEntryOrders(
       type: true,
       insured_value: true,
       entry_date: true,
+      warehouse_id: true,
+      warehouse: { select: { name: true } },
       product: {
         select: {
           name: true,
@@ -247,6 +374,20 @@ async function getPassedEntryOrders(
       order: {
         select: { created_at: true, organisation: { select: { name: true } } },
       },
+      // Include already assigned cells
+      cellAssignments: {
+        select: {
+          cell: {
+            select: {
+              row: true,
+              bay: true,
+              position: true,
+            },
+          },
+          packaging_quantity: true,
+          weight: true,
+        },
+      },
     },
     where,
     orderBy: {
@@ -255,7 +396,24 @@ async function getPassedEntryOrders(
   };
 
   const orders = await prisma.entryOrder.findMany(query);
-  return orders.map((o) => ({ ...o, status: o.entry_status?.name || null }));
+
+  return orders.map((o) => {
+    // Transform cell references for easier consumption
+    const cellAssignments = o.cellAssignments?.map((ca) => ({
+      cellReference: `${ca.cell.row}.${String(ca.cell.bay).padStart(
+        2,
+        "0"
+      )}.${String(ca.cell.position).padStart(2, "0")}`,
+      packaging_quantity: ca.packaging_quantity,
+      weight: ca.weight,
+    }));
+
+    return {
+      ...o,
+      status: o.entry_status?.name || null,
+      cellAssignments,
+    };
+  });
 }
 
 module.exports = {

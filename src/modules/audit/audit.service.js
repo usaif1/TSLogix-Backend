@@ -2,54 +2,6 @@ const { PrismaClient, AuditResult } = require("@prisma/client");
 const prisma = new PrismaClient();
 
 /**
- * Create a new audit record for an entry order
- */
-async function createEntryOrderAudit(auditData) {
-  const audit = await prisma.entryOrderAudit.create({
-    data: {
-      entry_order_id: auditData.entry_order_id,
-      audited_by: auditData.audited_by,
-      audit_result: auditData.audit_result,
-      comments: auditData.comments,
-    },
-    include: {
-      auditor: {
-        select: {
-          id: true,
-          first_name: true,
-          last_name: true,
-          email: true,
-        },
-      },
-      entry_order: {
-        select: {
-          entry_order_id: true,
-          entry_order_no: true,
-        },
-      },
-    },
-  });
-
-  // If audit passes, update the entry order audit status
-  if (auditData.audit_result === AuditResult.PASSED) {
-    await prisma.entryOrder.update({
-      where: { entry_order_id: auditData.entry_order_id },
-      data: { audit_status: AuditResult.PASSED },
-    });
-  }
-
-  // If audit fails, update the entry order audit status
-  if (auditData.audit_result === AuditResult.FAILED) {
-    await prisma.entryOrder.update({
-      where: { entry_order_id: auditData.entry_order_id },
-      data: { audit_status: AuditResult.FAILED },
-    });
-  }
-
-  return audit;
-}
-
-/**
  * Get all audits for an entry order
  */
 async function getEntryOrderAudits(entry_order_id) {
@@ -190,10 +142,43 @@ async function getAuditStatistics() {
   };
 }
 
+/**
+ * Create a new audit record for an entry order
+ * and set the entry order's audit_status to the same result.
+ */
+async function createEntryOrderAudit(auditData) {
+  // 1️⃣ Create the audit record (including relational selects)
+  const audit = await prisma.entryOrderAudit.create({
+    data: {
+      entry_order_id: auditData.entry_order_id,
+      audited_by: auditData.audited_by,
+      audit_result: auditData.audit_result,
+      comments: auditData.comments || null,
+      discrepancy_notes: auditData.discrepancy_notes || null,
+    },
+    include: {
+      auditor: {
+        select: { id: true, first_name: true, last_name: true, email: true },
+      },
+      entry_order: {
+        select: { entry_order_id: true, entry_order_no: true },
+      },
+    },
+  });
+
+  // 2️⃣ Update the entry order status in one go—no need for ifs
+  await prisma.entryOrder.update({
+    where: { entry_order_id: auditData.entry_order_id },
+    data: { audit_status: auditData.audit_result },
+  });
+
+  return audit;
+}
+
 module.exports = {
-  createEntryOrderAudit,
   getEntryOrderAudits,
   getAuditById,
   getAllAudits,
   getAuditStatistics,
+  createEntryOrderAudit, // Add the new function
 };

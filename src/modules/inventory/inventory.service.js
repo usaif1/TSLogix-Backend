@@ -3,6 +3,7 @@ const {
   MovementType,
   InventoryStatus,
   CellStatus,
+  AuditResult,
 } = require("@prisma/client");
 const prisma = new PrismaClient();
 
@@ -106,109 +107,186 @@ async function getInventoryLogStatistics() {
   return { entries, departures, transfers, adjustments, total };
 }
 
+
 /**
- * Allocate pallets from an entry order into available row-A cells,
- * log each pallet storage, and mark cells occupied.
+ * Assign a portion of an entry order to a warehouse cell
  */
-async function addInventoryAndLog({
-  entry_order_id,
-  user_id,
-  warehouse_id = null,
-  notes = null,
-}) {
-  // Fetch entry order to get pallets and product
-  const entry = await prisma.entryOrder.findUnique({
-    where: { entry_order_id },
-    select: { palettes: true, product_id: true },
-  });
-  if (!entry) throw new Error(`EntryOrder ${entry_order_id} not found`);
+async function assignToCell(assignmentData) {
+  const {
+    entry_order_id,
+    cell_id,
+    assigned_by,
+    packaging_quantity,
+    weight,
+    volume,
+    warehouse_id,    
+  } = assignmentData;
 
-  const palletCount = parseInt(entry.palettes, 10);
-  if (isNaN(palletCount) || palletCount < 1)
-    throw new Error(`Invalid pallets count: ${entry.palettes}`);
+  return await prisma.$transaction(async (tx) => {
+    // 1. Validate entry order exists and audit passed
+    const entryOrder = await tx.entryOrder.findUnique({
+      where: { entry_order_id },
+    });
+    if (!entryOrder) {
+      throw new Error("Entry order not found");
+    }
+    if (entryOrder.audit_status !== AuditResult.PASSED) {
+      throw new Error(
+        "Cannot assign inventory for entry orders that have not passed audit"
+      );
+    }
 
-  // Select available row 'A' cells
-  const cells = await prisma.warehouseCell.findMany({
-    where: { warehouse_id, status: CellStatus.AVAILABLE, row: "A" },
-    orderBy: [{ bay: "asc" }, { position: "asc" }],
-    take: palletCount,
-  });
-  if (cells.length < palletCount)
-    throw new Error(`Not enough available cells for ${palletCount} pallets`);
+    // 3. Check remaining quantities
+    if (entryOrder.remaining_packaging_qty < packaging_quantity) {
+      throw new Error(
+        `Not enough remaining packaging quantity. Available: ${entryOrder.remaining_packaging_qty}`
+      );
+    }
+    if (parseFloat(entryOrder.remaining_weight) < parseFloat(weight)) {
+      throw new Error(
+        `Not enough remaining weight. Available: ${entryOrder.remaining_weight}`
+      );
+    }
 
-  // Generate cell labels for logging
-  const cellLabels = cells
-    .map(
-      (cell) =>
-        `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(
-          cell.position
-        ).padStart(2, "0")}`
-    )
-    .join(", ");
+    // 4. Verify cell
+    const cell = await tx.warehouseCell.findUnique({
+      where: { id: cell_id },
+    });
+    if (!cell) {
+      throw new Error("Cell not found");
+    }
+    if (cell.status !== "AVAILABLE") {
+      throw new Error("Cell is not available for assignment");
+    }
 
-  // Prepare transactional operations
-  const inventoryOps = cells.map((cell) =>
-    // upsert to avoid duplicate inventory per cell
-    prisma.inventory.upsert({
+    // 5. Create assignment
+    const assignment = await tx.cellAssignment.create({
+      data: {
+        entry_order_id,
+        cell_id,
+        assigned_by,
+        packaging_quantity: parseInt(packaging_quantity),
+        weight: parseFloat(weight),
+        volume: volume ? parseFloat(volume) : null,
+        status: "ACTIVE",
+      },
+    });
+
+    // 6. Upsert inventory
+    await tx.inventory.upsert({
       where: {
         product_wh_cell_idx: {
-          product_id: entry.product_id,
-          warehouse_id,
-          cell_id: cell.id,
+          product_id: entryOrder.product_id,
+          warehouse_id: warehouse_id,
+          cell_id,
         },
       },
+      update: {
+        quantity: { increment: parseInt(packaging_quantity) },
+        packaging_quantity: { increment: parseInt(packaging_quantity) },
+        weight: { increment: parseFloat(weight) },
+        status: "AVAILABLE",
+      },
       create: {
-        product_id: entry.product_id,
+        product_id: entryOrder.product_id,
         entry_order_id,
         warehouse_id,
-        cell_id: cell.id,
-        quantity: 1,
-        expiration_date: null,
-        status: InventoryStatus.AVAILABLE,
+        cell_id,
+        quantity: parseInt(packaging_quantity),
+        packaging_quantity: parseInt(packaging_quantity),
+        weight: parseFloat(weight),
+        volume: volume ? parseFloat(volume) : null,
+        status: "AVAILABLE",
+        expiration_date: entryOrder.expiration_date,
       },
-      update: {
-        // increment quantity if already exists
-        quantity: { increment: 1 },
+    });
+
+    // 7. Update cell status
+    await tx.warehouseCell.update({
+      where: { id: cell_id },
+      data: {
+        status: "OCCUPIED",
+        currentUsage: 1,
+        current_packaging_qty: parseInt(packaging_quantity),
+        current_weight: parseFloat(weight),
       },
-    })
-  );
+    });
 
-  const cellUpdateOps = cells.map((cell) =>
-    prisma.warehouseCell.update({
-      where: { id: cell.id },
-      data: { currentUsage: 1, status: CellStatus.OCCUPIED },
-    })
-  );
+    // 8. Log inventory movement
+    const cellRef = `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(
+      cell.position
+    ).padStart(2, "0")}`;
+    await tx.inventoryLog.create({
+      data: {
+        user_id: assigned_by,
+        product_id: entryOrder.product_id,
+        movement_type: "ENTRY",
+        quantity_change: parseInt(packaging_quantity),
+        packaging_change: parseInt(packaging_quantity),
+        weight_change: parseFloat(weight),
+        entry_order_id,
+        warehouse_id,
+        cell_id,
+        cell_assignment_id: assignment.assignment_id,
+        notes: `Assigned ${packaging_quantity} packages (${parseFloat(
+          weight
+        ).toFixed(2)} kg) to cell ${cellRef}`,
+      },
+    });
 
-  // Single log entry summarizing all pallets
-  const logOp = prisma.inventoryLog.create({
-    data: {
-      user_id,
-      product_id: entry.product_id,
-      quantity_change: palletCount,
-      movement_type: MovementType.ENTRY,
-      entry_order_id,
-      departure_order_id: null,
-      warehouse_id,
-      cell_id: null,
-      notes: notes
-        ? `${notes} @ ${cellLabels}`
-        : `Stored ${palletCount} pallets in cells: ${cellLabels}`,
+    // 9. Update entry order
+    const updatedEntry = await tx.entryOrder.update({
+      where: { entry_order_id },
+      data: {
+        remaining_packaging_qty: {
+          decrement: parseInt(packaging_quantity),
+        },
+        remaining_weight: {
+          decrement: parseFloat(weight),
+        },
+      },
+    });
+
+    return {
+      assignment,
+      cellReference: cellRef,
+      remainingPackaging: updatedEntry.remaining_packaging_qty,
+      remainingWeight: updatedEntry.remaining_weight,
+    };
+  });
+}
+
+/**
+ * Get available cells in a warehouse for assignment
+ */
+async function getAvailableCells(warehouseId) {
+  const availableCells = await prisma.warehouseCell.findMany({
+    where: {
+      warehouse_id: warehouseId,
+      status: "AVAILABLE",
     },
+    orderBy: [
+      { row: 'asc' },
+      { bay: 'asc' },
+      { position: 'asc' }
+    ],
+    select: {
+      id: true,
+      row: true,
+      bay: true,
+      position: true,
+      kind: true,
+      capacity: true
+    }
   });
 
-  // Execute all operations in one transaction
-  const results = await prisma.$transaction([
-    ...inventoryOps,
-    ...cellUpdateOps,
-    logOp,
-  ]);
-
-  // Extract created inventories and the single log
-  const inventories = results.slice(0, palletCount);
-  const log = results[results.length - 1];
-
-  return { inventories, log };
+  // Format cell references for easier consumption
+  return availableCells.map(cell => ({
+    cell_id: cell.id,
+    cellReference: `${cell.row}.${String(cell.bay).padStart(2, '0')}.${String(cell.position).padStart(2, '0')}`,
+    kind: cell.kind,
+    capacity: cell.capacity
+  }));
 }
 
 /** Fetch all warehouses */
@@ -251,7 +329,8 @@ module.exports = {
   getInventoryLogById,
   getAllInventoryLogs,
   getInventoryLogStatistics,
-  addInventoryAndLog,
+  assignToCell,
+  getAvailableCells,
   getAllWarehouses,
   getWarehouseCells,
 };
