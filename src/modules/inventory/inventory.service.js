@@ -81,6 +81,7 @@ async function getAllInventoryLogs(filters = {}) {
       user: { select: { id: true, first_name: true, last_name: true } },
       product: { select: { product_id: true, name: true } },
       entry_order: { select: { entry_order_no: true, entry_order_id: true } },
+      departure_order: { select: { departure_order_no: true, departure_order_id: true } },
     },
     orderBy: { timestamp: filters.sort === "asc" ? "asc" : "desc" },
   });

@@ -161,7 +161,6 @@ model Status {
   name           String           @unique 
   description    String?          // e.g., "PENDING", "SHIPPED", "RECEIVED"
   EntryOrder     EntryOrder[]
-  DepartureOrder DepartureOrder[]
   
 
   @@map("statuses")
@@ -338,13 +337,13 @@ model DepartureOrder {
   insured_value                 Decimal?      @db.Decimal(10, 2)
   palettes                      String?
   product_description           String?
-  status_id                     String?
   type                          String?
-  total_qty                     Int?          // Changed to Int
+  total_qty                     Int?          
   total_volume                  Decimal?      @db.Decimal(10, 2)
   total_weight                  Decimal?      @db.Decimal(10, 2)
   departure_date                DateTime?     @default(now())
   warehouse_id                  String? 
+  packaging_list                String?       // URL to uploaded packaging list file
   
   customer                      Customer?     @relation(fields: [customer_id], references: [customer_id])
   documentType                  DocumentType? @relation(fields: [document_type_id], references: [document_type_id])
@@ -353,7 +352,6 @@ model DepartureOrder {
   order                         Order         @relation(fields: [order_id], references: [order_id])
   packagingType                 PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
   personnel_in_charge           User?         @relation(fields: [personnel_in_charge_id], references: [id])
-  departure_status              Status?       @relation(fields: [status_id], references: [status_id])
   entry_order                   EntryOrder?   @relation(fields: [entry_order_id], references: [entry_order_id])
   inventoryLogs                 InventoryLog[] @relation(name: "DepartureOrderLogs")
   warehouse                     Warehouse?    @relation(fields: [warehouse_id], references: [warehouse_id])
