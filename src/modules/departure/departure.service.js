@@ -274,7 +274,6 @@ async function createDepartureOrder(departureData) {
         label_id: orderData.label_id || null,
         document_status: orderData.document_status || null,
         warehouse_id: String(orderData.warehouse_id),
-        // ADD: packaging_list field for file path
         packaging_list: orderData.packaging_list || null,
       },
     });
