@@ -6,12 +6,122 @@ const {
   InventoryStatus,
   AuditResult,
   CellRole,
-  CellKind
+  CellKind,
+  PackagingType,
+  PackagingStatus,
 } = require("@prisma/client");
 const { faker } = require("@faker-js/faker");
 const bcrypt = require("bcrypt");
 
 const prisma = new PrismaClient();
+
+// Packaging code utility functions
+const PACKAGING_CODE_MAP = {
+  [PackagingType.PALET]: {
+    [PackagingStatus.NORMAL]: 30,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 40,
+    [PackagingStatus.DAMAGED]: 50,
+  },
+  [PackagingType.BOX]: {
+    [PackagingStatus.NORMAL]: 31,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 41,
+    [PackagingStatus.DAMAGED]: 51,
+  },
+  [PackagingType.SACK]: {
+    [PackagingStatus.NORMAL]: 32,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 42,
+    [PackagingStatus.DAMAGED]: 52,
+  },
+  [PackagingType.UNIT]: {
+    [PackagingStatus.NORMAL]: 33,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 43,
+    [PackagingStatus.DAMAGED]: 53,
+  },
+  [PackagingType.PACK]: {
+    [PackagingStatus.NORMAL]: 34,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 44,
+    [PackagingStatus.DAMAGED]: 54,
+  },
+  [PackagingType.BARRELS]: {
+    [PackagingStatus.NORMAL]: 35,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 45,
+    [PackagingStatus.DAMAGED]: 55,
+  },
+  [PackagingType.BUNDLE]: {
+    [PackagingStatus.NORMAL]: 36,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 46,
+    [PackagingStatus.DAMAGED]: 56,
+  },
+  [PackagingType.OTHER]: {
+    [PackagingStatus.NORMAL]: 37,
+    [PackagingStatus.PARTIALLY_DAMAGED]: 47,
+    [PackagingStatus.DAMAGED]: 57,
+  },
+};
+
+function getPackagingCode(packagingType, packagingStatus) {
+  return PACKAGING_CODE_MAP[packagingType]?.[packagingStatus] || 37;
+}
+
+// Add these functions after the imports and before createBaseLookupTables
+
+async function createCountries() {
+  console.log("Creating countries...");
+  
+  const countries = [
+    { name: "United States" },
+    { name: "Canada" },
+    { name: "Mexico" },
+    { name: "Brazil" },
+    { name: "Argentina" },
+    { name: "United Kingdom" },
+    { name: "Germany" },
+    { name: "France" },
+    { name: "Spain" },
+    { name: "Italy" },
+    { name: "China" },
+    { name: "Japan" },
+    { name: "South Korea" },
+    { name: "India" },
+    { name: "Australia" },
+  ];
+  
+  await prisma.country.createMany({ data: countries, skipDuplicates: true });
+  console.log("✅ Countries created");
+}
+
+async function createProductLines() {
+  console.log("Creating product lines...");
+  
+  const productLines = [
+    { name: "Electronics" },
+    { name: "Food & Beverages" },
+    { name: "Pharmaceuticals" },
+    { name: "Automotive Parts" },
+    { name: "Textiles" },
+  ];
+  
+  await prisma.productLine.createMany({ data: productLines, skipDuplicates: true });
+  console.log("✅ Product lines created");
+}
+
+async function createGroupNames() {
+  console.log("Creating group names...");
+  
+  const groupNames = [
+    { name: "Consumer Electronics", product_category: "Electronics" },
+    { name: "Industrial Electronics", product_category: "Electronics" },
+    { name: "Perishable Foods", product_category: "Food" },
+    { name: "Non-Perishable Foods", product_category: "Food" },
+    { name: "Prescription Drugs", product_category: "Pharmaceuticals" },
+    { name: "Over-the-Counter", product_category: "Pharmaceuticals" },
+    { name: "Engine Parts", product_category: "Automotive" },
+    { name: "Body Parts", product_category: "Automotive" },
+  ];
+  
+  await prisma.groupName.createMany({ data: groupNames, skipDuplicates: true });
+  console.log("✅ Group names created");
+}
 
 // Number of records to create for each model
 const COUNT = {
@@ -40,14 +150,22 @@ const COUNT = {
 // Helper functions
 const createBaseLookupTables = async () => {
   console.log("Creating base lookup tables...");
+  // Create countries first (needed for suppliers)
+  await createCountries();
+
+  console.log("hello world")
+  
+  // Create product lines and groups (needed for products)
+  await createProductLines();
+  await createGroupNames();
   
   // Creating statuses
   const statuses = [
-    { name: "order in process" },
-    { name: "send order" },
-    { name: "approved" },
-    { name: "internal damage" },
-    { name: "external damage" },
+    { name: "PENDING", description: "Order created, awaiting processing" },
+    { name: "PROCESSING", description: "Order is being processed" },
+    { name: "SHIPPED", description: "Order has been shipped" },
+    { name: "DELIVERED", description: "Order has been delivered" },
+    { name: "CANCELLED", description: "Order has been cancelled" },
   ];
   await prisma.status.createMany({ data: statuses, skipDuplicates: true });
   
@@ -101,61 +219,7 @@ const createBaseLookupTables = async () => {
   ];
   await prisma.label.createMany({ data: labels, skipDuplicates: true });
   
-  // Creating packaging types
-  const packagingTypes = [
-    { name: "Cardboard Box" },
-    { name: "Wooden Crate" },
-    { name: "Pallet" },
-    { name: "Container" },
-    { name: "Barrel" },
-    { name: "Plastic Wrap" },
-  ];
-  await prisma.packagingType.createMany({ data: packagingTypes, skipDuplicates: true });
-  
-  // Creating product lines
-  const productLines = [
-    { name: "Electronics" },
-    { name: "Automotive Parts" },
-    { name: "Pharmaceuticals" },
-    { name: "Food & Beverages" },
-    { name: "Industrial Equipment" },
-  ];
-  await prisma.productLine.createMany({ data: productLines, skipDuplicates: true });
-  
-  // Creating group names
-  const groupNames = [
-    { name: "Consumer Electronics", product_category: "Electronics" },
-    { name: "Engine Components", product_category: "Automotive" },
-    { name: "Generic Medications", product_category: "Pharmaceuticals" },
-    { name: "Dairy Products", product_category: "Food" },
-    { name: "Power Tools", product_category: "Industrial" },
-    { name: "Mobile Devices", product_category: "Electronics" },
-    { name: "Transmission Parts", product_category: "Automotive" },
-    { name: "Specialized Medications", product_category: "Pharmaceuticals" },
-  ];
-  await prisma.groupName.createMany({ data: groupNames, skipDuplicates: true });
-  
-  // Creating countries
-  const countries = [
-    { name: "United States" },
-    { name: "China" },
-    { name: "Mexico" },
-    { name: "Canada" },
-    { name: "Brazil" },
-    { name: "Germany" },
-    { name: "Japan" },
-    { name: "United Kingdom" },
-    { name: "France" },
-    { name: "Italy" },
-    { name: "South Korea" },
-    { name: "India" },
-    { name: "Spain" },
-    { name: "Australia" },
-    { name: "Peru" },
-  ];
-  await prisma.country.createMany({ data: countries, skipDuplicates: true });
-  
-  // Creating temperature ranges
+  // Creating temperature ranges (replacing min/max temperature)
   const temperatureRanges = [
     { range: "Frozen", min_celsius: -30, max_celsius: -18 },
     { range: "Refrigerated", min_celsius: 2, max_celsius: 8 },
@@ -289,8 +353,7 @@ async function createOrganisationsAndUsers() {
     });
   }
   
-  console.log("✅ Seed users created with visible passwords:");
-  seedUsers.forEach(u => console.log(`- ${u.user_id}: ${u.email} / Password: ${u.password_hash.slice(0, 10)}...`));
+  console.log("✅ Seed users created");
   
   // Create additional regular users
   const regularUsers = [];
@@ -393,6 +456,7 @@ async function createProducts() {
   
   for (let i = 0; i < COUNT.PRODUCTS; i++) {
     products.push({
+      product_code: `PRD-${faker.string.alphanumeric(8).toUpperCase()}`, // NEW: Product code
       name: faker.commerce.productName(),
       product_line_id: faker.helpers.arrayElement(productLines).product_line_id,
       group_id: faker.helpers.arrayElement(groupNames).group_id,
@@ -563,8 +627,9 @@ async function createWarehouseCells() {
   return cells;
 }
 
+// NEW: Updated function for multi-product entry orders
 async function createEntryOrders() {
-  console.log("🌱 Creating entry orders with cell assignments...");
+  console.log("🌱 Creating multi-product entry orders with product-wise audits...");
   
   // Get data needed for entry orders
   const organisations = await prisma.organisation.findMany();
@@ -584,17 +649,8 @@ async function createEntryOrders() {
   const entryOrders = [];
   
   for (let i = 0; i < COUNT.ENTRY_ORDERS; i++) {
-    // Create entry order by a customer
     const customerUser = faker.helpers.arrayElement(customerUsers);
-    const product = faker.helpers.arrayElement(products);
     const warehouse = faker.helpers.arrayElement(warehouses);
-    
-    // Calculate order quantities
-    const packagingQty = faker.number.int({ min: 10, max: 100 });
-    const unitWeight = product.unit_weight || 1;
-    const totalWeight = unitWeight * packagingQty;
-    const unitVolume = product.unit_volume || 0.2;
-    const totalVolume = unitVolume * packagingQty;
     
     // Create base order
     const order = await prisma.order.create({
@@ -607,11 +663,10 @@ async function createEntryOrders() {
       },
     });
     
-    // Create entry order
+    // Create entry order (without product-specific fields)
     const entryOrder = await prisma.entryOrder.create({
       data: {
         order_id: order.order_id,
-        product_id: product.product_id,
         entry_order_no: `ENTRY-${faker.string.numeric(5)}`,
         registration_date: new Date(),
         document_date: faker.date.past({ years: 1 }),
@@ -622,88 +677,160 @@ async function createEntryOrders() {
         origin_id: faker.helpers.arrayElement(origins).origin_id,
         document_type_id: faker.helpers.arrayElement(documentTypes).document_type_id,
         personnel_incharge_id: customerUser.id,
-        
-        // Set quantities
-        total_qty: packagingQty,
-        total_weight: totalWeight,
-        total_volume: totalVolume,
-        remaining_packaging_qty: packagingQty,
-        remaining_weight: totalWeight,
-        
-        // Additional details
-        presentation: faker.helpers.arrayElement(["Boxed", "Palletized", "Loose"]),
-        palettes: packagingQty, // One palette per package
         lot_series: `LOT-${faker.string.alphanumeric(8)}`,
-        mfd_date_time: faker.date.past({ years: 1 }),
-        expiration_date: faker.date.future({ years: 2 }),
-        humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
-        insured_value: faker.number.float({ min: 1000, max: 100000 }),
         comments: faker.lorem.paragraph(),
+        audit_status: AuditResult.PENDING,
       },
     });
     
     entryOrders.push(entryOrder);
     
-    // Create audit by warehouse user
-    const warehouseUser = faker.helpers.arrayElement(warehouseUsers);
-    const auditResult = faker.helpers.arrayElement([
-      AuditResult.PASSED,
-      AuditResult.FAILED,
-      AuditResult.PENDING,
-    ]);
+    // NEW: Create multiple products for this entry order (1-4 products per order)
+    const numberOfProducts = faker.number.int({ min: 1, max: 4 });
+    const selectedProducts = faker.helpers.arrayElements(products, numberOfProducts);
     
-    // For demonstration, sometimes have a discrepancy in verified quantities
-    const hasDiscrepancy = faker.helpers.maybe(() => true, { probability: 0.2 });
-    const verifiedPackagingQty = hasDiscrepancy 
-      ? faker.number.int({ min: Math.floor(packagingQty * 0.8), max: packagingQty })
-      : packagingQty;
-    const verifiedWeight = hasDiscrepancy
-      ? verifiedPackagingQty * unitWeight
-      : totalWeight;
+    const entryOrderProducts = [];
+    
+    for (const product of selectedProducts) {
+      const packagingType = faker.helpers.arrayElement(Object.values(PackagingType));
+      const packagingStatus = faker.helpers.arrayElement(Object.values(PackagingStatus));
+      const packagingCode = getPackagingCode(packagingType, packagingStatus);
       
-    const audit = await prisma.entryOrderAudit.create({
-      data: {
-        entry_order_id: entryOrder.entry_order_id,
-        audited_by: warehouseUser.id,
-        audit_result: auditResult,
-        verified_packaging_qty: verifiedPackagingQty,
-        verified_weight: verifiedWeight,
-        discrepancy_notes: hasDiscrepancy 
-          ? `Found ${verifiedPackagingQty} packages instead of declared ${packagingQty}`
-          : null,
-        comments: faker.lorem.sentence(),
-      },
-    });
+      const quantityPackaging = faker.number.int({ min: 10, max: 100 });
+      const unitWeight = product.unit_weight || 1;
+      const totalWeight = unitWeight * quantityPackaging;
+      const unitVolume = product.unit_volume || 0.2;
+      const totalVolume = unitVolume * quantityPackaging;
+      
+      // Create EntryOrderProduct
+      const entryOrderProduct = await prisma.entryOrderProduct.create({
+        data: {
+          entry_order_id: entryOrder.entry_order_id,
+          product_id: product.product_id,
+          quantity_packaging: quantityPackaging,
+          total_qty: quantityPackaging,
+          total_weight: totalWeight,
+          total_volume: totalVolume,
+          palettes: Math.ceil(quantityPackaging / 20),
+          presentation: faker.helpers.arrayElement(["Boxed", "Palletized", "Loose"]),
+          product_description: faker.commerce.productDescription(),
+          insured_value: faker.number.float({ min: 1000, max: 100000 }),
+          technical_specification: faker.lorem.sentence(),
+          expiration_date: faker.date.future({ years: 2 }),
+          mfd_date_time: faker.date.past({ years: 1 }),
+          packaging_type: packagingType,
+          packaging_status: packagingStatus,
+          packaging_code: packagingCode,
+          remaining_packaging_qty: quantityPackaging,
+          remaining_weight: totalWeight,
+          audit_status: AuditResult.PENDING,
+        },
+      });
+      
+      entryOrderProducts.push(entryOrderProduct);
+      
+      // NEW: Create product-specific audit
+      const warehouseUser = faker.helpers.arrayElement(warehouseUsers);
+      const auditResult = faker.helpers.arrayElement([
+        AuditResult.PASSED,
+        AuditResult.FAILED,
+        AuditResult.PENDING,
+      ]);
+      
+      // Sometimes have discrepancies
+      const hasDiscrepancy = faker.helpers.maybe(() => true, { probability: 0.2 });
+      const verifiedPackagingQty = hasDiscrepancy 
+        ? faker.number.int({ min: Math.floor(quantityPackaging * 0.8), max: quantityPackaging })
+        : quantityPackaging;
+      const verifiedWeight = hasDiscrepancy
+        ? verifiedPackagingQty * unitWeight
+        : totalWeight;
+      
+      // Create product-specific audit
+      const productAudit = await prisma.entryOrderProductAudit.create({
+        data: {
+          entry_order_product_id: entryOrderProduct.entry_order_product_id,
+          audited_by: warehouseUser.id,
+          audit_result: auditResult,
+          comments: faker.lorem.sentence(),
+          discrepancy_notes: hasDiscrepancy 
+            ? `Found ${verifiedPackagingQty} packages instead of declared ${quantityPackaging}`
+            : null,
+          packaging_condition: faker.helpers.arrayElement(Object.values(PackagingStatus)),
+        },
+      });
+      
+      // Update the entry order product with audit results
+      await prisma.entryOrderProduct.update({
+        where: { entry_order_product_id: entryOrderProduct.entry_order_product_id },
+        data: { 
+          audit_status: auditResult,
+          remaining_packaging_qty: auditResult === AuditResult.PASSED ? verifiedPackagingQty : quantityPackaging,
+          remaining_weight: auditResult === AuditResult.PASSED ? verifiedWeight : totalWeight,
+        },
+      });
+      
+      // For PASSED audits, assign to cells
+      if (auditResult === AuditResult.PASSED) {
+        await assignProductToCells(
+          entryOrder, 
+          entryOrderProduct, 
+          warehouseUser, 
+          verifiedPackagingQty, 
+          verifiedWeight, 
+          product, 
+          warehouse,
+          packagingType,
+          packagingStatus,
+          packagingCode
+        );
+      }
+    }
     
-    // Update the entry order with audit status
+    // Update overall entry order audit status based on all products
+    const allProductsPassed = entryOrderProducts.every(p => p.audit_status === AuditResult.PASSED);
+    const anyProductFailed = entryOrderProducts.some(p => p.audit_status === AuditResult.FAILED);
+    
+    const overallAuditStatus = anyProductFailed 
+      ? AuditResult.FAILED 
+      : allProductsPassed 
+        ? AuditResult.PASSED 
+        : AuditResult.PENDING;
+    
     await prisma.entryOrder.update({
       where: { entry_order_id: entryOrder.entry_order_id },
-      data: { 
-        audit_status: audit.audit_result,
-        // If there was a discrepancy, update the remaining values
-        remaining_packaging_qty: auditResult === AuditResult.PASSED ? verifiedPackagingQty : packagingQty,
-        remaining_weight: auditResult === AuditResult.PASSED ? verifiedWeight : totalWeight,
-      },
+      data: { audit_status: overallAuditStatus },
     });
-    
-    // For PASSED audits, assign to cells
-    if (audit.audit_result === AuditResult.PASSED) {
-      await assignEntryOrderToCells(entryOrder, warehouseUser, verifiedPackagingQty, verifiedWeight, product, warehouse);
-    }
   }
   
-  console.log("✅ Entry orders created with audits and cell assignments");
+  console.log("✅ Multi-product entry orders created with product-wise audits");
   return entryOrders;
 }
 
-async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackagingQty, totalWeight, product, warehouse) {
-  // Get available cells in this warehouse
+// NEW: Updated function to assign specific products to cells
+async function assignProductToCells(
+  entryOrder, 
+  entryOrderProduct, 
+  warehouseUser, 
+  totalPackagingQty, 
+  totalWeight, 
+  product, 
+  warehouse,
+  packagingType,
+  packagingStatus,
+  packagingCode
+) {
+  // Get appropriate cells based on packaging condition
+  let cellRole = CellRole.STANDARD;
+  if (packagingStatus === PackagingStatus.DAMAGED) {
+    cellRole = CellRole.DAMAGED;
+  }
+  
   let availableCells = await prisma.warehouseCell.findMany({
     where: {
       warehouse_id: warehouse.warehouse_id,
       status: CellStatus.AVAILABLE,
-      // Use standard cells only for normal items
-      cell_role: CellRole.STANDARD,
+      cell_role: cellRole,
     },
     orderBy: [
       { row: 'asc' },
@@ -713,15 +840,15 @@ async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackaging
   });
   
   if (availableCells.length === 0) {
-    console.log(`⚠️ No available cells for entry order ${entryOrder.entry_order_id}`);
+    console.log(`⚠️ No available ${cellRole} cells for product ${product.product_code} in entry order ${entryOrder.entry_order_id}`);
     return;
   }
   
-  // Determine how many cells needed and how to distribute
+  // Determine how many cells needed
   const cellCount = Math.min(
     Math.ceil(totalPackagingQty / 20), // Max 20 packages per cell
-    availableCells.length, // Limited by available cells
-    3 // For demonstration, limit to max 3 cells per order
+    availableCells.length,
+    3 // Max 3 cells per product
   );
   
   let remainingPackaging = totalPackagingQty;
@@ -730,7 +857,6 @@ async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackaging
   for (let i = 0; i < cellCount && remainingPackaging > 0; i++) {
     const cell = availableCells[i];
     
-    // For last cell, assign all remaining; otherwise distribute evenly
     const isLastCell = i === cellCount - 1;
     const packagingForThisCell = isLastCell 
       ? remainingPackaging 
@@ -740,38 +866,45 @@ async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackaging
       ? remainingWeight
       : (packagingForThisCell / totalPackagingQty) * totalWeight;
     
-    // Format the cell reference
     const cellRef = `${cell.row}.${String(cell.bay).padStart(2, '0')}.${String(cell.position).padStart(2, '0')}`;
     
-    // Create cell assignment
+    // Create cell assignment with product-specific tracking
     const cellAssignment = await prisma.cellAssignment.create({
       data: {
         entry_order_id: entryOrder.entry_order_id,
+        entry_order_product_id: entryOrderProduct.entry_order_product_id, // NEW: Track specific product
         cell_id: cell.id,
         assigned_by: warehouseUser.id,
         packaging_quantity: packagingForThisCell,
         weight: weightForThisCell,
-        volume: (packagingForThisCell / totalPackagingQty) * entryOrder.total_volume,
+        volume: (packagingForThisCell / totalPackagingQty) * entryOrderProduct.total_volume,
         status: "ACTIVE",
+        packaging_type: packagingType,
+        packaging_status: packagingStatus,
+        packaging_code: packagingCode,
       },
     });
     
-    // Create inventory record for this cell
+    // Create inventory record with product-specific tracking
     await prisma.inventory.create({
       data: {
         product_id: product.product_id,
-        entry_order_id: entryOrder.entry_order_id,
+        entry_order_product_id: entryOrderProduct.entry_order_product_id, // NEW: Link to specific product
         warehouse_id: warehouse.warehouse_id,
         cell_id: cell.id,
         quantity: packagingForThisCell,
         packaging_quantity: packagingForThisCell,
         weight: weightForThisCell,
+        volume: (packagingForThisCell / totalPackagingQty) * entryOrderProduct.total_volume,
         status: InventoryStatus.AVAILABLE,
-        expiration_date: entryOrder.expiration_date,
+        expiration_date: entryOrderProduct.expiration_date,
+        packaging_type: packagingType,
+        packaging_status: packagingStatus,
+        packaging_code: packagingCode,
       },
     });
     
-    // Create inventory log entry
+    // Create inventory log with product tracking
     await prisma.inventoryLog.create({
       data: {
         user_id: warehouseUser.id,
@@ -781,9 +914,13 @@ async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackaging
         packaging_change: packagingForThisCell,
         weight_change: weightForThisCell,
         entry_order_id: entryOrder.entry_order_id,
+        entry_order_product_id: entryOrderProduct.entry_order_product_id, // NEW: Track specific product
         warehouse_id: warehouse.warehouse_id,
         cell_id: cell.id,
-        notes: `Assigned ${packagingForThisCell} packages (${weightForThisCell.toFixed(2)} kg) to cell ${cellRef}`,
+        packaging_type: packagingType,
+        packaging_status: packagingStatus,
+        packaging_code: packagingCode,
+        notes: `Assigned ${packagingForThisCell} packages (${weightForThisCell.toFixed(2)} kg) of ${product.product_code} to cell ${cellRef}`,
       },
     });
     
@@ -798,14 +935,13 @@ async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackaging
       },
     });
     
-    // Update tracking variables
     remainingPackaging -= packagingForThisCell;
     remainingWeight -= weightForThisCell;
   }
   
-  // Update entry order with remaining quantities
-  await prisma.entryOrder.update({
-    where: { entry_order_id: entryOrder.entry_order_id },
+  // Update entry order product with remaining quantities
+  await prisma.entryOrderProduct.update({
+    where: { entry_order_product_id: entryOrderProduct.entry_order_product_id },
     data: {
       remaining_packaging_qty: remainingPackaging,
       remaining_weight: remainingWeight,
@@ -813,10 +949,10 @@ async function assignEntryOrderToCells(entryOrder, warehouseUser, totalPackaging
   });
 }
 
+// NEW: Updated departure orders for multi-product support
 async function createDepartureOrders() {
-  console.log("🌱 Creating departure orders...");
+  console.log("🌱 Creating multi-product departure orders...");
   
-  // Get data needed for departure orders
   const customerUsers = await prisma.user.findMany({
     where: { role: { name: "CUSTOMER" } },
   });
@@ -824,22 +960,22 @@ async function createDepartureOrders() {
     where: { role: { name: "WAREHOUSE" } },
   });
   const customers = await prisma.customer.findMany();
-  const packagingTypes = await prisma.packagingType.findMany();
   const labels = await prisma.label.findMany();
   const exitOptions = await prisma.exitOption.findMany();
-  const statuses = await prisma.status.findMany();
   
-  // Get all inventory that can be shipped
+  // Get available inventory that can be shipped (with product info)
   const availableInventory = await prisma.inventory.findMany({
     where: {
       status: InventoryStatus.AVAILABLE,
       quantity: { gt: 0 },
-      entry_order: { audit_status: AuditResult.PASSED },
+      entry_order_product: { audit_status: AuditResult.PASSED },
     },
     include: {
       product: true,
-      entry_order: {
-        include: { order: true }
+      entry_order_product: {
+        include: {
+          entry_order: { include: { order: true } }
+        }
       },
       warehouse: true,
       cell: true,
@@ -854,10 +990,11 @@ async function createDepartureOrders() {
   // Group inventory by entry order
   const inventoryByEntryOrder = {};
   availableInventory.forEach(inv => {
-    if (!inventoryByEntryOrder[inv.entry_order_id]) {
-      inventoryByEntryOrder[inv.entry_order_id] = [];
+    const entryOrderId = inv.entry_order_product.entry_order_id;
+    if (!inventoryByEntryOrder[entryOrderId]) {
+      inventoryByEntryOrder[entryOrderId] = [];
     }
-    inventoryByEntryOrder[inv.entry_order_id].push(inv);
+    inventoryByEntryOrder[entryOrderId].push(inv);
   });
   
   const departureOrders = [];
@@ -866,28 +1003,9 @@ async function createDepartureOrders() {
   for (let i = 0; i < Math.min(COUNT.DEPARTURE_ORDERS, entryOrderIds.length); i++) {
     const entryOrderId = entryOrderIds[i];
     const inventoryItems = inventoryByEntryOrder[entryOrderId];
-    const sampleInventory = inventoryItems[0];
-    
-    // Determine how much to ship (sometimes partial, sometimes full)
-    const isPartialShipment = faker.helpers.maybe(() => true, { probability: 0.3 });
-    
-    // Calculate total available
-    const totalAvailablePackaging = inventoryItems.reduce((sum, item) => sum + item.packaging_quantity, 0);
-    const totalAvailableWeight = inventoryItems.reduce((sum, item) => parseFloat(sum) + parseFloat(item.weight), 0);
-    
-    // For partial shipments, take a portion
-    const packagingToShip = isPartialShipment
-      ? faker.number.int({ min: 1, max: Math.floor(totalAvailablePackaging * 0.7) })
-      : totalAvailablePackaging;
-      
-    const weightToShip = isPartialShipment
-      ? (packagingToShip / totalAvailablePackaging) * totalAvailableWeight
-      : totalAvailableWeight;
-    
-    // Create by a customer
     const customerUser = faker.helpers.arrayElement(customerUsers);
     
-    // Base Order
+    // Create base order
     const order = await prisma.order.create({
       data: {
         order_type: "DEPARTURE",
@@ -899,26 +1017,14 @@ async function createDepartureOrders() {
       },
     });
     
-    // Create departure order
+    // Create departure order (without product-specific fields)
     const departureOrder = await prisma.departureOrder.create({
       data: {
         order_id: order.order_id,
         entry_order_id: entryOrderId,
-        product_id: sampleInventory.product_id,
         customer_id: faker.helpers.arrayElement(customers).customer_id,
-        packaging_id: faker.helpers.arrayElement(packagingTypes).packaging_type_id,
         exit_option_id: faker.helpers.arrayElement(exitOptions).exit_option_id,
         label_id: faker.helpers.maybe(() => faker.helpers.arrayElement(labels).label_id),
-        status_id: faker.helpers.arrayElement(statuses).status_id,
-        
-        // Set quantities
-        total_qty: packagingToShip,
-        total_weight: weightToShip,
-        total_volume: (packagingToShip / totalAvailablePackaging) * sampleInventory.entry_order.total_volume,
-        
-        // Additional details
-        palettes: `${Math.ceil(packagingToShip / 20)} pallets`,
-        insured_value: weightToShip * faker.number.float({ min: 5, max: 20 }),
         arrival_point: `${faker.location.city()}, ${faker.location.country()}`,
         responsible_for_collection: faker.person.fullName(),
         departure_transfer_note: `TN-${faker.string.alphanumeric(10)}`,
@@ -926,31 +1032,86 @@ async function createDepartureOrders() {
         document_date: faker.date.recent({ days: 7 }),
         personnel_in_charge_id: faker.helpers.arrayElement(warehouseUsers).id,
         date_and_time_of_transfer: faker.date.soon({ days: 3 }),
-        warehouse_id: sampleInventory.warehouse_id,
+        warehouse_id: inventoryItems[0].warehouse_id,
       },
     });
     
     departureOrders.push(departureOrder);
     
-    // Process inventory for this departure
-    await processDepartureOrderInventory(
-      departureOrder, 
-      inventoryItems, 
-      packagingToShip, 
-      weightToShip, 
-      customerUser
-    );
+    // Create departure order products for each unique product in the inventory
+    const productGroups = {};
+    inventoryItems.forEach(inv => {
+      if (!productGroups[inv.product_id]) {
+        productGroups[inv.product_id] = [];
+      }
+      productGroups[inv.product_id].push(inv);
+    });
+    
+    for (const [productId, productInventory] of Object.entries(productGroups)) {
+      const product = productInventory[0].product;
+      
+      // Calculate totals for this product
+      const totalAvailablePackaging = productInventory.reduce((sum, item) => sum + item.packaging_quantity, 0);
+      const totalAvailableWeight = productInventory.reduce((sum, item) => parseFloat(sum) + parseFloat(item.weight), 0);
+      const totalAvailableVolume = productInventory.reduce((sum, item) => parseFloat(sum) + parseFloat(item.volume || 0), 0);
+      
+      // Determine how much to ship (sometimes partial)
+      const isPartialShipment = faker.helpers.maybe(() => true, { probability: 0.3 });
+      const packagingToShip = isPartialShipment
+        ? faker.number.int({ min: 1, max: Math.floor(totalAvailablePackaging * 0.7) })
+        : totalAvailablePackaging;
+      const weightToShip = isPartialShipment
+        ? (packagingToShip / totalAvailablePackaging) * totalAvailableWeight
+        : totalAvailableWeight;
+      const volumeToShip = isPartialShipment
+        ? (packagingToShip / totalAvailablePackaging) * totalAvailableVolume
+        : totalAvailableVolume;
+      
+      // Create departure order product
+      const departureOrderProduct = await prisma.departureOrderProduct.create({
+        data: {
+          departure_order_id: departureOrder.departure_order_id,
+          product_id: productId,
+          total_qty: packagingToShip,
+          total_weight: weightToShip,
+          total_volume: volumeToShip,
+          palettes: `${Math.ceil(packagingToShip / 20)} pallets`,
+          insured_value: weightToShip * faker.number.float({ min: 5, max: 20 }),
+          product_description: product.name,
+          type: faker.helpers.arrayElement(["STANDARD", "EXPRESS", "BULK"]),
+          packaging_type: productInventory[0].packaging_type,
+          packaging_status: productInventory[0].packaging_status,
+          packaging_code: productInventory[0].packaging_code,
+        },
+      });
+      
+      // Process inventory for this product
+      await processDepartureOrderProductInventory(
+        departureOrder,
+        departureOrderProduct,
+        productInventory,
+        packagingToShip,
+        weightToShip,
+        customerUser
+      );
+    }
   }
   
-  console.log("✅ Departure orders created");
+  console.log("✅ Multi-product departure orders created");
   return departureOrders;
 }
 
-async function processDepartureOrderInventory(departureOrder, inventoryItems, packagingToShip, weightToShip, user) {
+async function processDepartureOrderProductInventory(
+  departureOrder, 
+  departureOrderProduct,
+  inventoryItems, 
+  packagingToShip, 
+  weightToShip, 
+  user
+) {
   let remainingPackagingToShip = packagingToShip;
   let remainingWeightToShip = weightToShip;
   
-  // Process inventory items until we've shipped the requested amount
   for (const inventoryItem of inventoryItems) {
     if (remainingPackagingToShip <= 0) break;
     
@@ -959,24 +1120,27 @@ async function processDepartureOrderInventory(departureOrder, inventoryItems, pa
     
     const cellRef = `${cell.row}.${String(cell.bay).padStart(2, '0')}.${String(cell.position).padStart(2, '0')}`;
     
-    // Determine how much to take from this inventory item
     const packagingFromThisItem = Math.min(remainingPackagingToShip, inventoryItem.packaging_quantity);
     const weightRatio = packagingFromThisItem / inventoryItem.packaging_quantity;
     const weightFromThisItem = weightRatio * parseFloat(inventoryItem.weight);
     
-    // Create cell assignment for this departure
+    // Create cell assignment for departure with product tracking
     await prisma.cellAssignment.create({
       data: {
         departure_order_id: departureOrder.departure_order_id,
+        departure_order_product_id: departureOrderProduct.departure_order_product_id, // NEW: Track specific product
         cell_id: cell.id,
         assigned_by: user.id,
         packaging_quantity: packagingFromThisItem,
         weight: weightFromThisItem,
         status: "ACTIVE",
+        packaging_type: inventoryItem.packaging_type,
+        packaging_status: inventoryItem.packaging_status,
+        packaging_code: inventoryItem.packaging_code,
       },
     });
     
-    // Create inventory log for this movement
+    // Create inventory log
     await prisma.inventoryLog.create({
       data: {
         user_id: user.id,
@@ -986,18 +1150,21 @@ async function processDepartureOrderInventory(departureOrder, inventoryItems, pa
         packaging_change: -packagingFromThisItem,
         weight_change: -weightFromThisItem,
         departure_order_id: departureOrder.departure_order_id,
-        entry_order_id: inventoryItem.entry_order_id,
+        departure_order_product_id: departureOrderProduct.departure_order_product_id, // NEW: Track specific product
+        entry_order_product_id: inventoryItem.entry_order_product_id,
         warehouse_id: inventoryItem.warehouse_id,
         cell_id: cell.id,
-        notes: `Removed ${packagingFromThisItem} packages (${weightFromThisItem.toFixed(2)} kg) from cell ${cellRef}`,
+        packaging_type: inventoryItem.packaging_type,
+        packaging_status: inventoryItem.packaging_status,
+        packaging_code: inventoryItem.packaging_code,
+        notes: `Removed ${packagingFromThisItem} packages (${weightFromThisItem.toFixed(2)} kg) of ${inventoryItem.product.product_code} from cell ${cellRef}`,
       },
     });
     
-    // Calculate remaining inventory
+    // Update inventory record
     const remainingPackaging = inventoryItem.packaging_quantity - packagingFromThisItem;
     const remainingWeight = parseFloat(inventoryItem.weight) - weightFromThisItem;
     
-    // Update inventory record
     await prisma.inventory.update({
       where: { inventory_id: inventoryItem.inventory_id },
       data: {
@@ -1008,7 +1175,7 @@ async function processDepartureOrderInventory(departureOrder, inventoryItems, pa
       },
     });
     
-    // Update cell if fully depleted
+    // Update cell
     if (remainingPackaging <= 0) {
       await prisma.warehouseCell.update({
         where: { id: cell.id },
@@ -1020,7 +1187,6 @@ async function processDepartureOrderInventory(departureOrder, inventoryItems, pa
         },
       });
     } else {
-      // Otherwise update cell with remaining quantities
       await prisma.warehouseCell.update({
         where: { id: cell.id },
         data: {
@@ -1030,7 +1196,6 @@ async function processDepartureOrderInventory(departureOrder, inventoryItems, pa
       });
     }
     
-    // Update tracking variables
     remainingPackagingToShip -= packagingFromThisItem;
     remainingWeightToShip -= weightFromThisItem;
   }
@@ -1038,7 +1203,7 @@ async function processDepartureOrderInventory(departureOrder, inventoryItems, pa
 
 async function main() {
   try {
-    console.log("Starting database seed...");
+    console.log("Starting database seed for multi-product schema...");
     
     // Create all lookup tables first
     await createBaseLookupTables();
@@ -1053,11 +1218,11 @@ async function main() {
     const warehouses = await createWarehouses();
     await createWarehouseCells();
     
-    // Create orders and assignments
+    // Create orders with multi-product support
     await createEntryOrders();
     await createDepartureOrders();
     
-    console.log("✅ Database seed completed successfully!");
+    console.log("✅ Database seed completed successfully with multi-product support!");
   } catch (error) {
     console.error("❌ Error seeding database:", error);
     process.exit(1);

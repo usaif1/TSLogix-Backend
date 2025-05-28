@@ -15,6 +15,25 @@ enum RoleName {
   ADMIN
 }
 
+// Packaging status enum based on your codes
+enum PackagingStatus {
+  NORMAL           // Codes: 30-37
+  PARTIALLY_DAMAGED // Codes: 40-47  
+  DAMAGED          // Codes: 50-57
+}
+
+// Packaging type enum
+enum PackagingType {
+  PALET    // 30, 40, 50
+  BOX      // 31, 41, 51
+  SACK     // 32, 42, 52
+  UNIT     // 33, 43, 53
+  PACK     // 34, 44, 54
+  BARRELS  // 35, 45, 55
+  BUNDLE   // 36, 46, 56
+  OTHER    // 37, 47, 57
+}
+
 model Role {
   role_id String   @id @default(uuid()) @map("role_id")
   name    RoleName @unique
@@ -44,6 +63,7 @@ model User {
   inventoryLogs         InventoryLog[]
   entryOrderAudits      EntryOrderAudit[]    @relation("UserAudits")
   cellAssignments       CellAssignment[]     @relation("AssignedByUser")
+  productAudits         EntryOrderProductAudit[] @relation("ProductAuditUser")
 
   @@map("users")
 }
@@ -113,14 +133,6 @@ model Label {
   @@map("labels")
 }
 
-model PackagingType {
-  packaging_type_id String           @id @default(uuid()) @map("packaging_type_id")
-  name              String           @unique
-  DepartureOrder    DepartureOrder[]
-
-  @@map("packaging_types")
-}
-
 model ProductLine {
   product_line_id String    @id @default(uuid()) @map("product_line_id")
   name            String    @unique
@@ -161,7 +173,6 @@ model Status {
   name           String           @unique 
   description    String?          // e.g., "PENDING", "SHIPPED", "RECEIVED"
   EntryOrder     EntryOrder[]
-  
 
   @@map("statuses")
 }
@@ -199,6 +210,7 @@ model Customer {
 
 model Product {
   product_id           String           @id @default(uuid()) @map("product_id")
+  product_code         String           @unique // NEW: Product code field
   created_at           DateTime         @default(now())
   name                 String
   product_line_id      String
@@ -207,17 +219,20 @@ model Product {
   humidity             String?
   manufacturer         String?
   storage_conditions   String?
-  temperature_range_id String?
+  temperature_range_id String?          // Temperature now uses range instead of min/max
   unit_weight          Decimal?         @db.Decimal(10, 2) 
   unit_volume          Decimal?         @db.Decimal(10, 2) 
+  
   active_state         ActiveState?     @relation(fields: [active_state_id], references: [state_id])
   group                GroupName        @relation(fields: [group_id], references: [group_id])
   product_line         ProductLine      @relation(fields: [product_line_id], references: [product_line_id])
   temperature_range    TemperatureRange? @relation(fields: [temperature_range_id], references: [temperature_range_id])
+  
+  // Relations updated for multi-product support
   inventory            Inventory[]      @relation(name: "ProductInventory")     
   inventoryLogs        InventoryLog[]   @relation(name: "ProductInventoryLogs")
-  entryOrders          EntryOrder[]
-  departureOrders      DepartureOrder[]
+  entryOrderProducts   EntryOrderProduct[] // NEW: Many-to-many with entry orders
+  departureOrderProducts DepartureOrderProduct[] // NEW: Many-to-many with departure orders
 
   @@map("products")
 }
@@ -248,6 +263,7 @@ model OrderType {
   @@map("order_types")
 }
 
+// UPDATED: Entry Order now supports multiple products
 model EntryOrder {
   document_type_id              String?
   entry_order_id                String        @id @default(uuid()) @map("entry_order_id")
@@ -259,38 +275,21 @@ model EntryOrder {
   document_date                 DateTime?
   document_status               String?
   entry_order_no                String?       @unique
-  expiration_date               DateTime?
-  humidity                      String?
-  lot_series                    String?
-  mfd_date_time                 DateTime?
+  lot_series                    String?       // Common lot series for the entire order
   observation                   String?
   personnel_incharge_id         String?
-  presentation                  String?
-  product_id                    String?       @map("product_id")
-  product                       Product?      @relation(fields: [product_id], references: [product_id])
-  quantity_packaging            Int?          // Changed to Int for better calculations
   registration_date             DateTime?
-  technical_specification       String?
-  total_qty                     Int?          // Changed to Int
-  total_volume                  Decimal?      @db.Decimal(10, 2)
-  total_weight                  Decimal?      @db.Decimal(10, 2)
   order_progress                String?
   certificate_protocol_analysis String?
   comments                      String?
   entry_date                    DateTime?     @default(now())
   entry_transfer_note           String?
-  insured_value                 Decimal?      @db.Decimal(10, 2)
-  palettes                      Int?          // Changed to Int
-  product_description           String?
   status_id                     String?
   type                          String?
-  max_temperature               String?
-  min_temperature               String?
   warehouse_id                  String? 
   
-  // Tracking of quantities for partial assignments
-  remaining_packaging_qty       Int?          // Tracks remaining packaging after cell assignments
-  remaining_weight              Decimal?      @db.Decimal(10, 2)
+  // REMOVED: Product-specific fields moved to EntryOrderProduct
+  // product_id, total_qty, total_weight, total_volume, etc.
   
   audit_status                  AuditResult   @default(PENDING)
   
@@ -301,22 +300,86 @@ model EntryOrder {
   personnel_incharge            User?         @relation(fields: [personnel_incharge_id], references: [id])
   supplier                      Supplier?     @relation(fields: [supplier_id], references: [supplier_id])
   entry_status                  Status?       @relation(fields: [status_id], references: [status_id])
-  inventory                     Inventory[]   @relation(name: "EntryInventory")
-  inventoryLogs                 InventoryLog[] @relation(name: "EntryOrderLogs")
   warehouse                     Warehouse?    @relation(fields: [warehouse_id], references: [warehouse_id])
+  
+  // NEW: Multiple products support
+  products                      EntryOrderProduct[] // Products in this entry order
   audits                        EntryOrderAudit[]
-  cellAssignments               CellAssignment[] // New relation to track cell assignments
+  cellAssignments               CellAssignment[]
+  inventoryLogs                 InventoryLog[] @relation(name: "EntryOrderLogs")
 
   @@map("entry_orders")
 }
 
+// NEW: Junction table for Entry Order - Product relationship
+model EntryOrderProduct {
+  entry_order_product_id    String          @id @default(uuid()) @map("entry_order_product_id")
+  entry_order_id            String          @map("entry_order_id")
+  product_id                String          @map("product_id")
+  
+  // Product-specific quantities and details
+  quantity_packaging        Int             // Number of packages for this product
+  total_qty                 Int             // Total quantity for this product
+  total_weight              Decimal         @db.Decimal(10, 2) // Weight for this product
+  total_volume              Decimal?        @db.Decimal(10, 2) // Volume for this product
+  palettes                  Int?            // Palettes for this product
+  presentation              String?         // Presentation for this product
+  product_description       String?         // Description for this product
+  insured_value             Decimal?        @db.Decimal(10, 2) // Insured value for this product
+  technical_specification   String?         // Technical specs for this product
+  expiration_date           DateTime?       // Expiration date for this product
+  mfd_date_time             DateTime?       // Manufacturing date for this product
+  
+  // Packaging status using the code system
+  packaging_type            PackagingType   @default(BOX)
+  packaging_status          PackagingStatus @default(NORMAL)
+  packaging_code            Int             // Calculated based on type + status (30-57)
+  
+  // Tracking remaining quantities for assignments
+  remaining_packaging_qty   Int             // Remaining packages to assign
+  remaining_weight          Decimal         @db.Decimal(10, 2) // Remaining weight to assign
+  
+  // Individual audit status per product
+  audit_status              AuditResult     @default(PENDING)
+  
+  // Relations
+  entry_order               EntryOrder      @relation(fields: [entry_order_id], references: [entry_order_id])
+  product                   Product         @relation(fields: [product_id], references: [product_id])
+  
+  // Product-specific audits and inventory
+  audits                    EntryOrderProductAudit[]
+  inventory                 Inventory[]     @relation(name: "EntryOrderProductInventory")
+  cellAssignments           CellAssignment[] @relation("EntryOrderProductAssignments")
+
+  @@unique([entry_order_id, product_id], name: "entry_order_product_unique")
+  @@map("entry_order_products")
+}
+
+// NEW: Product-specific audit table
+model EntryOrderProductAudit {
+  audit_id              String              @id @default(uuid()) @map("audit_id")
+  entry_order_product_id String             @map("entry_order_product_id")
+  audited_by            String              @map("audited_by")
+  audit_date            DateTime            @default(now())
+  audit_result          AuditResult
+  comments              String?
+  discrepancy_notes     String?             // To explain any differences
+
+  updated_packaging_type      PackagingType?
+  updated_packaging_status    PackagingStatus?
+  updated_packaging_code      Int?
+  
+  entry_order_product   EntryOrderProduct   @relation(fields: [entry_order_product_id], references: [entry_order_product_id])
+  auditor               User                @relation("ProductAuditUser", fields: [audited_by], references: [id])
+  inventoryLogs         InventoryLog[]      @relation("ProductAuditLogs")
+  
+  @@map("entry_order_product_audits")
+}
+
 model DepartureOrder {
-  product_id                    String?       @map("product_id")
-  product                       Product?      @relation(fields: [product_id], references: [product_id])
   customer_id                   String?
   departure_order_id            String        @id @default(uuid()) @map("departure_order_id")
   label_id                      String?
-  packaging_id                  String?
   order_id                      String        @unique
   entry_order_id                String?       @map("entry_order_id")
   arrival_point                 String?
@@ -334,13 +397,6 @@ model DepartureOrder {
   responsible_for_collection    String?
   exit_option_id                String?
   departure_transfer_note       String?
-  insured_value                 Decimal?      @db.Decimal(10, 2)
-  palettes                      String?
-  product_description           String?
-  type                          String?
-  total_qty                     Int?          
-  total_volume                  Decimal?      @db.Decimal(10, 2)
-  total_weight                  Decimal?      @db.Decimal(10, 2)
   departure_date                DateTime?     @default(now())
   warehouse_id                  String? 
   packaging_list                String?       // URL to uploaded packaging list file
@@ -350,90 +406,142 @@ model DepartureOrder {
   ExitOption                    ExitOption?   @relation(fields: [exit_option_id], references: [exit_option_id])
   label                         Label?        @relation(fields: [label_id], references: [label_id])
   order                         Order         @relation(fields: [order_id], references: [order_id])
-  packagingType                 PackagingType? @relation(fields: [packaging_id], references: [packaging_type_id])
   personnel_in_charge           User?         @relation(fields: [personnel_in_charge_id], references: [id])
   entry_order                   EntryOrder?   @relation(fields: [entry_order_id], references: [entry_order_id])
-  inventoryLogs                 InventoryLog[] @relation(name: "DepartureOrderLogs")
   warehouse                     Warehouse?    @relation(fields: [warehouse_id], references: [warehouse_id])
-  inventory                     Inventory[]   @relation(name: "DepartureInventory")
+  
+  // NEW: Multiple products support
+  products                      DepartureOrderProduct[] // Products in this departure order
+  inventoryLogs                 InventoryLog[] @relation(name: "DepartureOrderLogs")
   cellAssignments               CellAssignment[] @relation("DepartureCellAssignments")
 
   @@map("departure_orders")
 }
 
-// New model to track cell assignments for EntryOrders
-model CellAssignment {
-  assignment_id         String        @id @default(uuid()) @map("assignment_id")
-  entry_order_id        String?       // Entry Order being assigned
-  departure_order_id    String?       // Departure Order being fulfilled
-  cell_id               String        // Cell being assigned
-  assigned_at           DateTime      @default(now())
-  assigned_by           String        // User making the assignment
-  packaging_quantity    Int           // Number of packages assigned to this cell
-  weight                Decimal       @db.Decimal(10, 2) // Weight assigned to this cell
-  volume                Decimal?      @db.Decimal(10, 2) // Volume assigned to this cell
-  status                String        @default("ACTIVE") // Status of this assignment
+// NEW: Junction table for Departure Order - Product relationship
+model DepartureOrderProduct {
+  departure_order_product_id String          @id @default(uuid()) @map("departure_order_product_id")
+  departure_order_id         String          @map("departure_order_id")
+  product_id                 String          @map("product_id")
+  
+  // Product-specific departure quantities
+  total_qty                  Int             // Total quantity for this product
+  total_weight               Decimal         @db.Decimal(10, 2) // Weight for this product
+  total_volume               Decimal?        @db.Decimal(10, 2) // Volume for this product
+  palettes                   String?         // Palettes info for this product
+  insured_value              Decimal?        @db.Decimal(10, 2) // Insured value for this product
+  product_description        String?         // Description for this product
+  type                       String?         // Type for this product
+  
+  // Packaging status for departure
+  packaging_type             PackagingType   @default(BOX)
+  packaging_status           PackagingStatus @default(NORMAL)
+  packaging_code             Int             // Calculated based on type + status
   
   // Relations
-  entry_order           EntryOrder?   @relation(fields: [entry_order_id], references: [entry_order_id])
-  departure_order       DepartureOrder? @relation("DepartureCellAssignments", fields: [departure_order_id], references: [departure_order_id])
-  cell                  WarehouseCell @relation(fields: [cell_id], references: [id])
-  user                  User          @relation("AssignedByUser", fields: [assigned_by], references: [id])
+  departure_order            DepartureOrder  @relation(fields: [departure_order_id], references: [departure_order_id])
+  product                    Product         @relation(fields: [product_id], references: [product_id])
+  
+  inventory                  Inventory[]     @relation(name: "DepartureOrderProductInventory")
+  cellAssignments            CellAssignment[] @relation("DepartureOrderProductAssignments")
+
+  @@unique([departure_order_id, product_id], name: "departure_order_product_unique")
+  @@map("departure_order_products")
+}
+
+// UPDATED: Cell assignments now track specific products
+model CellAssignment {
+  assignment_id             String                 @id @default(uuid()) @map("assignment_id")
+  entry_order_id            String?                // Entry Order being assigned
+  departure_order_id        String?                // Departure Order being fulfilled
+  entry_order_product_id    String?                // Specific product in entry order
+  departure_order_product_id String?               // Specific product in departure order
+  cell_id                   String                 // Cell being assigned
+  assigned_at               DateTime               @default(now())
+  assigned_by               String                 // User making the assignment
+  packaging_quantity        Int                    // Number of packages assigned to this cell
+  weight                    Decimal                @db.Decimal(10, 2) // Weight assigned to this cell
+  volume                    Decimal?               @db.Decimal(10, 2) // Volume assigned to this cell
+  status                    String                 @default("ACTIVE") // Status of this assignment
+  packaging_type            PackagingType          @default(BOX)
+  packaging_status          PackagingStatus        @default(NORMAL)
+  packaging_code            Int                    // Packaging code (30-57)
+  
+  // Relations
+  entry_order               EntryOrder?            @relation(fields: [entry_order_id], references: [entry_order_id])
+  departure_order           DepartureOrder?        @relation("DepartureCellAssignments", fields: [departure_order_id], references: [departure_order_id])
+  entry_order_product       EntryOrderProduct?     @relation("EntryOrderProductAssignments", fields: [entry_order_product_id], references: [entry_order_product_id])
+  departure_order_product   DepartureOrderProduct? @relation("DepartureOrderProductAssignments", fields: [departure_order_product_id], references: [departure_order_product_id])
+  cell                      WarehouseCell          @relation(fields: [cell_id], references: [id])
+  user                      User                   @relation("AssignedByUser", fields: [assigned_by], references: [id])
   
   @@map("cell_assignments")
 }
 
+// UPDATED: Inventory now tracks specific products within orders
 model Inventory {
-  inventory_id         String           @id @default(uuid()) @map("inventory_id")
-  product_id           String
-  entry_order_id       String?          @map("entry_order_id")
-  departure_order_id   String?          @map("departure_order_id")
-  cell_id              String?          // Link to the cell where inventory is stored
-  quantity             Int
-  expiration_date      DateTime?
-  warehouse_id         String? 
-  status               InventoryStatus  @default(AVAILABLE)
-  packaging_quantity   Int              @default(0) // New field to track number of packages
-  weight               Decimal          @db.Decimal(10, 2) @default(0) // New field to track weight
-  volume               Decimal?         @db.Decimal(10, 2) // Optional volume tracking
+  inventory_id               String                  @id @default(uuid()) @map("inventory_id")
+  product_id                 String
+  entry_order_id             String?                 @map("entry_order_id")
+  departure_order_id         String?                 @map("departure_order_id")
+  entry_order_product_id     String?                 // Link to specific product in entry order
+  departure_order_product_id String?                 // Link to specific product in departure order
+  cell_id                    String?                 // Link to the cell where inventory is stored
+  quantity                   Int
+  expiration_date            DateTime?
+  warehouse_id               String? 
+  status                     InventoryStatus         @default(AVAILABLE)
+  packaging_quantity         Int                     @default(0) // Number of packages
+  weight                     Decimal                 @db.Decimal(10, 2) @default(0) // Weight
+  volume                     Decimal?                @db.Decimal(10, 2) // Volume
+  packaging_type             PackagingType           @default(BOX)
+  packaging_status           PackagingStatus         @default(NORMAL)
+  packaging_code             Int                     // Packaging code (30-57)
 
-  product              Product          @relation(fields: [product_id], references: [product_id], name: "ProductInventory")
-  entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryInventory")
-  departure_order      DepartureOrder?  @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureInventory")
-  cell                 WarehouseCell?   @relation("CellInventory", fields: [cell_id], references: [id])
-  warehouse            Warehouse?       @relation(fields: [warehouse_id], references: [warehouse_id])
+  product                    Product                 @relation(fields: [product_id], references: [product_id], name: "ProductInventory")
+  entry_order_product        EntryOrderProduct?      @relation(fields: [entry_order_product_id], references: [entry_order_product_id], name: "EntryOrderProductInventory")
+  departure_order_product    DepartureOrderProduct?  @relation(fields: [departure_order_product_id], references: [departure_order_product_id], name: "DepartureOrderProductInventory")
+  cell                       WarehouseCell?          @relation("CellInventory", fields: [cell_id], references: [id])
+  warehouse                  Warehouse?              @relation(fields: [warehouse_id], references: [warehouse_id])
 
-  @@unique([product_id, warehouse_id, cell_id], name: "product_wh_cell_idx")
+  @@unique([product_id, warehouse_id, cell_id, entry_order_product_id], name: "product_wh_cell_entry_idx")
   @@index([departure_order_id], map: "idx_inventory_departure_order")
   @@index([cell_id], map: "idx_inventory_cell")
   @@map("inventory")
 }
 
 model InventoryLog {
-  log_id               String           @id @default(uuid()) @map("log_id")
-  timestamp            DateTime         @default(now())
-  user_id              String
-  product_id           String
-  last_updated         DateTime?        @updatedAt 
-  audit_id             String?          @map("audit_id")
-  audit                EntryOrderAudit? @relation(fields: [audit_id], references: [audit_id])
-  quantity_change      Int
-  packaging_change     Int              @default(0) // New field to track packaging changes
-  weight_change        Decimal          @db.Decimal(10, 2) @default(0) // New field to track weight changes
-  movement_type        MovementType
-  entry_order_id       String?          @map("entry_order_id")
-  departure_order_id   String?          @map("departure_order_id")
-  warehouse_id         String?          
-  cell_id              String?          
-  notes                String?          
-  cell_assignment_id   String?          // Reference to related cell assignment if applicable
+  log_id                     String                  @id @default(uuid()) @map("log_id")
+  timestamp                  DateTime                @default(now())
+  user_id                    String
+  product_id                 String
+  last_updated               DateTime?               @updatedAt 
+  audit_id                   String?                 @map("audit_id")
+  product_audit_id           String?                 // NEW: Link to product-specific audit
+  quantity_change            Int
+  packaging_change           Int                     @default(0)
+  weight_change              Decimal                 @db.Decimal(10, 2) @default(0)
+  movement_type              MovementType
+  entry_order_id             String?                 @map("entry_order_id")
+  departure_order_id         String?                 @map("departure_order_id")
+  entry_order_product_id     String?                 // NEW: Track specific product
+  departure_order_product_id String?                 // NEW: Track specific product
+  warehouse_id               String?                 
+  cell_id                    String?                 
+  notes                      String?                 
+  cell_assignment_id         String?                 
+  packaging_type             PackagingType           @default(BOX)
+  packaging_status           PackagingStatus         @default(NORMAL)
+  packaging_code             Int                     // Packaging code (30-57)
 
-  user                 User             @relation(fields: [user_id], references: [id])
-  product              Product          @relation(fields: [product_id], references: [product_id], name: "ProductInventoryLogs")
-  entry_order          EntryOrder?      @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryOrderLogs")
-  departure_order      DepartureOrder?  @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureOrderLogs")
-  warehouse            Warehouse?       @relation(fields: [warehouse_id], references: [warehouse_id]) 
-  cell                 WarehouseCell?   @relation("CellLogs", fields: [cell_id], references: [id])
+  user                       User                    @relation(fields: [user_id], references: [id])
+  product                    Product                 @relation(fields: [product_id], references: [product_id], name: "ProductInventoryLogs")
+  entry_order                EntryOrder?             @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryOrderLogs")
+  departure_order            DepartureOrder?         @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureOrderLogs")
+  audit                      EntryOrderAudit?        @relation(fields: [audit_id], references: [audit_id])
+  product_audit              EntryOrderProductAudit? @relation("ProductAuditLogs", fields: [product_audit_id], references: [audit_id])
+  warehouse                  Warehouse?              @relation(fields: [warehouse_id], references: [warehouse_id]) 
+  cell                       WarehouseCell?          @relation("CellLogs", fields: [cell_id], references: [id])
 
   @@index([timestamp, product_id], map: "idx_log_timestamp_product")
   @@map("inventory_logs")
@@ -446,7 +554,7 @@ model EntryOrderAudit {
   audit_date        DateTime    @default(now())
   audit_result      AuditResult
   comments          String?
-  discrepancy_notes   String?    // To explain any differences
+  discrepancy_notes String?     // To explain any differences
   
   entry_order       EntryOrder  @relation(fields: [entry_order_id], references: [entry_order_id])
   auditor           User        @relation("UserAudits", fields: [audited_by], references: [id])
@@ -458,9 +566,9 @@ model EntryOrderAudit {
 /// a little enum for any special cell types (damaged, quarantine, etc.)
 enum CellKind {
   NORMAL
-  DAMAGED    // Renamed from V for clarity
-  TRANSFER   // Renamed from T for clarity
-  RESERVED   // Renamed from R for clarity
+  DAMAGED    
+  TRANSFER   
+  RESERVED   
 }
 
 /// each physical pallet‐slot in the warehouse
@@ -518,7 +626,6 @@ enum CellStatus {
 enum DocumentApplicableTo {
   ENTRY
   DEPARTURE
-
 }
 
 enum LocationType {

@@ -13,6 +13,4 @@ router.get("/entry-orders", entryController.getAllEntryOrders);
 router.get("/entry-order/:orderNo", entryController.getEntryOrderByNo);
 router.get("/entry-orders/passed", entryController.fetchPassedOrders);
 
-
-
 module.exports = router;
