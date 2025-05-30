@@ -64,6 +64,19 @@ async function getByDepartureOrder(req, res) {
   }
 }
 
+/** NEW: Get logs by specific entry order product */
+async function getByEntryOrderProduct(req, res) {
+  try {
+    const logs = await inventoryService.getLogsByEntryOrderProduct(
+      req.params.entry_order_product_id
+    );
+    return res.json({ success: true, data: logs });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 async function getLogById(req, res) {
   try {
     const log = await inventoryService.getInventoryLogById(req.params.log_id);
@@ -113,24 +126,30 @@ async function fetchCells(req, res) {
   }
 }
 
-
-/** Assign part of an entry order to a warehouse cell */
-async function assignToCell(req, res) {
+/** NEW: Assign a specific product to a warehouse cell */
+async function assignProductToCell(req, res) {
   try {
     const {
-      entry_order_id,
+      entry_order_product_id,
       cell_id,
       packaging_quantity,
       weight,
       volume,
-      warehouse_id,        // <-- extract warehouse_id from request body
+      warehouse_id,
     } = req.body;
 
-    // assigned_by comes from the authenticated user
-    const result = await inventoryService.assignToCell({
-      entry_order_id,
+    // Validate required fields
+    if (!entry_order_product_id || !cell_id || !packaging_quantity || !weight || !warehouse_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: entry_order_product_id, cell_id, packaging_quantity, weight, warehouse_id",
+      });
+    }
+
+    const result = await inventoryService.assignProductToCell({
+      entry_order_product_id,
       cell_id,
-      warehouse_id,        // <-- pass warehouse_id into service
+      warehouse_id,
       assigned_by: req.user.id,
       packaging_quantity,
       weight,
@@ -144,11 +163,72 @@ async function assignToCell(req, res) {
         cellReference: result.cellReference,
         remainingPackaging: result.remainingPackaging,
         remainingWeight: result.remainingWeight,
+        product: result.product,
       },
+      message: `Successfully assigned ${packaging_quantity} packages of ${result.product.product_code} to cell ${result.cellReference}`,
     });
   } catch (err) {
-    console.error("assignToCell error:", err);
-    // Map validation errors to 400 if desired
+    console.error("assignProductToCell error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+/** NEW: Get products ready for assignment (no warehouse filter) */
+async function getProductsReadyForAssignment(req, res) {
+  try {
+    // Don't filter by warehouse since warehouse is selected during assignment
+    const products = await inventoryService.getProductsReadyForAssignment();
+    
+    return res.json({
+      success: true,
+      count: products.length,
+      data: products,
+      message: "Products ready for assignment (warehouse to be selected during assignment)",
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+/** NEW: Get available cells for a specific warehouse */
+async function getAvailableCellsForWarehouse(req, res) {
+  try {
+    const { warehouse_id } = req.params;
+    
+    if (!warehouse_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Warehouse ID is required",
+      });
+    }
+
+    const cells = await inventoryService.getAvailableCells(warehouse_id);
+    
+    return res.json({
+      success: true,
+      count: cells.length,
+      data: cells,
+      message: `Available cells in selected warehouse`,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+/** NEW: Get inventory summary */
+async function getInventorySummary(req, res) {
+  try {
+    const summary = await inventoryService.getInventorySummary(req.query);
+    
+    return res.json({
+      success: true,
+      count: summary.length,
+      data: summary,
+    });
+  } catch (err) {
+    console.error(err);
     return res.status(500).json({ success: false, message: err.message });
   }
 }
@@ -159,9 +239,13 @@ module.exports = {
   getStats,
   getByEntryOrder,
   getByDepartureOrder,
+  getByEntryOrderProduct,
   getLogById,
   getAllLogs,
   fetchWarehouses,
   fetchCells,
-  assignToCell,
+  assignProductToCell,
+  getAvailableCellsForWarehouse,
+  getProductsReadyForAssignment,
+  getInventorySummary,
 };

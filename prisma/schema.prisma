@@ -350,6 +350,7 @@ model EntryOrderProduct {
   audits                    EntryOrderProductAudit[]
   inventory                 Inventory[]     @relation(name: "EntryOrderProductInventory")
   cellAssignments           CellAssignment[] @relation("EntryOrderProductAssignments")
+  inventoryLogs             InventoryLog[]  
 
   @@unique([entry_order_id, product_id], name: "entry_order_product_unique")
   @@map("entry_order_products")
@@ -371,7 +372,7 @@ model EntryOrderProductAudit {
   
   entry_order_product   EntryOrderProduct   @relation(fields: [entry_order_product_id], references: [entry_order_product_id])
   auditor               User                @relation("ProductAuditUser", fields: [audited_by], references: [id])
-  inventoryLogs         InventoryLog[]      @relation("ProductAuditLogs")
+  inventoryLogs         InventoryLog[] 
   
   @@map("entry_order_product_audits")
 }
@@ -444,6 +445,7 @@ model DepartureOrderProduct {
   
   inventory                  Inventory[]     @relation(name: "DepartureOrderProductInventory")
   cellAssignments            CellAssignment[] @relation("DepartureOrderProductAssignments")
+  inventoryLogs              InventoryLog[] 
 
   @@unique([departure_order_id, product_id], name: "departure_order_product_unique")
   @@map("departure_order_products")
@@ -474,6 +476,7 @@ model CellAssignment {
   departure_order_product   DepartureOrderProduct? @relation("DepartureOrderProductAssignments", fields: [departure_order_product_id], references: [departure_order_product_id])
   cell                      WarehouseCell          @relation(fields: [cell_id], references: [id])
   user                      User                   @relation("AssignedByUser", fields: [assigned_by], references: [id])
+  inventoryLogs             InventoryLog[]
   
   @@map("cell_assignments")
 }
@@ -539,9 +542,12 @@ model InventoryLog {
   entry_order                EntryOrder?             @relation(fields: [entry_order_id], references: [entry_order_id], name: "EntryOrderLogs")
   departure_order            DepartureOrder?         @relation(fields: [departure_order_id], references: [departure_order_id], name: "DepartureOrderLogs")
   audit                      EntryOrderAudit?        @relation(fields: [audit_id], references: [audit_id])
-  product_audit              EntryOrderProductAudit? @relation("ProductAuditLogs", fields: [product_audit_id], references: [audit_id])
   warehouse                  Warehouse?              @relation(fields: [warehouse_id], references: [warehouse_id]) 
   cell                       WarehouseCell?          @relation("CellLogs", fields: [cell_id], references: [id])
+  cellAssignment             CellAssignment?         @relation(fields: [cell_assignment_id], references: [assignment_id])
+  productAudit               EntryOrderProductAudit? @relation(fields: [product_audit_id], references: [audit_id])
+  entryOrderProduct          EntryOrderProduct?      @relation(fields: [entry_order_product_id], references: [entry_order_product_id])
+  departureOrderProduct      DepartureOrderProduct?  @relation(fields: [departure_order_product_id], references: [departure_order_product_id])
 
   @@index([timestamp, product_id], map: "idx_log_timestamp_product")
   @@map("inventory_logs")
