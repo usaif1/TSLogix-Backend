@@ -10,14 +10,14 @@ router.get("/departure-exit-options", departureController.getDepartureExitOption
 // Departure order management
 router.get("/departure-orders", departureController.getAllDepartureOrders);
 router.post("/create-departure-order", departureController.createDepartureOrder);
-router.get("/departure-orders/:departureOrderId", departureController.getDepartureOrderById); // NEW
+router.get("/departure-orders/:departureOrderId", departureController.getDepartureOrderById);
 
-// Inventory management endpoints for departure (updated for product-based flow)
+// Inventory management endpoints for departure (product-based flow)
 router.get("/products-with-inventory", departureController.getProductsWithInventory);
-router.get("/cells-for-entry-product/:entryOrderProductId", departureController.getAvailableCellsForProduct); // UPDATED
+router.get("/cells-for-entry-product/:entryOrderProductId", departureController.getAvailableCellsForProduct);
 
 // Cell validation endpoints
 router.post("/validate-cell", departureController.validateSelectedCell);
-router.post("/validate-multiple-cells", departureController.validateMultipleCells); // NEW
+router.post("/validate-multiple-cells", departureController.validateMultipleCells);
 
 module.exports = router;

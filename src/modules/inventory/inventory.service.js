@@ -85,9 +85,18 @@ async function getLogsByDepartureOrder(departureOrderId) {
           departure_order_product_id: true,
           packaging_type: true,
           packaging_status: true,
+          total_qty: true,
+          total_weight: true,
+          // ✅ FIXED: Include the departure order details
+          departure_order: {
+            select: {
+              departure_order_no: true,
+              departure_order_id: true,
+            },
+          },
         },
       },
-      cell: {  // Fixed: Use 'cell' as defined in schema
+      cell: {
         select: {
           id: true,
           row: true,

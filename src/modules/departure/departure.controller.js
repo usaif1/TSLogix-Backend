@@ -238,6 +238,6 @@ module.exports = {
   getProductsWithInventory,
   getAvailableCellsForProduct,
   validateSelectedCell,
-  validateMultipleCells, // NEW
-  getDepartureOrderById, // NEW
+  validateMultipleCells,
+  getDepartureOrderById,
 };
