@@ -76,7 +76,7 @@ async function createEntryOrder(req, res) {
 async function getAllEntryOrders(req, res) {
   try {
     const organisationId = req.user?.organisation_id;
-    const userRole = req.user?.role?.name;
+    const userRole = req.user?.role;
     const searchOrderNo = req.query.orderNo || null;
 
     if (!organisationId) {
@@ -226,12 +226,11 @@ async function reviewEntryOrder(req, res) {
     const { orderNo } = req.params;
     const { review_status, review_comments } = req.body;
     const reviewerId = req.user?.id;
-    const userRole = req.user?.role?.name;
+    const userRole = req.user?.role;
 
-    // Only admin can review orders
-    if (userRole !== "ADMIN") {
+    if (!userRole || (userRole !== "ADMIN" && userRole !== "WAREHOUSE")) {
       return res.status(403).json({ 
-        message: "Access denied. Only administrators can review orders." 
+        message: "Access denied. Only administrators can review orders."
       });
     }
 
@@ -307,13 +306,126 @@ async function getEntryOrdersByStatus(req, res) {
   }
 }
 
+
+async function updateEntryOrder(req, res) {
+  try {
+    const { orderNo } = req.params;
+    const updateData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    // Validate request data
+    if (!updateData || Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No update data provided",
+      });
+    }
+
+    // Validate that entry_order_no is not being changed
+    if (updateData.entry_order_no && updateData.entry_order_no !== orderNo) {
+      return res.status(400).json({
+        success: false,
+        message: "Entry order number cannot be changed",
+      });
+    }
+
+    // Validate product data if provided
+    if (updateData.products && Array.isArray(updateData.products)) {
+      for (let i = 0; i < updateData.products.length; i++) {
+        const product = updateData.products[i];
+        
+        // Check required fields for new products (without entry_order_product_id)
+        if (!product.entry_order_product_id) {
+          if (!product.product_id || !product.product_code || 
+              !product.inventory_quantity || !product.package_quantity || 
+              !product.weight_kg) {
+            return res.status(400).json({
+              success: false,
+              message: `Product ${i + 1}: Missing required fields (product_id, product_code, inventory_quantity, package_quantity, weight_kg)`,
+            });
+          }
+        }
+
+        // Validate quantities are positive numbers
+        if (product.inventory_quantity !== undefined && product.inventory_quantity <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Product ${i + 1}: Inventory quantity must be positive`,
+          });
+        }
+
+        if (product.package_quantity !== undefined && product.package_quantity <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Product ${i + 1}: Package quantity must be positive`,
+          });
+        }
+
+        if (product.weight_kg !== undefined && product.weight_kg <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Product ${i + 1}: Weight must be positive`,
+          });
+        }
+
+        // Validate dates if provided
+        if (product.manufacturing_date && product.expiration_date) {
+          const mfgDate = new Date(product.manufacturing_date);
+          const expDate = new Date(product.expiration_date);
+          if (expDate <= mfgDate) {
+            return res.status(400).json({
+              success: false,
+              message: `Product ${i + 1}: Expiration date must be after manufacturing date`,
+            });
+          }
+        }
+      }
+    }
+
+    const result = await entryService.updateEntryOrder(orderNo, updateData, userId);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: `Entry order ${orderNo} updated successfully. Status reset to PENDING for re-review.`,
+    });
+  } catch (error) {
+    console.error("Error updating entry order:", error);
+    
+    // Handle specific business rule errors
+    if (error.message.includes("NEEDS_REVISION") || 
+        error.message.includes("only update your own") ||
+        error.message.includes("not found")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Error updating entry order",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   createEntryOrder,
   getAllEntryOrders,
+  updateEntryOrder, 
   getEntryFormFields,
   getCurrentEntryOrderNo,
   getEntryOrderByNo,
-  getApprovedEntryOrders, // ✅ Updated from fetchPassedOrders
-  reviewEntryOrder, // ✅ New
-  getEntryOrdersByStatus, // ✅ New
+  getApprovedEntryOrders,
+  reviewEntryOrder,
+  getEntryOrdersByStatus,
 };

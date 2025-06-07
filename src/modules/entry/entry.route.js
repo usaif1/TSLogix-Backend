@@ -21,4 +21,7 @@ router.put("/entry-order/:orderNo/review", entryController.reviewEntryOrder);
 // ✅ NEW: Get orders by status for different user roles
 router.get("/entry-orders/status/:status", entryController.getEntryOrdersByStatus);
 
+// ✅ NEW: Update entry order route (only for NEEDS_REVISION status)
+router.put("/entry-order/:orderNo/update", entryController.updateEntryOrder);
+
 module.exports = router;

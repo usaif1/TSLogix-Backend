@@ -1,261 +1,293 @@
-const {
-  PrismaClient,
-  MovementType,
-  InventoryStatus,
-  CellStatus,
-  AuditResult,
-} = require("@prisma/client");
+const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
-/** Create a new inventory log entry */
-async function createInventoryLog(logData) {
-  return prisma.inventoryLog.create({
-    data: {
-      user_id: logData.user_id,
-      product_id: logData.product_id,
-      quantity_change: logData.quantity_change,
-      packaging_change: logData.packaging_change || 0,
-      weight_change: logData.weight_change || 0,
-      movement_type: logData.movement_type,
-      entry_order_id: logData.entry_order_id || null,
-      departure_order_id: logData.departure_order_id || null,
-      entry_order_product_id: logData.entry_order_product_id || null,
-      departure_order_product_id: logData.departure_order_product_id || null,
-      warehouse_id: logData.warehouse_id || null,
-      cell_id: logData.cell_id || null,
-      cell_assignment_id: logData.cell_assignment_id || null,
-      product_audit_id: logData.product_audit_id || null,
-      notes: logData.notes || null,
-    },
-    include: {
-      user: { select: { id: true, first_name: true, last_name: true } },
-      product: { select: { product_id: true, name: true, product_code: true } },
-      entryOrderProduct: {
-        select: {
-          entry_order_product_id: true,
-          entry_order: {  // Fixed: Use snake_case as defined in schema
-            select: {
-              entry_order_no: true,
-              entry_order_id: true,
-            },
-          },
-        },
-      },
-    },
-  });
-}
+/**
+ * Get approved entry orders ready for inventory assignment
+ */
+async function getApprovedEntryOrdersForInventory(organisationId = null) {
+  const where = {
+    review_status: "APPROVED",
+  };
 
-/** Get all logs by entry order */
-async function getLogsByEntryOrder(entryOrderId) {
-  return prisma.inventoryLog.findMany({
-    where: { entry_order_id: entryOrderId },
-    include: {
-      user: { select: { id: true, first_name: true, last_name: true } },
-      product: { select: { product_id: true, name: true, product_code: true } },
-      entryOrderProduct: {
-        select: {
-          entry_order_product_id: true,
-          packaging_type: true,
-          packaging_status: true,
-          audit_status: true,
-        },
-      },
-      cell: {  // Fixed: Use 'cell' as defined in schema
-        select: {
-          id: true,
-          row: true,
-          bay: true,
-          position: true,
-        },
-      },
-    },
-    orderBy: { timestamp: "desc" },
-  });
-}
-
-/** Get all logs by departure order */
-async function getLogsByDepartureOrder(departureOrderId) {
-  return prisma.inventoryLog.findMany({
-    where: { departure_order_id: departureOrderId },
-    include: {
-      user: { select: { id: true, first_name: true, last_name: true } },
-      product: { select: { product_id: true, name: true, product_code: true } },
-      departureOrderProduct: {
-        select: {
-          departure_order_product_id: true,
-          packaging_type: true,
-          packaging_status: true,
-          total_qty: true,
-          total_weight: true,
-          // ✅ FIXED: Include the departure order details
-          departure_order: {
-            select: {
-              departure_order_no: true,
-              departure_order_id: true,
-            },
-          },
-        },
-      },
-      cell: {
-        select: {
-          id: true,
-          row: true,
-          bay: true,
-          position: true,
-        },
-      },
-    },
-    orderBy: { timestamp: "desc" },
-  });
-}
-
-/** Get logs by specific entry order product */
-async function getLogsByEntryOrderProduct(entryOrderProductId) {
-  return prisma.inventoryLog.findMany({
-    where: { entry_order_product_id: entryOrderProductId },
-    include: {
-      user: { select: { id: true, first_name: true, last_name: true } },
-      product: { select: { product_id: true, name: true, product_code: true } },
-      cell: {  // Fixed: Use 'cell' as defined in schema
-        select: {
-          id: true,
-          row: true,
-          bay: true,
-          position: true,
-        },
-      },
-    },
-    orderBy: { timestamp: "desc" },
-  });
-}
-
-/** Get a single log by ID */
-async function getInventoryLogById(logId) {
-  return prisma.inventoryLog.findUnique({
-    where: { log_id: logId },
-    include: {
-      user: { select: { id: true, first_name: true, last_name: true } },
-      product: { select: { product_id: true, name: true, product_code: true } },
-      entryOrderProduct: {
-        select: {
-          entry_order_product_id: true,
-          packaging_type: true,
-          packaging_status: true,
-          audit_status: true,
-          entry_order: {  // Fixed: Use snake_case as defined in schema
-            select: {
-              entry_order_no: true,
-            },
-          },
-        },
-      },
-      cell: {  // Fixed: Use 'cell' as defined in schema
-        select: {
-          id: true,
-          row: true,
-          bay: true,
-          position: true,
-        },
-      },
-    },
-  });
-}
-
-/** Get all logs with optional filters */
-async function getAllInventoryLogs(filters = {}) {
-  const where = {};
-  if (filters.movement_type) where.movement_type = filters.movement_type;
-  if (filters.user_id) where.user_id = filters.user_id;
-  if (filters.product_id) where.product_id = filters.product_id;
-  if (filters.entry_order_product_id) where.entry_order_product_id = filters.entry_order_product_id;
-  if (filters.warehouse_id) where.warehouse_id = filters.warehouse_id;
-  if (filters.start_date && filters.end_date) {
-    where.timestamp = {
-      gte: new Date(filters.start_date),
-      lte: new Date(filters.end_date),
-    };
+  // Filter by organisation if provided (for non-admin users)
+  if (organisationId) {
+    where.order = { organisation_id: organisationId };
   }
-  
-  return prisma.inventoryLog.findMany({
+
+  const orders = await prisma.entryOrder.findMany({
     where,
-    include: {
-      user: { select: { id: true, first_name: true, last_name: true } },
-      product: { select: { product_id: true, name: true, product_code: true } },
-      entryOrderProduct: {
+    select: {
+      entry_order_id: true,
+      entry_order_no: true,
+      registration_date: true,
+      document_date: true,
+      entry_date_time: true,
+      review_status: true,
+      total_volume: true,
+      total_weight: true,
+      total_pallets: true,
+      observation: true,
+      
+      // Relations
+      origin: { 
+        select: { 
+          name: true, 
+          type: true 
+        } 
+      },
+      documentType: { 
+        select: { 
+          name: true, 
+          type: true 
+        } 
+      },
+      warehouse: { 
+        select: { 
+          warehouse_id: true,
+          name: true 
+        } 
+      },
+      creator: { 
+        select: { 
+          first_name: true, 
+          last_name: true,
+          organisation: { select: { name: true } }
+        } 
+      },
+      
+      // Products in this entry order
+      products: {
         select: {
           entry_order_product_id: true,
-          packaging_type: true,
-          packaging_status: true,
-          audit_status: true,
-          entry_order: {  // Fixed: Use snake_case as defined in schema
+          serial_number: true,
+          product_code: true,
+          lot_series: true,
+          inventory_quantity: true,
+          package_quantity: true,
+          quantity_pallets: true,
+          presentation: true,
+          weight_kg: true,
+          volume_m3: true,
+          insured_value: true,
+          temperature_range: true,
+          guide_number: true,
+          
+          product: {
             select: {
-              entry_order_no: true,
-              entry_order_id: true,
+              product_id: true,
+              product_code: true,
+              name: true,
             },
           },
-        },
-      },
-      departureOrderProduct: {
-        select: {
-          departure_order_product_id: true,
-          departure_order: {  // Fixed: Use snake_case as defined in schema
+          
+          supplier: {
             select: {
-              departure_order_no: true,
-              departure_order_id: true,
+              supplier_id: true,
+              name: true,
             },
           },
-        },
-      },
-      cell: {  // Fixed: Use 'cell' as defined in schema
-        select: {
-          id: true,
-          row: true,
-          bay: true,
-          position: true,
+          
+          // Check existing allocations
+          inventoryAllocations: {
+            select: {
+              allocation_id: true,
+              inventory_quantity: true,
+              package_quantity: true,
+              weight_kg: true,
+            },
+          },
         },
       },
     },
-    orderBy: { timestamp: filters.sort === "asc" ? "asc" : "desc" },
+    orderBy: { registration_date: "desc" },
   });
-}
 
-/** Get statistics counts per movement type */
-async function getInventoryLogStatistics() {
-  const [entries, departures, transfers, adjustments, total] =
-    await prisma.$transaction([
-      prisma.inventoryLog.count({
-        where: { movement_type: MovementType.ENTRY },
+  return orders.map((order) => {
+    // Calculate total quantities and allocation status
+    const totalInventoryQuantity = order.products.reduce((sum, p) => sum + p.inventory_quantity, 0);
+    const totalPackageQuantity = order.products.reduce((sum, p) => sum + p.package_quantity, 0);
+    const totalWeight = order.products.reduce((sum, p) => sum + parseFloat(p.weight_kg), 0);
+    
+    // Calculate allocated quantities
+    const totalAllocatedQuantity = order.products.reduce((sum, p) => 
+      sum + p.inventoryAllocations.reduce((allocSum, alloc) => allocSum + alloc.inventory_quantity, 0), 0
+    );
+    
+    const allocationPercentage = totalInventoryQuantity > 0 ? (totalAllocatedQuantity / totalInventoryQuantity) * 100 : 0;
+    const isFullyAllocated = totalAllocatedQuantity >= totalInventoryQuantity;
+    
+    // Filter products that still need allocation
+    const productsNeedingAllocation = order.products.filter(product => {
+      const allocatedQuantity = product.inventoryAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+      return allocatedQuantity < product.inventory_quantity;
+    });
+
+    return {
+      ...order,
+      creator_name: `${order.creator.first_name || ""} ${order.creator.last_name || ""}`.trim(),
+      organisation_name: order.creator.organisation.name,
+      
+      // Totals
+      total_inventory_quantity: totalInventoryQuantity,
+      total_package_quantity: totalPackageQuantity,
+      calculated_total_weight: totalWeight,
+      
+      // Allocation status
+      total_allocated_quantity: totalAllocatedQuantity,
+      allocation_percentage: allocationPercentage,
+      is_fully_allocated: isFullyAllocated,
+      products_needing_allocation: productsNeedingAllocation.length,
+      
+      // Only include products that need allocation in the main products array
+      products: productsNeedingAllocation.map(product => {
+        const allocatedQuantity = product.inventoryAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+        
+        return {
+          ...product,
+          supplier_name: product.supplier?.name,
+          allocated_quantity: allocatedQuantity,
+          remaining_quantity: product.inventory_quantity - allocatedQuantity,
+        };
       }),
-      prisma.inventoryLog.count({
-        where: { movement_type: MovementType.DEPARTURE },
-      }),
-      prisma.inventoryLog.count({
-        where: { movement_type: MovementType.TRANSFER },
-      }),
-      prisma.inventoryLog.count({
-        where: { movement_type: MovementType.ADJUSTMENT },
-      }),
-      prisma.inventoryLog.count(),
-    ]);
-  return { entries, departures, transfers, adjustments, total };
+    };
+  }).filter(order => order.products_needing_allocation > 0); // Only return orders that still need allocation
 }
 
 /**
- * NEW: Assign a specific entry order product to a warehouse cell
+ * Get specific entry order products for inventory assignment
+ */
+async function getEntryOrderProductsForInventory(entryOrderId) {
+  const entryOrder = await prisma.entryOrder.findUnique({
+    where: { 
+      entry_order_id: entryOrderId,
+      review_status: "APPROVED" 
+    },
+    select: {
+      entry_order_id: true,
+      entry_order_no: true,
+      warehouse_id: true,
+      warehouse: { select: { name: true } },
+      
+      products: {
+        select: {
+          entry_order_product_id: true,
+          serial_number: true,
+          product_code: true,
+          lot_series: true,
+          inventory_quantity: true,
+          package_quantity: true,
+          quantity_pallets: true,
+          presentation: true,
+          weight_kg: true,
+          volume_m3: true,
+          insured_value: true,
+          temperature_range: true,
+          guide_number: true,
+          manufacturing_date: true,
+          expiration_date: true,
+          health_registration: true,
+          
+          product: {
+            select: {
+              product_id: true,
+              product_code: true,
+              name: true,
+            },
+          },
+          
+          supplier: {
+            select: {
+              supplier_id: true,
+              name: true,
+            },
+          },
+          
+          // Check existing allocations
+          inventoryAllocations: {
+            select: {
+              allocation_id: true,
+              inventory_quantity: true,
+              package_quantity: true,
+              quantity_pallets: true,
+              weight_kg: true,
+              volume_m3: true,
+              presentation: true,
+              product_status: true,
+              guide_number: true,
+              observations: true,
+              allocated_at: true,
+              
+              cell: {
+                select: {
+                  id: true,
+                  row: true,
+                  bay: true,
+                  position: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!entryOrder) {
+    throw new Error("Entry order not found or not approved");
+  }
+
+  // Transform products with allocation information
+  const transformedProducts = entryOrder.products.map(product => {
+    const allocatedQuantity = product.inventoryAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+    const allocatedWeight = product.inventoryAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.weight_kg || 0), 0);
+    
+    // Transform allocations with cell references
+    const allocations = product.inventoryAllocations.map(allocation => ({
+      ...allocation,
+      cellReference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+    }));
+
+    return {
+      ...product,
+      supplier_name: product.supplier?.name,
+      allocated_quantity: allocatedQuantity,
+      remaining_quantity: product.inventory_quantity - allocatedQuantity,
+      allocated_weight: allocatedWeight,
+      remaining_weight: parseFloat(product.weight_kg) - allocatedWeight,
+      can_allocate: allocatedQuantity < product.inventory_quantity,
+      allocations: allocations,
+    };
+  });
+
+  return {
+    ...entryOrder,
+    products: transformedProducts,
+  };
+}
+
+/**
+ * Assign a specific entry order product to a warehouse cell
  */
 async function assignProductToCell(assignmentData) {
   const {
     entry_order_product_id,
     cell_id,
     assigned_by,
-    packaging_quantity,
-    weight,
-    volume,
+    inventory_quantity,
+    package_quantity,
+    quantity_pallets,
+    presentation,
+    weight_kg,
+    volume_m3,
+    guide_number,
+    product_status,
+    uploaded_documents,
+    observations,
     warehouse_id,
   } = assignmentData;
 
   return await prisma.$transaction(async (tx) => {
-    // 1. Validate entry order product exists and audit passed
+    // 1. Validate entry order product exists and is approved
     const entryOrderProduct = await tx.entryOrderProduct.findUnique({
       where: { entry_order_product_id },
       include: {
@@ -266,10 +298,11 @@ async function assignProductToCell(assignmentData) {
             name: true,
           },
         },
-        entry_order: {  // Fixed: Use snake_case as defined in schema
+        entry_order: {
           select: {
             entry_order_id: true,
             entry_order_no: true,
+            review_status: true,
           },
         },
       },
@@ -279,141 +312,163 @@ async function assignProductToCell(assignmentData) {
       throw new Error("Entry order product not found");
     }
 
-    if (entryOrderProduct.audit_status !== AuditResult.PASSED) {
-      throw new Error(
-        "Cannot assign inventory for products that have not passed audit"
-      );
+    if (entryOrderProduct.entry_order.review_status !== "APPROVED") {
+      throw new Error("Cannot assign inventory for products from non-approved entry orders");
     }
 
-    // 2. Check remaining quantities for this specific product
-    if (entryOrderProduct.remaining_packaging_qty < packaging_quantity) {
-      throw new Error(
-        `Not enough remaining packaging quantity for this product. Available: ${entryOrderProduct.remaining_packaging_qty}`
-      );
+    // 2. Check available quantities
+    const existingAllocations = await tx.inventoryAllocation.findMany({
+      where: { entry_order_product_id },
+    });
+    
+    const totalAllocatedQuantity = existingAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+    const totalAllocatedWeight = existingAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.weight_kg), 0);
+    
+    const availableQuantity = entryOrderProduct.inventory_quantity - totalAllocatedQuantity;
+    const availableWeight = parseFloat(entryOrderProduct.weight_kg) - totalAllocatedWeight;
+
+    if (inventory_quantity > availableQuantity) {
+      throw new Error(`Not enough inventory quantity. Available: ${availableQuantity}, Requested: ${inventory_quantity}`);
     }
-    if (parseFloat(entryOrderProduct.remaining_weight) < parseFloat(weight)) {
-      throw new Error(
-        `Not enough remaining weight for this product. Available: ${entryOrderProduct.remaining_weight}`
-      );
+    
+    if (parseFloat(weight_kg) > availableWeight) {
+      throw new Error(`Not enough weight. Available: ${availableWeight.toFixed(2)} kg, Requested: ${weight_kg} kg`);
     }
 
-    // 3. Verify cell
+    // 3. Verify cell availability
     const cell = await tx.warehouseCell.findUnique({
       where: { id: cell_id },
     });
+    
     if (!cell) {
       throw new Error("Cell not found");
     }
+    
     if (cell.status !== "AVAILABLE") {
       throw new Error("Cell is not available for assignment");
     }
 
-    // 4. Create assignment (link to specific product)
-    const assignment = await tx.cellAssignment.create({
-      data: {
-        entry_order_product_id,
-        cell_id,
-        assigned_by,
-        packaging_quantity: parseInt(packaging_quantity),
-        weight: parseFloat(weight),
-        volume: volume ? parseFloat(volume) : null,
-        status: "ACTIVE",
-        packaging_type: entryOrderProduct.packaging_type,
-        packaging_status: entryOrderProduct.packaging_status,
-        packaging_code: entryOrderProduct.packaging_code,
-      },
-    });
+    // 4. ✅ FIXED: Convert product status string to enum and get status code
+    const convertProductStatusToEnum = (statusString, presentation) => {
+      // If it's already an enum value, return it
+      if (!statusString.includes('-')) {
+        return statusString;
+      }
 
-    // 5. Upsert inventory (with product-specific information)
-    await tx.inventory.upsert({
-      where: {
-        product_wh_cell_entry_idx: {  // Fixed: Use correct unique constraint name from schema
-          product_id: entryOrderProduct.product_id,
-          warehouse_id: warehouse_id,
-          cell_id,
-          entry_order_product_id,
-        },
-      },
-      update: {
-        quantity: { increment: parseInt(packaging_quantity) },
-        packaging_quantity: { increment: parseInt(packaging_quantity) },
-        weight: { increment: parseFloat(weight) },
-        status: "AVAILABLE",
-      },
-      create: {
-        product_id: entryOrderProduct.product_id,
+      // Extract the condition from the status string (e.g., "30-PAL-NORMAL" -> "NORMAL")
+      const parts = statusString.split('-');
+      const condition = parts[parts.length - 1]; // NORMAL, DAÑADA, etc.
+      const isDamaged = condition.includes('DAÑAD') || condition === 'DAÑADA';
+
+      // Map presentation to enum
+      const enumMap = {
+        PALETA: isDamaged ? 'PAL_DANADA' : 'PAL_NORMAL',
+        CAJA: isDamaged ? 'CAJ_DANADA' : 'CAJ_NORMAL',
+        SACO: isDamaged ? 'SAC_DANADO' : 'SAC_NORMAL',
+        UNIDAD: isDamaged ? 'UNI_DANADA' : 'UNI_NORMAL',
+        PAQUETE: isDamaged ? 'PAQ_DANADO' : 'PAQ_NORMAL',
+        TAMBOS: isDamaged ? 'TAM_DANADO' : 'TAM_NORMAL',
+        BULTO: isDamaged ? 'BUL_DANADO' : 'BUL_NORMAL',
+        OTRO: isDamaged ? 'OTR_DANADO' : 'OTR_NORMAL',
+      };
+
+      return enumMap[presentation] || 'OTR_NORMAL';
+    };
+
+    const getStatusCode = (presentation, isDamaged = false) => {
+      const statusMap = {
+        PALETA: isDamaged ? 40 : 30,
+        CAJA: isDamaged ? 41 : 31,
+        SACO: isDamaged ? 42 : 32,
+        UNIDAD: isDamaged ? 43 : 33,
+        PAQUETE: isDamaged ? 44 : 34,
+        TAMBOS: isDamaged ? 45 : 35,
+        BULTO: isDamaged ? 46 : 36,
+        OTRO: isDamaged ? 47 : 37,
+      };
+      return statusMap[presentation] || 37;
+    };
+
+    // Convert the product status to the correct enum value
+    const productStatusEnum = convertProductStatusToEnum(product_status, presentation);
+    const isDamaged = product_status.includes("DAÑAD") || product_status.includes("DAÑADA");
+    const statusCode = getStatusCode(presentation, isDamaged);
+
+    // 5. Create inventory allocation
+    const allocation = await tx.inventoryAllocation.create({
+      data: {
         entry_order_id: entryOrderProduct.entry_order_id,
         entry_order_product_id,
-        warehouse_id,
+        inventory_quantity: parseInt(inventory_quantity),
+        package_quantity: parseInt(package_quantity),
+        quantity_pallets: parseInt(quantity_pallets) || null,
+        presentation,
+        weight_kg: parseFloat(weight_kg),
+        volume_m3: parseFloat(volume_m3) || null,
         cell_id,
-        quantity: parseInt(packaging_quantity),
-        packaging_quantity: parseInt(packaging_quantity),
-        weight: parseFloat(weight),
-        volume: volume ? parseFloat(volume) : null,
-        status: "AVAILABLE",
-        expiration_date: entryOrderProduct.expiration_date,
-        packaging_type: entryOrderProduct.packaging_type,
-        packaging_status: entryOrderProduct.packaging_status,
-        packaging_code: entryOrderProduct.packaging_code,
+        product_status: productStatusEnum, // ✅ FIXED: Use enum value
+        status_code: statusCode,
+        guide_number,
+        uploaded_documents,
+        observations,
+        allocated_by: assigned_by,
       },
     });
 
-    // 6. Update cell status
+    // 6. Create actual inventory record
+    await tx.inventory.create({
+      data: {
+        allocation_id: allocation.allocation_id,
+        product_id: entryOrderProduct.product_id,
+        cell_id,
+        warehouse_id,
+        current_quantity: parseInt(inventory_quantity),
+        current_package_quantity: parseInt(package_quantity),
+        current_weight: parseFloat(weight_kg),
+        current_volume: parseFloat(volume_m3) || null,
+        status: "AVAILABLE",
+        product_status: productStatusEnum, // ✅ FIXED: Use enum value
+        status_code: statusCode,
+      },
+    });
+
+    // 7. Update cell status
     await tx.warehouseCell.update({
       where: { id: cell_id },
       data: {
         status: "OCCUPIED",
-        currentUsage: 1,
-        current_packaging_qty: { increment: parseInt(packaging_quantity) },
-        current_weight: { increment: parseFloat(weight) },
+        currentUsage: { increment: parseFloat(volume_m3) || 0 },
+        current_packaging_qty: { increment: parseInt(package_quantity) },
+        current_weight: { increment: parseFloat(weight_kg) },
       },
     });
 
-    // 7. Log inventory movement (with product-specific tracking)
-    const cellRef = `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(
-      cell.position
-    ).padStart(2, "0")}`;
+    // 8. Log inventory movement
+    const cellRef = `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(cell.position).padStart(2, "0")}`;
     
     await tx.inventoryLog.create({
       data: {
         user_id: assigned_by,
         product_id: entryOrderProduct.product_id,
         movement_type: "ENTRY",
-        quantity_change: parseInt(packaging_quantity),
-        packaging_change: parseInt(packaging_quantity),
-        weight_change: parseFloat(weight),
+        quantity_change: parseInt(inventory_quantity),
+        package_change: parseInt(package_quantity),
+        weight_change: parseFloat(weight_kg),
+        volume_change: parseFloat(volume_m3) || null,
         entry_order_id: entryOrderProduct.entry_order_id,
         entry_order_product_id,
+        allocation_id: allocation.allocation_id,
         warehouse_id,
         cell_id,
-        cell_assignment_id: assignment.assignment_id,
-        packaging_type: entryOrderProduct.packaging_type,
-        packaging_status: entryOrderProduct.packaging_status,
-        packaging_code: entryOrderProduct.packaging_code,
-        notes: `Assigned ${packaging_quantity} packages (${parseFloat(
-          weight
-        ).toFixed(2)} kg) of ${entryOrderProduct.product.product_code} to cell ${cellRef}`,
-      },
-    });
-
-    // 8. Update entry order product quantities
-    const updatedProduct = await tx.entryOrderProduct.update({
-      where: { entry_order_product_id },
-      data: {
-        remaining_packaging_qty: {
-          decrement: parseInt(packaging_quantity),
-        },
-        remaining_weight: {
-          decrement: parseFloat(weight),
-        },
+        product_status: productStatusEnum, // ✅ FIXED: Use enum value
+        status_code: statusCode,
+        notes: `Assigned ${inventory_quantity} units (${package_quantity} packages, ${parseFloat(weight_kg).toFixed(2)} kg) of ${entryOrderProduct.product.product_code} to cell ${cellRef}`,
       },
     });
 
     return {
-      assignment,
+      allocation,
       cellReference: cellRef,
-      remainingPackaging: updatedProduct.remaining_packaging_qty,
-      remainingWeight: updatedProduct.remaining_weight,
       product: entryOrderProduct.product,
     };
   });
@@ -423,193 +478,13 @@ async function assignProductToCell(assignmentData) {
  * Get available cells in a specific warehouse for assignment
  */
 async function getAvailableCells(warehouseId) {
-  if (!warehouseId) {
-    throw new Error("Warehouse ID is required");
-  }
-
-  const availableCells = await prisma.warehouseCell.findMany({
+  return await prisma.warehouseCell.findMany({
     where: {
       warehouse_id: warehouseId,
       status: "AVAILABLE",
     },
-    orderBy: [{ row: "asc" }, { bay: "asc" }, { position: "asc" }],
     select: {
       id: true,
-      row: true,
-      bay: true,
-      position: true,
-      kind: true,
-      capacity: true,
-      warehouse: {
-        select: {
-          warehouse_id: true,
-          name: true,
-        },
-      },
-    },
-  });
-
-  // Format cell references for easier consumption
-  return availableCells.map((cell) => ({
-    cell_id: cell.id,
-    cellReference: `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(
-      cell.position
-    ).padStart(2, "0")}`,
-    kind: cell.kind,
-    capacity: cell.capacity,
-    warehouse: cell.warehouse,
-  }));
-}
-
-/**
- * NEW: Get products from entry orders that are ready for assignment (audit passed)
- */
-async function getProductsReadyForAssignment() {
-  const where = {
-    audit_status: AuditResult.PASSED,
-    remaining_packaging_qty: { gt: 0 },
-  };
-
-  return prisma.entryOrderProduct.findMany({
-    where,
-    select: {
-      entry_order_product_id: true,
-      remaining_packaging_qty: true,
-      remaining_weight: true,
-      packaging_type: true,
-      packaging_status: true,
-      packaging_code: true,
-      expiration_date: true,
-      product: {
-        select: {
-          product_id: true,
-          product_code: true,
-          name: true,
-        },
-      },
-      entry_order: {  // Fixed: Use snake_case as defined in schema
-        select: {
-          entry_order_id: true,
-          entry_order_no: true,
-          supplier: {
-            select: {
-              name: true,
-            },
-          },
-        },
-      },
-      // Include existing assignments (can be across multiple warehouses)
-      cellAssignments: {
-        where: { status: "ACTIVE" },
-        select: {
-          assignment_id: true,
-          packaging_quantity: true,
-          weight: true,
-          cell: {
-            select: {
-              id: true,
-              row: true,
-              bay: true,
-              position: true,
-              warehouse: {
-                select: {
-                  warehouse_id: true,
-                  name: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    orderBy: [
-      { entry_order: { entry_date: "asc" } },  // Fixed: Use snake_case
-      { product: { product_code: "asc" } },
-    ],
-  });
-}
-
-/**
- * NEW: Get inventory summary by product and location
- */
-async function getInventorySummary(filters = {}) {
-  const where = {};
-  
-  if (filters.warehouse_id) where.warehouse_id = filters.warehouse_id;
-  if (filters.product_id) where.product_id = filters.product_id;
-  if (filters.status) where.status = filters.status;
-
-  return prisma.inventory.findMany({
-    where,
-    include: {
-      product: {
-        select: {
-          product_id: true,
-          product_code: true,
-          name: true,
-        },
-      },
-      entry_order_product: {  // Fixed: Use snake_case as defined in schema
-        select: {
-          entry_order_product_id: true,
-          packaging_type: true,
-          packaging_status: true,
-          audit_status: true,
-          entry_order: {  // Fixed: Use snake_case as defined in schema
-            select: {
-              entry_order_no: true,
-            },
-          },
-        },
-      },
-      warehouse: {
-        select: {
-          warehouse_id: true,
-          name: true,
-        },
-      },
-      cell: {  // Fixed: Use 'cell' as defined in schema
-        select: {
-          id: true,
-          row: true,
-          bay: true,
-          position: true,
-        },
-      },
-    },
-    orderBy: [
-      { product: { product_code: "asc" } },
-      { cell: { row: "asc" } },  // Fixed: Use 'cell' as defined in schema
-      { cell: { bay: "asc" } },
-      { cell: { position: "asc" } },
-    ],
-  });
-}
-
-/** Fetch all warehouses */
-async function getAllWarehouses() {
-  return prisma.warehouse.findMany({
-    select: {
-      warehouse_id: true,
-      name: true,
-      location: true,
-      capacity: true,
-      status: true,
-    },
-  });
-}
-
-/** Fetch warehouse cells with optional status filter */
-async function getWarehouseCells(warehouseId = null, status = null) {
-  const where = {};
-  if (warehouseId) where.warehouse_id = warehouseId;
-  if (status) where.status = status;
-  
-  return prisma.warehouseCell.findMany({
-    where,
-    select: {
-      id: true,
-      warehouse_id: true,
       row: true,
       bay: true,
       position: true,
@@ -618,22 +493,131 @@ async function getWarehouseCells(warehouseId = null, status = null) {
       current_packaging_qty: true,
       current_weight: true,
       status: true,
+      kind: true,           // ✅ FIXED: Use 'kind' instead of 'cellKind'
+      cell_role: true,      // ✅ FIXED: Use 'cell_role' instead of 'cellRole'
+    },
+    orderBy: [{ row: "asc" }, { bay: "asc" }, { position: "asc" }],
+  });
+}
+
+/**
+ * Get inventory summary by product and location
+ */
+async function getInventorySummary(filters = {}) {
+  const { warehouse_id, product_id, status } = filters;
+
+  const where = {};
+  if (warehouse_id) where.warehouse_id = warehouse_id;
+  if (product_id) where.product_id = product_id;
+  if (status) where.status = status;
+
+  return await prisma.inventory.findMany({
+    where,
+    select: {
+      inventory_id: true,
+      current_quantity: true,
+      current_package_quantity: true,
+      current_weight: true,
+      current_volume: true,
+      status: true,
+      product_status: true,
+      status_code: true,
+
+      product: {
+        select: {
+          product_id: true,
+          product_code: true,
+          name: true,
+        },
+      },
+
+      cell: {
+        select: {
+          id: true,
+          row: true,
+          bay: true,
+          position: true,
+        },
+      },
+
+      warehouse: {
+        select: {
+          warehouse_id: true,
+          name: true,
+        },
+      },
+
+      allocation: {
+        select: {
+          allocation_id: true,
+          guide_number: true,
+          observations: true,
+          allocated_at: true,
+
+          entry_order: {
+            select: {
+              entry_order_no: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: [
+      { warehouse: { name: "asc" } },
+      { product: { product_code: "asc" } },
+      { cell: { row: "asc" } },
+      { cell: { bay: "asc" } },
+      { cell: { position: "asc" } },
+    ],
+  });
+}
+
+/** Fetch all warehouses */
+async function getAllWarehouses() {
+  return await prisma.warehouse.findMany({
+    where: {
+      status: "ACTIVE",
+    },
+    select: {
+      warehouse_id: true,
+      name: true,
+      location: true,
+      capacity: true,
+      max_occupancy: true,
+    },
+    orderBy: { name: "asc" },
+  });
+}
+
+/** Fetch warehouse cells with optional status filter */
+async function getWarehouseCells(warehouseId, statusFilter = null) {
+  const where = { warehouse_id: warehouseId };
+  if (statusFilter) where.status = statusFilter;
+
+  return await prisma.warehouseCell.findMany({
+    where,
+    select: {
+      id: true,
+      row: true,
+      bay: true,
+      position: true,
+      capacity: true,
+      currentUsage: true,
+      current_packaging_qty: true,
+      current_weight: true,
+      status: true,
+      kind: true,           // ✅ FIXED: Use 'kind' instead of 'cellKind'
+      cell_role: true,      // ✅ FIXED: Use 'cell_role' instead of 'cellRole'
     },
     orderBy: [{ row: "asc" }, { bay: "asc" }, { position: "asc" }],
   });
 }
 
 module.exports = {
-  createInventoryLog,
-  getLogsByEntryOrder,
-  getLogsByDepartureOrder,
-  getLogsByEntryOrderProduct,
-  getInventoryLogById,
-  getAllInventoryLogs,
-  getInventoryLogStatistics,
+  getApprovedEntryOrdersForInventory,
+  getEntryOrderProductsForInventory,
   assignProductToCell,
   getAvailableCells,
-  getProductsReadyForAssignment,
   getInventorySummary,
   getAllWarehouses,
   getWarehouseCells,

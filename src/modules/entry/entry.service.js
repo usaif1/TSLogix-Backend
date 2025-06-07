@@ -1,4 +1,10 @@
-const { PrismaClient, ReviewStatus, OrderStatusEntry, TemperatureRangeType, PresentationType } = require("@prisma/client");
+const {
+  PrismaClient,
+  ReviewStatus,
+  OrderStatusEntry,
+  TemperatureRangeType,
+  PresentationType,
+} = require("@prisma/client");
 const { toUTC } = require("../../utils/index");
 const prisma = new PrismaClient();
 
@@ -24,7 +30,7 @@ async function createEntryOrder(entryData) {
       data: {
         order_id: newOrder.order_id,
         entry_order_no: entryData.entry_order_no,
-        
+
         // Basic order info
         origin_id: entryData.origin_id,
         document_type_id: entryData.document_type_id,
@@ -32,7 +38,7 @@ async function createEntryOrder(entryData) {
         document_date: toUTC(entryData.document_date),
         entry_date_time: toUTC(entryData.entry_date_time),
         created_by: entryData.created_by,
-        
+
         // Order details
         order_status: entryData.order_status || OrderStatusEntry.REVISION,
         total_volume: parseFloat(entryData.total_volume) || null,
@@ -40,13 +46,13 @@ async function createEntryOrder(entryData) {
         cif_value: parseFloat(entryData.cif_value) || null,
         total_pallets: parseInt(entryData.total_pallets) || null,
         observation: entryData.observation,
-        
+
         // Document uploads
         uploaded_documents: entryData.uploaded_documents || null,
-        
+
         // Review status (initially pending)
         review_status: ReviewStatus.PENDING,
-        
+
         // Warehouse assignment (will be set later)
         warehouse_id: entryData.warehouse_id || null,
       },
@@ -59,18 +65,18 @@ async function createEntryOrder(entryData) {
         const entryOrderProduct = await tx.entryOrderProduct.create({
           data: {
             entry_order_id: newEntryOrder.entry_order_id,
-            
+
             // Product identification
             serial_number: productData.serial_number,
             supplier_id: productData.supplier_id,
             product_code: productData.product_code,
             product_id: productData.product_id,
             lot_series: productData.lot_series,
-            
+
             // Dates
             manufacturing_date: toUTC(productData.manufacturing_date),
             expiration_date: toUTC(productData.expiration_date),
-            
+
             // Quantities (as received)
             inventory_quantity: parseInt(productData.inventory_quantity),
             package_quantity: parseInt(productData.package_quantity),
@@ -80,9 +86,10 @@ async function createEntryOrder(entryData) {
             weight_kg: parseFloat(productData.weight_kg),
             volume_m3: parseFloat(productData.volume_m3) || null,
             insured_value: parseFloat(productData.insured_value) || null,
-            
+
             // Environmental conditions
-            temperature_range: productData.temperature_range || TemperatureRangeType.AMBIENTE,
+            temperature_range:
+              productData.temperature_range || TemperatureRangeType.AMBIENTE,
             humidity: productData.humidity,
             health_registration: productData.health_registration,
           },
@@ -120,20 +127,20 @@ async function getAllEntryOrders(
       uploaded_documents: true,
       review_comments: true,
       reviewed_at: true,
-      
+
       // Relations
       origin: { select: { name: true, type: true } },
       documentType: { select: { name: true, type: true } },
       warehouse: { select: { name: true, warehouse_id: true } },
-      creator: { 
-        select: { 
-          first_name: true, 
+      creator: {
+        select: {
+          first_name: true,
           last_name: true,
-          organisation: { select: { name: true } }
-        } 
+          organisation: { select: { name: true } },
+        },
       },
-      reviewer: { 
-        select: { first_name: true, last_name: true } 
+      reviewer: {
+        select: { first_name: true, last_name: true },
       },
       order: {
         select: {
@@ -142,7 +149,7 @@ async function getAllEntryOrders(
           priority: true,
         },
       },
-      
+
       // Include products with new schema
       products: {
         select: {
@@ -163,7 +170,7 @@ async function getAllEntryOrders(
           temperature_range: true,
           humidity: true,
           health_registration: true,
-          
+
           // Product relation
           product: {
             select: {
@@ -172,7 +179,7 @@ async function getAllEntryOrders(
               name: true,
             },
           },
-          
+
           // Supplier relation
           supplier: {
             select: {
@@ -182,7 +189,7 @@ async function getAllEntryOrders(
           },
         },
       },
-      
+
       // Inventory allocations (filled by warehouse)
       inventoryAllocations: {
         select: {
@@ -194,7 +201,7 @@ async function getAllEntryOrders(
           status_code: true,
           allocated_at: true,
           observations: true,
-          
+
           // Cell assignment
           cell: {
             select: {
@@ -205,7 +212,7 @@ async function getAllEntryOrders(
               status: true,
             },
           },
-          
+
           // Allocator
           allocator: {
             select: {
@@ -217,7 +224,8 @@ async function getAllEntryOrders(
       },
     },
     orderBy: {
-      [sortOptions?.orderBy || "registration_date"]: sortOptions?.direction || "desc",
+      [sortOptions?.orderBy || "registration_date"]:
+        sortOptions?.direction || "desc",
     },
     where: {},
   };
@@ -239,55 +247,80 @@ async function getAllEntryOrders(
   return orders.map((order) => {
     // Calculate totals from products
     const totalInventoryQuantity = order.products.reduce(
-      (sum, p) => sum + p.inventory_quantity, 0
+      (sum, p) => sum + p.inventory_quantity,
+      0
     );
     const totalPackageQuantity = order.products.reduce(
-      (sum, p) => sum + p.package_quantity, 0
+      (sum, p) => sum + p.package_quantity,
+      0
     );
     const totalWeight = order.products.reduce(
-      (sum, p) => sum + parseFloat(p.weight_kg), 0
+      (sum, p) => sum + parseFloat(p.weight_kg),
+      0
     );
     const totalVolume = order.products.reduce(
-      (sum, p) => sum + parseFloat(p.volume_m3 || 0), 0
+      (sum, p) => sum + parseFloat(p.volume_m3 || 0),
+      0
     );
     const totalInsuredValue = order.products.reduce(
-      (sum, p) => sum + parseFloat(p.insured_value || 0), 0
+      (sum, p) => sum + parseFloat(p.insured_value || 0),
+      0
     );
 
     // Calculate allocated quantities
     const totalAllocatedQuantity = order.inventoryAllocations.reduce(
-      (sum, a) => sum + a.inventory_quantity, 0
+      (sum, a) => sum + a.inventory_quantity,
+      0
     );
     const totalAllocatedWeight = order.inventoryAllocations.reduce(
-      (sum, a) => sum + parseFloat(a.weight_kg), 0
+      (sum, a) => sum + parseFloat(a.weight_kg),
+      0
     );
 
     // Transform allocations with cell references
-    const transformedAllocations = order.inventoryAllocations?.map((allocation) => ({
-      ...allocation,
-      cellReference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
-      allocator_name: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
-    }));
+    const transformedAllocations = order.inventoryAllocations?.map(
+      (allocation) => ({
+        ...allocation,
+        cellReference: `${allocation.cell.row}.${String(
+          allocation.cell.bay
+        ).padStart(2, "0")}.${String(allocation.cell.position).padStart(
+          2,
+          "0"
+        )}`,
+        allocator_name: `${allocation.allocator.first_name || ""} ${
+          allocation.allocator.last_name || ""
+        }`.trim(),
+      })
+    );
 
     return {
       ...order,
-      creator_name: `${order.creator.first_name || ""} ${order.creator.last_name || ""}`.trim(),
-      reviewer_name: order.reviewer ? `${order.reviewer.first_name || ""} ${order.reviewer.last_name || ""}`.trim() : null,
+      creator_name: `${order.creator.first_name || ""} ${
+        order.creator.last_name || ""
+      }`.trim(),
+      reviewer_name: order.reviewer
+        ? `${order.reviewer.first_name || ""} ${
+            order.reviewer.last_name || ""
+          }`.trim()
+        : null,
       organisation_name: order.creator.organisation.name,
-      
+
       // Calculated totals
       total_inventory_quantity: totalInventoryQuantity,
       total_package_quantity: totalPackageQuantity,
       calculated_total_weight: totalWeight,
       calculated_total_volume: totalVolume,
       total_insured_value: totalInsuredValue,
-      
+
       // Allocation status
       total_allocated_quantity: totalAllocatedQuantity,
       total_allocated_weight: totalAllocatedWeight,
-      allocation_percentage: totalInventoryQuantity > 0 ? (totalAllocatedQuantity / totalInventoryQuantity) * 100 : 0,
+      allocation_percentage:
+        totalInventoryQuantity > 0
+          ? (totalAllocatedQuantity / totalInventoryQuantity) * 100
+          : 0,
       is_fully_allocated: totalAllocatedQuantity >= totalInventoryQuantity,
-      
+
       // Transform data
       inventoryAllocations: transformedAllocations,
     };
@@ -395,7 +428,7 @@ async function getEntryFormFields() {
   // Enum options for dropdowns
   const originTypes = Object.values({
     COMPRA_LOCAL: "Compra Local",
-    IMPORTACION: "Importación", 
+    IMPORTACION: "Importación",
     DEVOLUCION: "Devolución",
     ACONDICIONADO: "Acondicionado",
     TRANSFERENCIA_INTERNA: "Transferencia Interna",
@@ -403,7 +436,7 @@ async function getEntryFormFields() {
   }).map((label, index) => ({
     value: Object.keys({
       COMPRA_LOCAL: "Compra Local",
-      IMPORTACION: "Importación", 
+      IMPORTACION: "Importación",
       DEVOLUCION: "Devolución",
       ACONDICIONADO: "Acondicionado",
       TRANSFERENCIA_INTERNA: "Transferencia Interna",
@@ -433,12 +466,12 @@ async function getEntryFormFields() {
 
   const orderStatusOptions = Object.values({
     REVISION: "Revisión",
-    PRESENTACION: "Presentación", 
+    PRESENTACION: "Presentación",
     FINALIZACION: "Finalización",
   }).map((label, index) => ({
     value: Object.keys({
       REVISION: "Revisión",
-      PRESENTACION: "Presentación", 
+      PRESENTACION: "Presentación",
       FINALIZACION: "Finalización",
     })[index],
     label,
@@ -505,12 +538,12 @@ async function getEntryFormFields() {
 async function getCurrentEntryOrderNo() {
   const currentYear = new Date().getFullYear().toString().slice(-2);
   const lastOrder = await prisma.entryOrder.findFirst({
-    where: { 
-      entry_order_no: { startsWith: `ENTRY-${currentYear}` } 
+    where: {
+      entry_order_no: { startsWith: `ENTRY-${currentYear}` },
     },
     orderBy: { registration_date: "desc" },
   });
-  
+
   let nextCount = 1;
   if (lastOrder?.entry_order_no) {
     const parts = lastOrder.entry_order_no.split("-");
@@ -518,7 +551,7 @@ async function getCurrentEntryOrderNo() {
       nextCount = parseInt(parts[2]) + 1;
     }
   }
-  
+
   return `ENTRY-${currentYear}-${String(nextCount).padStart(4, "0")}`;
 }
 
@@ -549,52 +582,52 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
       review_status: true,
       review_comments: true,
       reviewed_at: true,
-      
+
       // Relations
-      origin: { 
-        select: { 
-          origin_id: true, 
-          name: true, 
-          type: true 
-        } 
+      origin: {
+        select: {
+          origin_id: true,
+          name: true,
+          type: true,
+        },
       },
-      documentType: { 
-        select: { 
-          document_type_id: true, 
-          name: true, 
-          type: true 
-        } 
+      documentType: {
+        select: {
+          document_type_id: true,
+          name: true,
+          type: true,
+        },
       },
-      warehouse: { 
-        select: { 
-          warehouse_id: true, 
-          name: true, 
-          location: true 
-        } 
+      warehouse: {
+        select: {
+          warehouse_id: true,
+          name: true,
+          location: true,
+        },
       },
-      creator: { 
-        select: { 
+      creator: {
+        select: {
           id: true,
-          first_name: true, 
+          first_name: true,
           last_name: true,
           email: true,
-        } 
+        },
       },
-      reviewer: { 
-        select: { 
+      reviewer: {
+        select: {
           id: true,
-          first_name: true, 
-          last_name: true 
-        } 
+          first_name: true,
+          last_name: true,
+        },
       },
-      order: { 
-        select: { 
+      order: {
+        select: {
           order_id: true,
-          created_at: true, 
+          created_at: true,
           status: true,
           priority: true,
-          organisation: { select: { name: true } }
-        } 
+          organisation: { select: { name: true } },
+        },
       },
 
       // Products with full details
@@ -617,7 +650,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
           temperature_range: true,
           humidity: true,
           health_registration: true,
-          
+
           // Product details
           product: {
             select: {
@@ -639,7 +672,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
               },
             },
           },
-          
+
           // Supplier details
           supplier: {
             select: {
@@ -652,7 +685,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
               country: { select: { name: true } },
             },
           },
-          
+
           // Inventory allocations for this product
           inventoryAllocations: {
             select: {
@@ -669,7 +702,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
               observations: true,
               allocated_at: true,
               status: true,
-              
+
               // Cell assignment
               cell: {
                 select: {
@@ -682,7 +715,7 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
                   currentUsage: true,
                 },
               },
-              
+
               // Allocator info
               allocator: {
                 select: {
@@ -718,8 +751,12 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
   const transformedProducts = order.products.map((product) => {
     const allocations = product.inventoryAllocations?.map((allocation) => ({
       ...allocation,
-      cellReference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
-      allocator_name: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
+      cellReference: `${allocation.cell.row}.${String(
+        allocation.cell.bay
+      ).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+      allocator_name: `${allocation.allocator.first_name || ""} ${
+        allocation.allocator.last_name || ""
+      }`.trim(),
     }));
 
     return {
@@ -739,13 +776,20 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
       volume_m3: acc.volume_m3 + parseFloat(product.volume_m3 || 0),
       insured_value: acc.insured_value + parseFloat(product.insured_value || 0),
     }),
-    { inventory_quantity: 0, package_quantity: 0, weight_kg: 0, volume_m3: 0, insured_value: 0 }
+    {
+      inventory_quantity: 0,
+      package_quantity: 0,
+      weight_kg: 0,
+      volume_m3: 0,
+      insured_value: 0,
+    }
   );
 
   // Calculate allocation totals
   const allocationTotals = order.inventoryAllocations.reduce(
     (acc, allocation) => ({
-      allocated_quantity: acc.allocated_quantity + allocation.inventory_quantity,
+      allocated_quantity:
+        acc.allocated_quantity + allocation.inventory_quantity,
       allocated_weight: acc.allocated_weight + parseFloat(allocation.weight_kg),
     }),
     { allocated_quantity: 0, allocated_weight: 0 }
@@ -753,15 +797,25 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
 
   return {
     ...order,
-    creator_name: `${order.creator.first_name || ""} ${order.creator.last_name || ""}`.trim(),
-    reviewer_name: order.reviewer ? `${order.reviewer.first_name || ""} ${order.reviewer.last_name || ""}`.trim() : null,
+    creator_name: `${order.creator.first_name || ""} ${
+      order.creator.last_name || ""
+    }`.trim(),
+    reviewer_name: order.reviewer
+      ? `${order.reviewer.first_name || ""} ${
+          order.reviewer.last_name || ""
+        }`.trim()
+      : null,
     organisation_name: order.order.organisation.name,
     products: transformedProducts,
-    
+
     // Calculated totals
     calculated_totals: totals,
     allocation_totals: allocationTotals,
-    allocation_percentage: totals.inventory_quantity > 0 ? (allocationTotals.allocated_quantity / totals.inventory_quantity) * 100 : 0,
+    allocation_percentage:
+      totals.inventory_quantity > 0
+        ? (allocationTotals.allocated_quantity / totals.inventory_quantity) *
+          100
+        : 0,
   };
 }
 
@@ -793,7 +847,7 @@ async function getApprovedEntryOrders(organisationId = null, searchNo = null) {
       review_status: true,
       warehouse_id: true,
       warehouse: { select: { name: true } },
-      
+
       products: {
         select: {
           entry_order_product_id: true,
@@ -802,7 +856,7 @@ async function getApprovedEntryOrders(organisationId = null, searchNo = null) {
           package_quantity: true,
           weight_kg: true,
           volume_m3: true,
-          
+
           product: {
             select: {
               product_id: true,
@@ -819,8 +873,14 @@ async function getApprovedEntryOrders(organisationId = null, searchNo = null) {
   return orders.map((order) => ({
     ...order,
     total_products: order.products.length,
-    total_quantity: order.products.reduce((sum, p) => sum + p.inventory_quantity, 0),
-    total_weight: order.products.reduce((sum, p) => sum + parseFloat(p.weight_kg), 0),
+    total_quantity: order.products.reduce(
+      (sum, p) => sum + p.inventory_quantity,
+      0
+    ),
+    total_weight: order.products.reduce(
+      (sum, p) => sum + parseFloat(p.weight_kg),
+      0
+    ),
   }));
 }
 
@@ -864,7 +924,7 @@ async function reviewEntryOrder(orderNo, reviewData) {
  */
 async function getEntryOrdersByStatus(reviewStatus, organisationId = null) {
   const where = { review_status: reviewStatus };
-  
+
   if (organisationId) {
     where.order = { organisation_id: organisationId };
   }
@@ -879,7 +939,7 @@ async function getEntryOrdersByStatus(reviewStatus, organisationId = null) {
       review_status: true,
       review_comments: true,
       reviewed_at: true,
-      
+
       creator: {
         select: {
           first_name: true,
@@ -890,7 +950,7 @@ async function getEntryOrdersByStatus(reviewStatus, organisationId = null) {
       reviewer: {
         select: { first_name: true, last_name: true },
       },
-      
+
       products: {
         select: {
           product_code: true,
@@ -906,22 +966,226 @@ async function getEntryOrdersByStatus(reviewStatus, organisationId = null) {
 
   return orders.map((order) => ({
     ...order,
-    creator_name: `${order.creator.first_name || ""} ${order.creator.last_name || ""}`.trim(),
-    reviewer_name: order.reviewer ? `${order.reviewer.first_name || ""} ${order.reviewer.last_name || ""}`.trim() : null,
+    creator_name: `${order.creator.first_name || ""} ${
+      order.creator.last_name || ""
+    }`.trim(),
+    reviewer_name: order.reviewer
+      ? `${order.reviewer.first_name || ""} ${
+          order.reviewer.last_name || ""
+        }`.trim()
+      : null,
     organisation_name: order.creator.organisation.name,
     total_products: order.products.length,
-    total_quantity: order.products.reduce((sum, p) => sum + p.inventory_quantity, 0),
-    total_weight: order.products.reduce((sum, p) => sum + parseFloat(p.weight_kg), 0),
+    total_quantity: order.products.reduce(
+      (sum, p) => sum + p.inventory_quantity,
+      0
+    ),
+    total_weight: order.products.reduce(
+      (sum, p) => sum + parseFloat(p.weight_kg),
+      0
+    ),
   }));
+}
+
+/**
+ * Update Entry Order (only for NEEDS_REVISION status)
+ */
+async function updateEntryOrder(orderNo, updateData, userId) {
+  return await prisma.$transaction(async (tx) => {
+    // 1. Get existing order with validation
+    const existingOrder = await tx.entryOrder.findFirst({
+      where: { entry_order_no: orderNo },
+      include: {
+        products: true,
+        order: true,
+      },
+    });
+
+    if (!existingOrder) {
+      throw new Error("Entry order not found");
+    }
+
+    // 2. Business rule validations
+    if (existingOrder.review_status !== ReviewStatus.NEEDS_REVISION) {
+      throw new Error(
+        "Entry order can only be updated when status is NEEDS_REVISION"
+      );
+    }
+
+    // Check if user has permission to update this order
+    if (existingOrder.created_by !== userId) {
+      // Only admin can update others' orders
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        include: { role: true },
+      });
+
+      if (user?.role?.name !== "ADMIN") {
+        throw new Error("You can only update your own entry orders");
+      }
+    }
+
+    // 3. ✅ FIXED: Prepare update data based on your actual schema
+    const allowedUpdates = {};
+
+    // ✅ FIXED: These are direct ID fields in your schema, not relations
+    if (updateData.origin_id !== undefined) {
+      allowedUpdates.origin_id = updateData.origin_id;
+    }
+    if (updateData.document_type_id !== undefined) {
+      allowedUpdates.document_type_id = updateData.document_type_id;
+    }
+    if (updateData.warehouse_id !== undefined) {
+      allowedUpdates.warehouse_id = updateData.warehouse_id;
+    }
+
+    // ✅ Basic fields (these are direct fields)
+    if (updateData.document_date !== undefined)
+      allowedUpdates.document_date = toUTC(updateData.document_date);
+    if (updateData.entry_date_time !== undefined)
+      allowedUpdates.entry_date_time = toUTC(updateData.entry_date_time);
+    if (updateData.order_status !== undefined)
+      allowedUpdates.order_status = updateData.order_status;
+    if (updateData.total_volume !== undefined)
+      allowedUpdates.total_volume = parseFloat(updateData.total_volume);
+    if (updateData.total_weight !== undefined)
+      allowedUpdates.total_weight = parseFloat(updateData.total_weight);
+    if (updateData.cif_value !== undefined)
+      allowedUpdates.cif_value = parseFloat(updateData.cif_value);
+    if (updateData.total_pallets !== undefined)
+      allowedUpdates.total_pallets = parseInt(updateData.total_pallets);
+    if (updateData.observation !== undefined)
+      allowedUpdates.observation = updateData.observation;
+    if (updateData.uploaded_documents !== undefined)
+      allowedUpdates.uploaded_documents = updateData.uploaded_documents;
+
+    // ✅ FIXED: Reset review status - these are direct fields in your schema
+    allowedUpdates.review_status = ReviewStatus.PENDING;
+    allowedUpdates.review_comments = null;
+    allowedUpdates.reviewed_by = null; // ✅ Direct field assignment
+    allowedUpdates.reviewed_at = null;
+
+    // Add update tracking - check if these exist in your schema
+    // allowedUpdates.updated_at = new Date();    // ✅ Only if this field exists
+    // allowedUpdates.updated_by = userId;        // ✅ Only if this field exists
+
+    // 4. Update the entry order
+    const updatedOrder = await tx.entryOrder.update({
+      where: { entry_order_id: existingOrder.entry_order_id },
+      data: allowedUpdates,
+    });
+
+    // 5. Handle product updates if provided
+    if (updateData.products && Array.isArray(updateData.products)) {
+      // Get existing product IDs
+      const existingProductIds = existingOrder.products.map(
+        (p) => p.entry_order_product_id
+      );
+      const updateProductIds = updateData.products
+        .filter((p) => p.entry_order_product_id)
+        .map((p) => p.entry_order_product_id);
+
+      // Delete removed products
+      const productsToDelete = existingProductIds.filter(
+        (id) => !updateProductIds.includes(id)
+      );
+      if (productsToDelete.length > 0) {
+        await tx.entryOrderProduct.deleteMany({
+          where: {
+            entry_order_product_id: { in: productsToDelete },
+          },
+        });
+      }
+
+      // Update or create products
+      for (const productData of updateData.products) {
+        // Validate product data
+        if (
+          !productData.product_id ||
+          !productData.inventory_quantity ||
+          !productData.package_quantity ||
+          !productData.weight_kg
+        ) {
+          throw new Error(
+            "Product missing required fields: product_id, inventory_quantity, package_quantity, weight_kg"
+          );
+        }
+
+        // ✅ FIXED: Use direct field assignments for EntryOrderProduct
+        const productUpdateData = {
+          serial_number: productData.serial_number,
+          supplier_id: productData.supplier_id, // ✅ Direct field
+          product_code: productData.product_code,
+          product_id: productData.product_id, // ✅ Direct field
+          lot_series: productData.lot_series,
+          manufacturing_date: productData.manufacturing_date
+            ? toUTC(productData.manufacturing_date)
+            : null,
+          expiration_date: productData.expiration_date
+            ? toUTC(productData.expiration_date)
+            : null,
+          inventory_quantity: parseInt(productData.inventory_quantity),
+          package_quantity: parseInt(productData.package_quantity),
+          quantity_pallets: parseInt(productData.quantity_pallets) || null,
+          presentation: productData.presentation || PresentationType.CAJA,
+          guide_number: productData.guide_number,
+          weight_kg: parseFloat(productData.weight_kg),
+          volume_m3: parseFloat(productData.volume_m3) || null,
+          insured_value: parseFloat(productData.insured_value) || null,
+          temperature_range:
+            productData.temperature_range || TemperatureRangeType.AMBIENTE,
+          humidity: productData.humidity,
+          health_registration: productData.health_registration,
+        };
+
+        if (productData.entry_order_product_id) {
+          // Update existing product
+          await tx.entryOrderProduct.update({
+            where: {
+              entry_order_product_id: productData.entry_order_product_id,
+            },
+            data: productUpdateData,
+          });
+        } else {
+          // Create new product
+          await tx.entryOrderProduct.create({
+            data: {
+              entry_order_id: existingOrder.entry_order_id,
+              ...productUpdateData,
+            },
+          });
+        }
+      }
+    }
+
+    // 6. Return updated order with full details
+    return await tx.entryOrder.findUnique({
+      where: { entry_order_id: updatedOrder.entry_order_id },
+      include: {
+        products: {
+          include: {
+            product: { select: { product_code: true, name: true } },
+            supplier: { select: { name: true } },
+          },
+        },
+        origin: { select: { name: true, type: true } },
+        documentType: { select: { name: true, type: true } },
+        warehouse: { select: { name: true } },
+        creator: { select: { first_name: true, last_name: true } },
+        order: { select: { status: true, priority: true } },
+      },
+    });
+  });
 }
 
 module.exports = {
   createEntryOrder,
+  updateEntryOrder,
   getAllEntryOrders,
   getEntryFormFields,
   getCurrentEntryOrderNo,
   getEntryOrderByNo,
   getApprovedEntryOrders,
-  reviewEntryOrder, // ✅ Add this
-  getEntryOrdersByStatus, // ✅ Add this
+  reviewEntryOrder,
+  getEntryOrdersByStatus,
 };

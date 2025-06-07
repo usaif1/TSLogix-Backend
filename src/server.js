@@ -51,7 +51,7 @@ app.use("/products", authenticateToken, productRoutes);
 app.use("/entry", authenticateToken, entryRoutes);
 app.use("/departure", authenticateToken, departureRoutes);
 app.use("/audit", authenticateToken, auditRoutes);
-app.use("/inventory-logs", authenticateToken, inventoryRoutes);
+app.use("/inventory", authenticateToken, inventoryRoutes);
 app.use("/warehouse", authenticateToken, warehouseRoutes);
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);
