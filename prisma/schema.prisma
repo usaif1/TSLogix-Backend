@@ -140,6 +140,8 @@ enum CellRole {
   DAMAGED
   EXPIRED
   RETURNS
+  SAMPLES
+  REJECTED
 }
 
 enum DocumentApplicableTo {
@@ -184,6 +186,35 @@ enum InventoryStatus {
   DISPOSED        
 }
 
+// ✅ NEW: Quality Control States for inventory flow
+enum QualityControlStatus {
+  CUARENTENA    // Quarantine - initial state after allocation
+  APROBADO      // Approved - ready for departure
+  DEVOLUCIONES  // Returns - products to be returned
+  CONTRAMUESTRAS // Samples - products kept for sampling
+  RECHAZADOS    // Rejected - products that failed quality check
+}
+
+// ✅ NEW: Action types for comprehensive traceability
+enum SystemAction {
+  ENTRY_ORDER_CREATED
+  ENTRY_ORDER_REVIEWED
+  ENTRY_ORDER_APPROVED
+  ENTRY_ORDER_REJECTED
+  INVENTORY_ALLOCATED
+  QUALITY_STATUS_CHANGED
+  INVENTORY_MOVED
+  DEPARTURE_ORDER_CREATED
+  DEPARTURE_ORDER_REVIEWED
+  DEPARTURE_ORDER_APPROVED
+  DEPARTURE_ALLOCATED
+  PRODUCT_DISPATCHED
+  CELL_ASSIGNED
+  CELL_UPDATED
+  USER_LOGIN
+  USER_LOGOUT
+}
+
 enum AuditResult {
   PASSED
   FAILED
@@ -224,6 +255,11 @@ model User {
   reviewedEntryOrders   EntryOrder[]         @relation("EntryOrderReviewer")
   inventoryAllocations  InventoryAllocation[] @relation("InventoryAllocator")
   
+  // ✅ NEW: Additional inventory relations for traceability
+  modifiedAllocations   InventoryAllocation[] @relation("InventoryModifier")
+  createdInventory      Inventory[]          @relation("InventoryCreator")
+  modifiedInventory     Inventory[]          @relation("InventoryLastModifier")
+  
   // Departure order relations
   createdDepartureOrders DepartureOrder[]    @relation("DepartureOrderCreator")
   reviewedDepartureOrders DepartureOrder[]   @relation("DepartureOrderReviewer")
@@ -232,6 +268,10 @@ model User {
   // Inventory relations
   inventoryLogs         InventoryLog[]
   cellAssignments       CellAssignment[]     @relation("AssignedByUser")
+  
+  // ✅ NEW: Quality control and audit relations
+  qualityTransitions    QualityControlTransition[] @relation("QualityTransitionPerformer")
+  systemAudits          SystemAuditLog[]     @relation("UserSystemAudits")
   
   // ✅ FIXED: Add missing audit relation
   audits                EntryOrderAudit[]    @relation("UserAudits")
@@ -544,14 +584,21 @@ model InventoryAllocation {
   product_status            ProductStatus       @default(PAL_NORMAL)
   status_code               Int
   
+  // ✅ NEW: Quality control status (starts in CUARENTENA)
+  quality_status            QualityControlStatus @default(CUARENTENA)
+  
+  // ✅ NEW: User traceability fields
+  allocated_by              String
+  allocated_at              DateTime            @default(now())
+  last_modified_by          String?
+  last_modified_at          DateTime?
+  
   // Documentation
   guide_number              String?
   uploaded_documents        Json?
   observations              String?
   
-  // Tracking
-  allocated_by              String
-  allocated_at              DateTime            @default(now())
+  // Status
   status                    String              @default("ACTIVE")
   
   // Relations
@@ -559,10 +606,14 @@ model InventoryAllocation {
   entry_order_product       EntryOrderProduct   @relation(fields: [entry_order_product_id], references: [entry_order_product_id])
   cell                      WarehouseCell       @relation(fields: [cell_id], references: [id])
   allocator                 User                @relation("InventoryAllocator", fields: [allocated_by], references: [id])
+  lastModifier              User?               @relation("InventoryModifier", fields: [last_modified_by], references: [id])
   
   // Create actual inventory record
   inventory                 Inventory[]
   inventoryLogs             InventoryLog[]
+  
+  // ✅ NEW: Quality control transitions
+  qualityTransitions        QualityControlTransition[]
   
   // ✅ FIXED: Add missing relation for departure allocations
   departureAllocations      DepartureAllocation[]
@@ -732,6 +783,10 @@ model WarehouseCell {
   cellAssignments           CellAssignment[]
   inventoryAllocations      InventoryAllocation[]
   departureAllocations      DepartureAllocation[]
+  
+  // ✅ NEW: Quality control transition relations
+  transitionsFrom           QualityControlTransition[] @relation("TransitionFromCell")
+  transitionsTo             QualityControlTransition[] @relation("TransitionToCell")
 
   @@unique([warehouse_id, row, bay, position], name: "idx_cell_unique")
   @@map("warehouse_cells")
@@ -768,9 +823,17 @@ model Inventory {
   current_volume            Decimal?              @db.Decimal(10, 2)
   
   // Status
-  status                    InventoryStatus       @default(AVAILABLE)
+  status                    InventoryStatus       @default(QUARANTINED)  // ✅ Changed: Start in quarantine
   product_status            ProductStatus
   status_code               Int
+  
+  // ✅ NEW: Quality control status
+  quality_status            QualityControlStatus  @default(CUARENTENA)
+  
+  // ✅ NEW: User traceability
+  created_by                String?
+  last_modified_by          String?
+  last_modified_at          DateTime?
   
   // Tracking
   created_at                DateTime              @default(now())
@@ -781,6 +844,11 @@ model Inventory {
   product                   Product               @relation(fields: [product_id], references: [product_id], name: "ProductInventory")
   cell                      WarehouseCell         @relation("CellInventory", fields: [cell_id], references: [id])
   warehouse                 Warehouse             @relation(fields: [warehouse_id], references: [warehouse_id])
+  creator                   User?                 @relation("InventoryCreator", fields: [created_by], references: [id])
+  lastModifier              User?                 @relation("InventoryLastModifier", fields: [last_modified_by], references: [id])
+  
+  // ✅ NEW: Quality control transitions for this inventory
+  qualityTransitions        QualityControlTransition[]
 
   @@unique([allocation_id, cell_id], name: "allocation_cell_unique")
   @@map("inventory")
@@ -862,4 +930,75 @@ model EntryOrderAudit {
   auditor           User        @relation("UserAudits", fields: [audited_by], references: [id])
   
   @@map("entry_order_audits")
+}
+
+// ✅ NEW: Quality Control Transition Model for tracking status changes
+model QualityControlTransition {
+  transition_id             String                @id @default(uuid()) @map("transition_id")
+  
+  // What was transitioned
+  allocation_id             String?               // If whole allocation moved
+  inventory_id              String?               // If specific inventory moved
+  
+  // Transition details
+  from_status               QualityControlStatus?
+  to_status                 QualityControlStatus
+  
+  // Quantities moved (for partial moves)
+  quantity_moved            Int
+  package_quantity_moved    Int
+  weight_moved              Decimal               @db.Decimal(10, 2)
+  volume_moved              Decimal?              @db.Decimal(10, 2)
+  
+  // Cell movement (if changed)
+  from_cell_id              String?
+  to_cell_id                String?
+  
+  // User tracking
+  performed_by              String
+  performed_at              DateTime              @default(now())
+  reason                    String?
+  notes                     String?
+  
+  // Relations
+  allocation                InventoryAllocation?  @relation(fields: [allocation_id], references: [allocation_id])
+  inventory                 Inventory?            @relation(fields: [inventory_id], references: [inventory_id])
+  performer                 User                  @relation("QualityTransitionPerformer", fields: [performed_by], references: [id])
+  fromCell                  WarehouseCell?        @relation("TransitionFromCell", fields: [from_cell_id], references: [id])
+  toCell                    WarehouseCell?        @relation("TransitionToCell", fields: [to_cell_id], references: [id])
+
+  @@map("quality_control_transitions")
+}
+
+// ✅ NEW: System-wide audit trail for all user actions
+model SystemAuditLog {
+  audit_id                  String                @id @default(uuid()) @map("audit_id")
+  
+  // User and timestamp
+  user_id                   String
+  performed_at              DateTime              @default(now())
+  action                    SystemAction
+  
+  // Context
+  entity_type               String                // "EntryOrder", "Inventory", "DepartureOrder", etc.
+  entity_id                 String                // The ID of the affected entity
+  
+  // Details
+  description               String                // Human readable description
+  old_values                Json?                 // Previous state (for updates)
+  new_values                Json?                 // New state (for updates)
+  metadata                  Json?                 // Additional context
+  
+  // IP and session tracking
+  ip_address                String?
+  user_agent                String?
+  session_id                String?
+  
+  // Relations
+  user                      User                  @relation("UserSystemAudits", fields: [user_id], references: [id])
+
+  @@index([user_id, performed_at], map: "idx_audit_user_time")
+  @@index([entity_type, entity_id], map: "idx_audit_entity")
+  @@index([action, performed_at], map: "idx_audit_action_time")
+  @@map("system_audit_logs")
 }

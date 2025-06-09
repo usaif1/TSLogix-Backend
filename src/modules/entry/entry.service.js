@@ -58,43 +58,87 @@ async function createEntryOrder(entryData) {
       },
     });
 
-    // 3. Create products for this entry order with new schema
+    // 3. ✅ FIXED: Create products for this entry order with duplicate validation
     const entryOrderProducts = [];
     if (entryData.products && Array.isArray(entryData.products)) {
-      for (const productData of entryData.products) {
-        const entryOrderProduct = await tx.entryOrderProduct.create({
-          data: {
-            entry_order_id: newEntryOrder.entry_order_id,
+      // ✅ Check for duplicate product codes
+      const productCodes = entryData.products.map(p => p.product_code);
+      const duplicateProductCodes = productCodes.filter((code, index) => productCodes.indexOf(code) !== index);
+      
+      if (duplicateProductCodes.length > 0) {
+        throw new Error(`Duplicate product codes found in entry order: ${[...new Set(duplicateProductCodes)].join(', ')}. Each product can only appear once per entry order.`);
+      }
 
-            // Product identification
-            serial_number: productData.serial_number,
-            supplier_id: productData.supplier_id,
-            product_code: productData.product_code,
-            product_id: productData.product_id,
-            lot_series: productData.lot_series,
+      // ✅ Validate each product has required fields
+      for (let i = 0; i < entryData.products.length; i++) {
+        const productData = entryData.products[i];
+        
+        if (!productData.product_code || !productData.product_id) {
+          throw new Error(`Product ${i + 1}: Missing required fields product_code and product_id`);
+        }
+        
+        if (!productData.inventory_quantity || !productData.package_quantity || !productData.weight_kg) {
+          throw new Error(`Product ${i + 1} (${productData.product_code}): Missing required quantity fields`);
+        }
 
-            // Dates
-            manufacturing_date: toUTC(productData.manufacturing_date),
-            expiration_date: toUTC(productData.expiration_date),
-
-            // Quantities (as received)
-            inventory_quantity: parseInt(productData.inventory_quantity),
-            package_quantity: parseInt(productData.package_quantity),
-            quantity_pallets: parseInt(productData.quantity_pallets) || null,
-            presentation: productData.presentation || PresentationType.CAJA,
-            guide_number: productData.guide_number,
-            weight_kg: parseFloat(productData.weight_kg),
-            volume_m3: parseFloat(productData.volume_m3) || null,
-            insured_value: parseFloat(productData.insured_value) || null,
-
-            // Environmental conditions
-            temperature_range:
-              productData.temperature_range || TemperatureRangeType.AMBIENTE,
-            humidity: productData.humidity,
-            health_registration: productData.health_registration,
-          },
+        // ✅ Verify the product exists in the database
+        const existingProduct = await tx.product.findUnique({
+          where: { product_id: productData.product_id }
         });
-        entryOrderProducts.push(entryOrderProduct);
+        
+        if (!existingProduct) {
+          throw new Error(`Product ${i + 1}: Product with ID ${productData.product_id} not found`);
+        }
+
+        // ✅ Verify product_code matches the product
+        if (existingProduct.product_code !== productData.product_code) {
+          throw new Error(`Product ${i + 1}: Product code mismatch. Expected ${existingProduct.product_code}, got ${productData.product_code}`);
+        }
+      }
+
+      // ✅ Create products after validation
+      for (const productData of entryData.products) {
+        try {
+          const entryOrderProduct = await tx.entryOrderProduct.create({
+            data: {
+              entry_order_id: newEntryOrder.entry_order_id,
+
+              // Product identification
+              serial_number: productData.serial_number,
+              supplier_id: productData.supplier_id,
+              product_code: productData.product_code,
+              product_id: productData.product_id,
+              lot_series: productData.lot_series,
+
+              // Dates
+              manufacturing_date: toUTC(productData.manufacturing_date),
+              expiration_date: toUTC(productData.expiration_date),
+
+              // Quantities (as received)
+              inventory_quantity: parseInt(productData.inventory_quantity),
+              package_quantity: parseInt(productData.package_quantity),
+              quantity_pallets: parseInt(productData.quantity_pallets) || null,
+              presentation: productData.presentation || PresentationType.CAJA,
+              guide_number: productData.guide_number,
+              weight_kg: parseFloat(productData.weight_kg),
+              volume_m3: parseFloat(productData.volume_m3) || null,
+              insured_value: parseFloat(productData.insured_value) || null,
+
+              // Environmental conditions
+              temperature_range:
+                productData.temperature_range || TemperatureRangeType.AMBIENTE,
+              humidity: productData.humidity,
+              health_registration: productData.health_registration,
+            },
+          });
+          entryOrderProducts.push(entryOrderProduct);
+        } catch (error) {
+          // ✅ More specific error handling
+          if (error.code === 'P2002' && error.meta?.target?.includes('entry_order_product_unique')) {
+            throw new Error(`Product code ${productData.product_code} already exists in this entry order. Each product can only be added once per entry order.`);
+          }
+          throw error;
+        }
       }
     }
 
@@ -1077,6 +1121,14 @@ async function updateEntryOrder(orderNo, updateData, userId) {
 
     // 5. Handle product updates if provided
     if (updateData.products && Array.isArray(updateData.products)) {
+      // ✅ FIXED: Check for duplicate product codes in the update
+      const productCodes = updateData.products.map(p => p.product_code).filter(Boolean);
+      const duplicateProductCodes = productCodes.filter((code, index) => productCodes.indexOf(code) !== index);
+      
+      if (duplicateProductCodes.length > 0) {
+        throw new Error(`Duplicate product codes found in update: ${[...new Set(duplicateProductCodes)].join(', ')}. Each product can only appear once per entry order.`);
+      }
+
       // Get existing product IDs
       const existingProductIds = existingOrder.products.map(
         (p) => p.entry_order_product_id
@@ -1099,16 +1151,31 @@ async function updateEntryOrder(orderNo, updateData, userId) {
 
       // Update or create products
       for (const productData of updateData.products) {
-        // Validate product data
+        // ✅ Enhanced validation
         if (
           !productData.product_id ||
+          !productData.product_code ||
           !productData.inventory_quantity ||
           !productData.package_quantity ||
           !productData.weight_kg
         ) {
           throw new Error(
-            "Product missing required fields: product_id, inventory_quantity, package_quantity, weight_kg"
+            `Product missing required fields: product_id, product_code, inventory_quantity, package_quantity, weight_kg`
           );
+        }
+
+        // ✅ Verify the product exists
+        const existingProduct = await tx.product.findUnique({
+          where: { product_id: productData.product_id }
+        });
+        
+        if (!existingProduct) {
+          throw new Error(`Product with ID ${productData.product_id} not found`);
+        }
+
+        // ✅ Verify product_code matches
+        if (existingProduct.product_code !== productData.product_code) {
+          throw new Error(`Product code mismatch for ${productData.product_id}. Expected ${existingProduct.product_code}, got ${productData.product_code}`);
         }
 
         // ✅ FIXED: Use direct field assignments for EntryOrderProduct
@@ -1138,22 +1205,30 @@ async function updateEntryOrder(orderNo, updateData, userId) {
           health_registration: productData.health_registration,
         };
 
-        if (productData.entry_order_product_id) {
-          // Update existing product
-          await tx.entryOrderProduct.update({
-            where: {
-              entry_order_product_id: productData.entry_order_product_id,
-            },
-            data: productUpdateData,
-          });
-        } else {
-          // Create new product
-          await tx.entryOrderProduct.create({
-            data: {
-              entry_order_id: existingOrder.entry_order_id,
-              ...productUpdateData,
-            },
-          });
+        try {
+          if (productData.entry_order_product_id) {
+            // Update existing product
+            await tx.entryOrderProduct.update({
+              where: {
+                entry_order_product_id: productData.entry_order_product_id,
+              },
+              data: productUpdateData,
+            });
+          } else {
+            // Create new product
+            await tx.entryOrderProduct.create({
+              data: {
+                entry_order_id: existingOrder.entry_order_id,
+                ...productUpdateData,
+              },
+            });
+          }
+        } catch (error) {
+          // ✅ Handle unique constraint violation
+          if (error.code === 'P2002' && error.meta?.target?.includes('entry_order_product_unique')) {
+            throw new Error(`Product code ${productData.product_code} already exists in this entry order. Each product can only be added once per entry order.`);
+          }
+          throw error;
         }
       }
     }

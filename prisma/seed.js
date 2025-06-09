@@ -15,6 +15,8 @@ const {
   PresentationType,
   TemperatureRangeType,
   ProductStatus,
+  QualityControlStatus,
+  SystemAction,
 } = require("@prisma/client");
 const { faker } = require("@faker-js/faker");
 const bcrypt = require("bcrypt");
@@ -43,6 +45,25 @@ const COUNT = {
   ENTRY_ORDERS: 25,
   DEPARTURE_ORDERS: 15,
 };
+
+// NEW: Helper function to create audit log entries
+async function createAuditLog(userId, action, entityType, entityId, description, oldValues, newValues, metadata) {
+  await prisma.systemAuditLog.create({
+    data: {
+      user_id: userId,
+      action: action,
+      entity_type: entityType,
+      entity_id: entityId,
+      description: description,
+      old_values: oldValues || null,
+      new_values: newValues || null,
+      metadata: metadata || null,
+      ip_address: "192.168.1.100", // Mock IP
+      user_agent: "Seed Script v1.0",
+      session_id: `seed-session-${Date.now()}`,
+    },
+  });
+}
 
 async function createBaseLookupTables() {
   try {
@@ -468,10 +489,10 @@ async function createWarehousesAndCells() {
     const allCells = [];
     
     for (const warehouse of warehouseList) {
-      // Create standard cells
-      for (let row of ['A', 'B', 'C', 'D', 'E']) {
-        for (let bay = 1; bay <= 20; bay++) {
-          for (let position = 1; position <= 5; position++) {
+      // Create standard cells A to P (28 bays, 10 positions each)
+      for (let row of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P']) {
+        for (let bay = 1; bay <= 28; bay++) {
+          for (let position = 1; position <= 10; position++) {
             allCells.push({
               warehouse_id: warehouse.warehouse_id,
               row: row,
@@ -489,17 +510,74 @@ async function createWarehousesAndCells() {
         }
       }
       
-      // Create damaged goods cells
-      for (let bay = 1; bay <= 5; bay++) {
-        for (let position = 1; position <= 3; position++) {
+      // Create Q row cells (20 bays, 10 positions)
+      for (let bay = 1; bay <= 20; bay++) {
+        for (let position = 1; position <= 10; position++) {
           allCells.push({
             warehouse_id: warehouse.warehouse_id,
-            row: 'D',
+            row: 'Q',
+            bay: bay,
+            position: position,
+            kind: "NORMAL",
+            status: "AVAILABLE",
+            cell_role: "STANDARD",
+            capacity: 100.00,
+            currentUsage: 0.00,
+            current_packaging_qty: 0,
+            current_weight: 0.00,
+          });
+        }
+      }
+      
+      // Create V - Devoluciones (Returns) cells (2 bays, 10 positions)
+      for (let bay = 1; bay <= 2; bay++) {
+        for (let position = 1; position <= 10; position++) {
+          allCells.push({
+            warehouse_id: warehouse.warehouse_id,
+            row: 'V',
+            bay: bay,
+            position: position,
+            kind: "RESERVED",
+            status: "AVAILABLE",
+            cell_role: "RETURNS",
+            capacity: 75.00,
+            currentUsage: 0.00,
+            current_packaging_qty: 0,
+            current_weight: 0.00,
+          });
+        }
+      }
+      
+      // Create T - Contramuestras (Samples) cells (4 bays, 10 positions)
+      for (let bay = 1; bay <= 4; bay++) {
+        for (let position = 1; position <= 10; position++) {
+          allCells.push({
+            warehouse_id: warehouse.warehouse_id,
+            row: 'T',
+            bay: bay,
+            position: position,
+            kind: "RESERVED",
+            status: "AVAILABLE",
+            cell_role: "SAMPLES",
+            capacity: 50.00,
+            currentUsage: 0.00,
+            current_packaging_qty: 0,
+            current_weight: 0.00,
+          });
+        }
+      }
+      
+      // Create R - Rechazados (Rejected) cells (2 bays, 10 positions)
+      for (let bay = 1; bay <= 2; bay++) {
+        for (let position = 1; position <= 10; position++) {
+          allCells.push({
+            warehouse_id: warehouse.warehouse_id,
+            row: 'R',
             bay: bay,
             position: position,
             kind: "DAMAGED",
             status: "AVAILABLE",
-            cell_role: "DAMAGED",
+            cell_role: "REJECTED",
             capacity: 50.00,
             currentUsage: 0.00,
             current_packaging_qty: 0,
@@ -588,6 +666,26 @@ async function createEntryOrdersWithProducts() {
       
       entryOrders.push(entryOrder);
       
+      // ✅ NEW: Create audit log for entry order creation
+      await createAuditLog(
+        customerUser.id,
+        SystemAction.ENTRY_ORDER_CREATED,
+        "EntryOrder",
+        entryOrder.entry_order_id,
+        `Created entry order ${entryOrder.entry_order_no} with ${entryOrder.total_pallets} pallets`,
+        null,
+        {
+          entry_order_no: entryOrder.entry_order_no,
+          total_pallets: entryOrder.total_pallets,
+          total_weight: parseFloat(entryOrder.total_weight),
+          order_status: entryOrder.order_status
+        },
+        {
+          warehouse_id: entryOrder.warehouse_id,
+          origin_id: entryOrder.origin_id
+        }
+      );
+      
       // Create multiple products for this entry order (2-5 products per order)
       const numberOfProducts = faker.number.int({ min: 2, max: 5 });
       const selectedProducts = faker.helpers.arrayElements(products, numberOfProducts);
@@ -635,7 +733,7 @@ async function createEntryOrdersWithProducts() {
 
 async function createInventoryAllocations() {
   try {
-    console.log("🌱 Creating inventory allocations...");
+    console.log("🌱 Creating inventory allocations with quarantine flow...");
     
     // Get approved entry orders
     const approvedEntryOrders = await prisma.entryOrder.findMany({
@@ -675,7 +773,7 @@ async function createInventoryAllocations() {
         const productStatus = faker.helpers.arrayElement(Object.values(ProductStatus));
         const statusCode = getStatusCodeFromEnum(productStatus);
         
-        // Create inventory allocation
+        // ✅ NEW: Create inventory allocation with quarantine status
         const allocation = await prisma.inventoryAllocation.create({
           data: {
             entry_order_id: entryOrder.entry_order_id,
@@ -689,19 +787,20 @@ async function createInventoryAllocations() {
             cell_id: cell.id,
             product_status: productStatus,
             status_code: statusCode,
+            quality_status: QualityControlStatus.CUARENTENA, // ✅ Starts in quarantine
             guide_number: `AG-${faker.string.numeric(8)}`,
             uploaded_documents: {
               documents: [
                 { name: "allocation_doc.pdf", url: "/documents/allocation_doc.pdf" }
               ]
             },
-            observations: faker.lorem.sentence(),
+            observations: `Initial allocation to quarantine area. Cell: ${cell.row}.${cell.bay}.${cell.position}`,
             allocated_by: warehouseUser.id,
           },
         });
         
-        // Create inventory record
-        await prisma.inventory.create({
+        // ✅ NEW: Create inventory record in quarantine status
+        const inventory = await prisma.inventory.create({
           data: {
             allocation_id: allocation.allocation_id,
             product_id: product.product_id,
@@ -711,9 +810,11 @@ async function createInventoryAllocations() {
             current_package_quantity: allocatedPackages,
             current_weight: allocatedWeight,
             current_volume: allocatedVolume,
-            status: InventoryStatus.AVAILABLE,
+            status: InventoryStatus.QUARANTINED, // ✅ Start in quarantine
             product_status: productStatus,
             status_code: statusCode,
+            quality_status: QualityControlStatus.CUARENTENA, // ✅ Quarantine status
+            created_by: warehouseUser.id,
           },
         });
         
@@ -745,15 +846,224 @@ async function createInventoryAllocations() {
             cell_id: cell.id,
             product_status: productStatus,
             status_code: statusCode,
-            notes: `Entry allocation: ${allocatedQuantity} units allocated to cell ${cell.row}.${cell.bay}.${cell.position}`,
+            notes: `Entry allocation: ${allocatedQuantity} units allocated to quarantine in cell ${cell.row}.${cell.bay}.${cell.position}`,
           },
         });
+        
+        // ✅ NEW: Create audit log for inventory allocation
+        await createAuditLog(
+          warehouseUser.id,
+          SystemAction.INVENTORY_ALLOCATED,
+          "InventoryAllocation",
+          allocation.allocation_id,
+          `Allocated ${allocatedQuantity} units of ${product.name} to quarantine in cell ${cell.row}.${cell.bay}.${cell.position}`,
+          null,
+          {
+            quantity: allocatedQuantity,
+            cell: `${cell.row}.${cell.bay}.${cell.position}`,
+            quality_status: "CUARENTENA"
+          },
+          {
+            entry_order_no: entryOrder.entry_order_no,
+            product_code: product.product_code
+          }
+        );
       }
     }
     
-    console.log("✅ Inventory allocations created");
+    console.log("✅ Inventory allocations created with quarantine status");
   } catch (error) {
     console.error("❌ Error creating inventory allocations:", error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Create quality control transitions from quarantine to other states
+async function createQualityControlTransitions() {
+  try {
+    console.log("🌱 Creating quality control transitions...");
+    
+    // Get inventory allocations currently in quarantine
+    const quarantineAllocations = await prisma.inventoryAllocation.findMany({
+      where: { quality_status: QualityControlStatus.CUARENTENA },
+      include: {
+        inventory: true,
+        entry_order_product: {
+          include: { product: true }
+        },
+        cell: true
+      },
+    });
+    
+    if (quarantineAllocations.length === 0) {
+      console.log("⚠️ No quarantine allocations to transition");
+      return;
+    }
+    
+    const warehouseUsers = await prisma.user.findMany({
+      where: { role: { name: "WAREHOUSE" } },
+    });
+    
+    // Process each quarantine allocation
+    for (const allocation of quarantineAllocations.slice(0, 20)) { // Limit transitions
+      const warehouseUser = faker.helpers.arrayElement(warehouseUsers);
+      const product = allocation.entry_order_product.product;
+      
+      // Randomly determine final quality status (most should be approved)
+      const finalStatus = faker.helpers.weightedArrayElement([
+        { weight: 70, value: QualityControlStatus.APROBADO },     // 70% approved
+        { weight: 15, value: QualityControlStatus.DEVOLUCIONES }, // 15% returns
+        { weight: 10, value: QualityControlStatus.CONTRAMUESTRAS }, // 10% samples
+        { weight: 5, value: QualityControlStatus.RECHAZADOS },   // 5% rejected
+      ]);
+      
+      // For some cases, split the allocation (partial transitions)
+      const shouldSplit = faker.helpers.maybe(() => true, { probability: 0.3 });
+      let transitions = [];
+      
+      if (shouldSplit && allocation.inventory_quantity > 10) {
+        // Split allocation into multiple parts
+        const totalQuantity = allocation.inventory_quantity;
+        const totalWeight = parseFloat(allocation.weight_kg);
+        const totalPackages = allocation.package_quantity;
+        
+        // Main portion (60-80%)
+        const mainPortion = faker.number.float({ min: 0.6, max: 0.8 });
+        const mainQuantity = Math.floor(totalQuantity * mainPortion);
+        const mainWeight = totalWeight * mainPortion;
+        const mainPackages = Math.floor(totalPackages * mainPortion);
+        
+        // Secondary portion (remaining)
+        const secondQuantity = totalQuantity - mainQuantity;
+        const secondWeight = totalWeight - mainWeight;
+        const secondPackages = totalPackages - mainPackages;
+        
+        const secondaryStatus = faker.helpers.arrayElement([
+          QualityControlStatus.DEVOLUCIONES,
+          QualityControlStatus.CONTRAMUESTRAS,
+          QualityControlStatus.RECHAZADOS,
+        ]);
+        
+        transitions = [
+          {
+            to_status: finalStatus,
+            quantity: mainQuantity,
+            packages: mainPackages,
+            weight: mainWeight,
+            reason: "Quality inspection passed"
+          },
+          {
+            to_status: secondaryStatus,
+            quantity: secondQuantity,
+            packages: secondPackages,
+            weight: secondWeight,
+            reason: secondaryStatus === QualityControlStatus.DEVOLUCIONES ? "Minor defects found" :
+                    secondaryStatus === QualityControlStatus.CONTRAMUESTRAS ? "Reserved for sampling" :
+                    "Quality standards not met"
+          }
+        ];
+      } else {
+        // Single transition for entire allocation
+        transitions = [{
+          to_status: finalStatus,
+          quantity: allocation.inventory_quantity,
+          packages: allocation.package_quantity,
+          weight: parseFloat(allocation.weight_kg),
+          reason: finalStatus === QualityControlStatus.APROBADO ? "Quality inspection passed" :
+                  finalStatus === QualityControlStatus.DEVOLUCIONES ? "Customer return requested" :
+                  finalStatus === QualityControlStatus.CONTRAMUESTRAS ? "Reserved for quality sampling" :
+                  "Failed quality inspection"
+        }];
+      }
+      
+      // Create transitions
+      for (const transition of transitions) {
+        // Create quality control transition record
+        const qcTransition = await prisma.qualityControlTransition.create({
+          data: {
+            allocation_id: allocation.allocation_id,
+            inventory_id: allocation.inventory[0]?.inventory_id,
+            from_status: QualityControlStatus.CUARENTENA,
+            to_status: transition.to_status,
+            quantity_moved: transition.quantity,
+            package_quantity_moved: transition.packages,
+            weight_moved: transition.weight,
+            volume_moved: allocation.volume_m3 ? parseFloat(allocation.volume_m3) * (transition.quantity / allocation.inventory_quantity) : null,
+            performed_by: warehouseUser.id,
+            reason: transition.reason,
+            notes: `Transitioned ${transition.quantity} units from quarantine to ${transition.to_status}`,
+          },
+        });
+        
+        // Create audit log for quality transition
+        await createAuditLog(
+          warehouseUser.id,
+          SystemAction.QUALITY_STATUS_CHANGED,
+          "QualityControlTransition",
+          qcTransition.transition_id,
+          `Quality status changed: ${transition.quantity} units of ${product.name} from CUARENTENA to ${transition.to_status}`,
+          { quality_status: "CUARENTENA" },
+          { quality_status: transition.to_status },
+          {
+            allocation_id: allocation.allocation_id,
+            product_code: product.product_code,
+            cell: `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`,
+            reason: transition.reason
+          }
+        );
+      }
+      
+      // Update the allocation's quality status to the primary status
+      const primaryTransition = transitions[0];
+      await prisma.inventoryAllocation.update({
+        where: { allocation_id: allocation.allocation_id },
+        data: {
+          quality_status: primaryTransition.to_status,
+          last_modified_by: warehouseUser.id,
+          last_modified_at: new Date(),
+          observations: `${allocation.observations || ''}\nQuality control completed: ${primaryTransition.reason}`,
+        },
+      });
+      
+      // Update inventory status
+      if (allocation.inventory.length > 0) {
+        await prisma.inventory.update({
+          where: { inventory_id: allocation.inventory[0].inventory_id },
+          data: {
+            quality_status: primaryTransition.to_status,
+            status: primaryTransition.to_status === QualityControlStatus.APROBADO ? 
+                   InventoryStatus.AVAILABLE : 
+                   primaryTransition.to_status === QualityControlStatus.RECHAZADOS ?
+                   InventoryStatus.DAMAGED : InventoryStatus.RETURNED,
+            last_modified_by: warehouseUser.id,
+            last_modified_at: new Date(),
+          },
+        });
+      }
+      
+      // Create inventory log for status change
+      await prisma.inventoryLog.create({
+        data: {
+          user_id: warehouseUser.id,
+          product_id: product.product_id,
+          movement_type: MovementType.ADJUSTMENT,
+          quantity_change: 0, // No quantity change, just status
+          package_change: 0,
+          weight_change: 0,
+          volume_change: 0,
+          allocation_id: allocation.allocation_id,
+          warehouse_id: allocation.inventory[0]?.warehouse_id,
+          cell_id: allocation.cell_id,
+          product_status: allocation.product_status,
+          status_code: allocation.status_code,
+          notes: `Quality control transition: ${allocation.inventory_quantity} units moved from CUARENTENA to ${primaryTransition.to_status}. Reason: ${primaryTransition.reason}`,
+        },
+      });
+    }
+    
+    console.log("✅ Quality control transitions created");
+  } catch (error) {
+    console.error("❌ Error creating quality control transitions:", error);
     throw error;
   }
 }
@@ -773,10 +1083,11 @@ async function createDepartureOrdersWithProducts() {
     const exitOptions = await prisma.exitOption.findMany();
     const departureDocTypes = await prisma.departureDocumentType.findMany();
     
-    // Get available inventory
+    // ✅ NEW: Get available inventory that has been approved (not in quarantine)
     const availableInventory = await prisma.inventory.findMany({
       where: {
         status: InventoryStatus.AVAILABLE,
+        quality_status: QualityControlStatus.APROBADO, // ✅ Only approved inventory
         current_quantity: { gt: 0 },
       },
       include: {
@@ -855,7 +1166,27 @@ async function createDepartureOrdersWithProducts() {
           exit_option_id: faker.helpers.maybe(() => faker.helpers.arrayElement(exitOptions).exit_option_id),
           review_status: faker.helpers.arrayElement([ReviewStatus.PENDING, ReviewStatus.APPROVED]),
         },
-      });
+              });
+      
+      // ✅ NEW: Create audit log for departure order creation
+      await createAuditLog(
+        customerUser.id,
+        SystemAction.DEPARTURE_ORDER_CREATED,
+        "DepartureOrder",
+        departureOrder.departure_order_id,
+        `Created departure order ${departureOrder.departure_order_no} for ${customer.name}`,
+        null,
+        {
+          departure_order_no: departureOrder.departure_order_no,
+          customer_name: customer.name,
+          total_pallets: departureOrder.total_pallets,
+          destination: departureOrder.destination_point
+        },
+        {
+          warehouse_id: departureOrder.warehouse_id,
+          transport_type: departureOrder.transport_type
+        }
+      );
       
       // Create departure products (2-4 products per departure)
       const numberOfProducts = faker.number.int({ min: 2, max: 4 });
@@ -908,7 +1239,7 @@ async function createDepartureOrdersWithProducts() {
 
 async function main() {
   try {
-    console.log("Starting database seed for new entry/departure flow...");
+    console.log("🌱 Starting database seed with quarantine flow and user traceability...");
     
     await createBaseLookupTables();
     await createUsersAndOrganization();
@@ -917,9 +1248,35 @@ async function main() {
     await createWarehousesAndCells();
     await createEntryOrdersWithProducts();
     await createInventoryAllocations();
+    
+    // ✅ NEW: Add quality control transitions
+    await createQualityControlTransitions();
+    
     await createDepartureOrdersWithProducts();
     
-    console.log("🎉 Database seeded successfully with new flow!");
+    console.log("🎉 Database seeded successfully with quarantine flow and full user traceability!");
+    console.log("\n📊 Seed Summary:");
+    console.log("   • Products start in CUARENTENA (Quarantine)");
+    console.log("   • Quality control transitions to APROBADO (Approved), DEVOLUCIONES (Returns), etc.");
+    console.log("   • Complete audit trail with user tracking");
+    console.log("   • Only approved inventory available for departure orders");
+    
+    // Print some stats
+    const stats = await Promise.all([
+      prisma.inventoryAllocation.count(),
+      prisma.qualityControlTransition.count(),
+      prisma.systemAuditLog.count(),
+      prisma.inventory.count({ where: { quality_status: QualityControlStatus.APROBADO } }),
+      prisma.inventory.count({ where: { quality_status: QualityControlStatus.CUARENTENA } }),
+    ]);
+    
+    console.log(`\n📈 Database Stats:`);
+    console.log(`   • Inventory Allocations: ${stats[0]}`);
+    console.log(`   • Quality Transitions: ${stats[1]}`);
+    console.log(`   • Audit Log Entries: ${stats[2]}`);
+    console.log(`   • Approved Inventory: ${stats[3]}`);
+    console.log(`   • Quarantine Inventory: ${stats[4]}`);
+    
   } catch (error) {
     console.error("❌ Error seeding database:", error);
     process.exit(1);

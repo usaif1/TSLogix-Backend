@@ -21,4 +21,20 @@ router.get("/warehouses/:warehouse_id/available-cells", controller.getAvailableC
 router.get("/warehouses", controller.fetchWarehouses);
 router.get("/warehouses/:warehouse_id/cells", controller.fetchCells);
 
+// ✅ NEW: Quality control routes
+// Get inventory in quarantine for quality control
+router.get("/quarantine", controller.getQuarantineInventory);
+
+// ✅ NEW: Get inventory by any quality status (dynamic)
+router.get("/by-quality-status", controller.getInventoryByQualityStatus);
+
+// Transition inventory from quarantine to other quality states
+router.post("/quality-transition", controller.transitionQualityStatus);
+
+// Get available inventory for departure orders (only approved items)
+router.get("/available-for-departure", controller.getAvailableInventoryForDeparture);
+
+// Get audit trail for inventory operations
+router.get("/audit-trail", controller.getInventoryAuditTrail);
+
 module.exports = router;

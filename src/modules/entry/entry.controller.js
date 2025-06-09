@@ -4,11 +4,32 @@ const entryService = require("./entry.service");
 async function createEntryOrder(req, res) {
   const entryData = req.body;
 
-  // ✅ UPDATED: Validate new required fields
+  // ✅ FIXED: Get organisation_id from JWT token instead of request body
+  const userOrgId = req.user?.organisation_id;
+  const userId = req.user?.id;
+
+  // ✅ DEBUG: Log what we're getting from JWT
+  console.log('=== ENTRY ORDER CREATION DEBUG ===');
+  console.log('JWT User:', {
+    userId: req.user?.userId,
+    email: req.user?.email,
+    role: req.user?.role,
+    organisation_id: req.user?.organisation_id,
+    id: req.user?.id
+  });
+  console.log('Extracted userOrgId:', userOrgId);
+  console.log('Extracted userId:', userId);
+
+  if (!userOrgId || !userId) {
+    console.log('❌ Missing user data from JWT');
+    return res.status(403).json({
+      message: "Authorization required. User organization not found.",
+    });
+  }
+
+  // ✅ UPDATED: Validate new required fields (removed organisation_id validation)
   if (
     !entryData.entry_order_no ||
-    !entryData.organisation_id ||
-    !entryData.created_by ||
     !entryData.products ||
     !Array.isArray(entryData.products) ||
     entryData.products.length === 0
@@ -17,6 +38,18 @@ async function createEntryOrder(req, res) {
       message: "Missing required fields. Entry order must include at least one product.",
     });
   }
+
+  // ✅ FIXED: Override organisation_id and created_by from JWT token
+  entryData.organisation_id = userOrgId;
+  entryData.created_by = entryData.created_by || userId;
+  
+  // ✅ DEBUG: Log what we're passing to service
+  console.log('Final entryData being passed to service:', {
+    entry_order_no: entryData.entry_order_no,
+    organisation_id: entryData.organisation_id,
+    created_by: entryData.created_by,
+    productCount: entryData.products?.length
+  });
 
   // ✅ UPDATED: Validate each product with new schema fields
   for (let i = 0; i < entryData.products.length; i++) {

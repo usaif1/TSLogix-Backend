@@ -24,7 +24,13 @@ async function getDepartureExitOptions(req, res) {
 async function getAllDepartureOrders(req, res) {
   try {
     const search = req.query.orderNo || "";
-    const data = await departureService.getAllDepartureOrders(search);
+    const organisationId = req.query.organisationId || null;
+    
+    // ✅ FIXED: The JWT token stores role as a string directly (from auth.service.js)
+    const userRole = req.user?.role; // Role is stored directly as string in JWT
+    const userOrgId = req.user?.organisation_id;
+    
+    const data = await departureService.getAllDepartureOrders(search, organisationId, userRole, userOrgId);
     return res.status(200).json({ 
       success: true,
       message: "Departure orders fetched successfully", 
@@ -230,6 +236,103 @@ async function getDepartureOrderById(req, res) {
   }
 }
 
+/**
+ * ✅ NEW: Get departure inventory summary by warehouse
+ */
+async function getDepartureInventorySummary(req, res) {
+  try {
+    const { warehouseId } = req.query;
+    
+    const data = await departureService.getDepartureInventorySummary(warehouseId || null);
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Departure inventory summary fetched successfully", 
+      ...data
+    });
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get entry orders that have approved inventory for departure
+ */
+async function getEntryOrdersForDeparture(req, res) {
+  try {
+    const { warehouseId } = req.query;
+    
+    const data = await departureService.getEntryOrdersForDeparture(warehouseId || null);
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Entry orders with approved inventory fetched successfully", 
+      count: data.length,
+      data 
+    });
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get products from a specific entry order for departure
+ */
+async function getProductsByEntryOrder(req, res) {
+  try {
+    const { entryOrderId } = req.params;
+    const { warehouseId } = req.query;
+    
+    if (!entryOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Entry Order ID is required",
+      });
+    }
+    
+    const data = await departureService.getProductsByEntryOrder(entryOrderId, warehouseId || null);
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Products from entry order fetched successfully", 
+      count: data.length,
+      entry_order_id: entryOrderId,
+      data 
+    });
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get next departure order number
+ */
+async function getCurrentDepartureOrderNo(req, res) {
+  try {
+    const nextOrderNo = await departureService.getCurrentDepartureOrderNo();
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Next departure order number generated successfully", 
+      departure_order_no: nextOrderNo
+    });
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
 module.exports = {
   getDepartureFormFields,
   getDepartureExitOptions,
@@ -240,4 +343,9 @@ module.exports = {
   validateSelectedCell,
   validateMultipleCells,
   getDepartureOrderById,
+  getDepartureInventorySummary,
+  // ✅ NEW: Entry Order-centric flow
+  getEntryOrdersForDeparture,
+  getProductsByEntryOrder,
+  getCurrentDepartureOrderNo,
 };
