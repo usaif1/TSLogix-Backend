@@ -360,4 +360,6 @@ module.exports = {
   // ✅ NEW: FIFO Product-wise flow
   getFifoLocationsForProduct,
   getSuggestedFifoAllocation,
+
 };
+
