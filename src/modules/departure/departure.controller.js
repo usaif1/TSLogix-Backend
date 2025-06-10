@@ -259,18 +259,27 @@ async function getDepartureInventorySummary(req, res) {
 }
 
 /**
- * ✅ NEW: Get entry orders that have approved inventory for departure
+ * ✅ NEW: Get FIFO locations for a specific product
  */
-async function getEntryOrdersForDeparture(req, res) {
+async function getFifoLocationsForProduct(req, res) {
   try {
+    const { productId } = req.params;
     const { warehouseId } = req.query;
     
-    const data = await departureService.getEntryOrdersForDeparture(warehouseId || null);
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        message: "Product ID is required",
+      });
+    }
+    
+    const data = await departureService.getFifoLocationsForProduct(productId, warehouseId || null);
     
     return res.status(200).json({ 
       success: true,
-      message: "Entry orders with approved inventory fetched successfully", 
+      message: "FIFO locations for product fetched successfully", 
       count: data.length,
+      product_id: productId,
       data 
     });
   } catch (error) {
@@ -282,27 +291,30 @@ async function getEntryOrdersForDeparture(req, res) {
 }
 
 /**
- * ✅ NEW: Get products from a specific entry order for departure
+ * ✅ NEW: Get suggested FIFO allocation for a product with requested quantity
  */
-async function getProductsByEntryOrder(req, res) {
+async function getSuggestedFifoAllocation(req, res) {
   try {
-    const { entryOrderId } = req.params;
-    const { warehouseId } = req.query;
+    const { productId } = req.params;
+    const { requestedQuantity, requestedWeight, warehouseId } = req.query;
     
-    if (!entryOrderId) {
+    if (!productId || !requestedQuantity) {
       return res.status(400).json({
         success: false,
-        message: "Entry Order ID is required",
+        message: "Product ID and requested quantity are required",
       });
     }
     
-    const data = await departureService.getProductsByEntryOrder(entryOrderId, warehouseId || null);
+    const data = await departureService.getSuggestedFifoAllocation(
+      productId, 
+      parseInt(requestedQuantity),
+      requestedWeight ? parseFloat(requestedWeight) : null,
+      warehouseId || null
+    );
     
     return res.status(200).json({ 
       success: true,
-      message: "Products from entry order fetched successfully", 
-      count: data.length,
-      entry_order_id: entryOrderId,
+      message: "FIFO allocation suggestion generated successfully", 
       data 
     });
   } catch (error) {
@@ -344,8 +356,8 @@ module.exports = {
   validateMultipleCells,
   getDepartureOrderById,
   getDepartureInventorySummary,
-  // ✅ NEW: Entry Order-centric flow
-  getEntryOrdersForDeparture,
-  getProductsByEntryOrder,
   getCurrentDepartureOrderNo,
+  // ✅ NEW: FIFO Product-wise flow
+  getFifoLocationsForProduct,
+  getSuggestedFifoAllocation,
 };

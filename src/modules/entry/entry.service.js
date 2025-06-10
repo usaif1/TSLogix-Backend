@@ -577,26 +577,30 @@ async function getEntryFormFields() {
 }
 
 /**
- * Generate next entry order number
+ * Generate next entry order number in format OI202501
+ * OI = Entry Order prefix, 2025 = full year, 01 = incremental count
  */
 async function getCurrentEntryOrderNo() {
-  const currentYear = new Date().getFullYear().toString().slice(-2);
+  const currentYear = new Date().getFullYear().toString(); // Full 4-digit year
+  const yearPrefix = `OI${currentYear}`;
+  
   const lastOrder = await prisma.entryOrder.findFirst({
     where: {
-      entry_order_no: { startsWith: `ENTRY-${currentYear}` },
+      entry_order_no: { startsWith: yearPrefix },
     },
     orderBy: { registration_date: "desc" },
   });
 
   let nextCount = 1;
   if (lastOrder?.entry_order_no) {
-    const parts = lastOrder.entry_order_no.split("-");
-    if (parts.length === 3 && !isNaN(parts[2])) {
-      nextCount = parseInt(parts[2]) + 1;
+    // Extract count from format like "OI202501" -> "01"
+    const countPart = lastOrder.entry_order_no.substring(yearPrefix.length);
+    if (!isNaN(countPart)) {
+      nextCount = parseInt(countPart) + 1;
     }
   }
 
-  return `ENTRY-${currentYear}-${String(nextCount).padStart(4, "0")}`;
+  return `${yearPrefix}${String(nextCount).padStart(2, "0")}`;
 }
 
 /**
@@ -1121,12 +1125,21 @@ async function updateEntryOrder(orderNo, updateData, userId) {
 
     // 5. Handle product updates if provided
     if (updateData.products && Array.isArray(updateData.products)) {
-      // ✅ FIXED: Check for duplicate product codes in the update
-      const productCodes = updateData.products.map(p => p.product_code).filter(Boolean);
-      const duplicateProductCodes = productCodes.filter((code, index) => productCodes.indexOf(code) !== index);
+      // ✅ FIXED: Check for duplicate product codes ONLY within the incoming update data
+      const incomingProductCodes = updateData.products.map(p => p.product_code).filter(Boolean);
+      const duplicatesInIncoming = incomingProductCodes.filter((code, index) => incomingProductCodes.indexOf(code) !== index);
       
-      if (duplicateProductCodes.length > 0) {
-        throw new Error(`Duplicate product codes found in update: ${[...new Set(duplicateProductCodes)].join(', ')}. Each product can only appear once per entry order.`);
+      if (duplicatesInIncoming.length > 0) {
+        throw new Error(`Duplicate product codes found in update request: ${[...new Set(duplicatesInIncoming)].join(', ')}. Each product can only appear once in the update.`);
+      }
+
+      // ✅ NEW: Also check for duplicates between new products and existing products (excluding products being updated)
+      const existingProductCodes = existingOrder.products.map(p => p.product_code);
+      const newProducts = updateData.products.filter(p => !p.entry_order_product_id); // Products without ID are new
+      const conflictingProducts = newProducts.filter(newP => existingProductCodes.includes(newP.product_code));
+      
+      if (conflictingProducts.length > 0) {
+        throw new Error(`Product codes already exist in this entry order: ${conflictingProducts.map(p => p.product_code).join(', ')}. Cannot add duplicate products.`);
       }
 
       // Get existing product IDs

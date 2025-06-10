@@ -196,7 +196,7 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
   }
 }
 
-// ✅ UPDATED: Get products with available inventory from approved allocations
+// ✅ UPDATED: Get products with available inventory from approved allocations (FIFO approach)
 async function getProductsWithInventory(warehouseId = null) {
   try {
     // ✅ NEW: Query from InventoryAllocation with quality_status = APROBADO
@@ -229,6 +229,7 @@ async function getProductsWithInventory(warehouseId = null) {
             entry_order: {
               select: {
                 entry_order_no: true,
+                entry_date_time: true, // ✅ FIFO: Sort by entry date
                 registration_date: true,
                 creator: {
                   select: {
@@ -283,6 +284,7 @@ async function getProductsWithInventory(warehouseId = null) {
         },
       },
       orderBy: [
+        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ FIFO: Oldest first
         { entry_order_product: { product: { product_code: "asc" } } },
         { cell: { row: "asc" } },
         { cell: { bay: "asc" } },
@@ -298,35 +300,28 @@ async function getProductsWithInventory(warehouseId = null) {
              inventory.current_quantity > 0;
     });
 
-    // Group by entry order product
+    // ✅ NEW: Group by product (not entry order) with FIFO locations
     const groupedInventory = availableAllocations.reduce((acc, allocation) => {
       const inventory = allocation.inventory[0];
-      const key = `${allocation.entry_order_product_id}_${allocation.entry_order_product.product.product_id}`;
+      const product = allocation.entry_order_product.product;
+      const key = product.product_id; // Group by product_id only
 
       if (!acc[key]) {
         acc[key] = {
-          entry_order_product_id: allocation.entry_order_product_id,
-          product_id: allocation.entry_order_product.product.product_id,
-          product_code: allocation.entry_order_product.product.product_code,
-          product_name: allocation.entry_order_product.product.name,
-          manufacturer: allocation.entry_order_product.product.manufacturer,
-          product_line: allocation.entry_order_product.product.product_line?.name,
-          group_name: allocation.entry_order_product.product.group?.name,
-          presentation: allocation.presentation,
-          quality_status: allocation.quality_status,
-          entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
-          registration_date: allocation.entry_order_product.entry_order.registration_date,
-          supplier_name: allocation.entry_order_product.supplier?.name,
-          creator_name: `${allocation.entry_order_product.entry_order.creator.first_name || ""} ${allocation.entry_order_product.entry_order.creator.last_name || ""}`.trim(),
-          organisation_name: allocation.entry_order_product.entry_order.creator.organisation.name,
-          allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
-          allocated_at: allocation.allocated_at,
+          product_id: product.product_id,
+          product_code: product.product_code,
+          product_name: product.name,
+          manufacturer: product.manufacturer,
+          product_line: product.product_line?.name,
+          group_name: product.group?.name,
           total_quantity: 0,
           total_packages: 0,
           total_weight: 0,
           total_volume: 0,
-          locations: [],
+          entry_orders: new Set(),
+          suppliers: new Set(),
           warehouses: new Set(),
+          fifo_locations: [], // ✅ FIFO sorted locations
         };
       }
 
@@ -335,16 +330,24 @@ async function getProductsWithInventory(warehouseId = null) {
       acc[key].total_packages += inventory.current_package_quantity;
       acc[key].total_weight += parseFloat(inventory.current_weight || 0);
       acc[key].total_volume += parseFloat(inventory.current_volume || 0);
+      acc[key].entry_orders.add(allocation.entry_order_product.entry_order.entry_order_no);
+      acc[key].suppliers.add(allocation.entry_order_product.supplier?.name || 'N/A');
       acc[key].warehouses.add(allocation.cell.warehouse.name);
 
-      acc[key].locations.push({
+      // ✅ Add location with FIFO data (already sorted by entry_date_time)
+      acc[key].fifo_locations.push({
         allocation_id: allocation.allocation_id,
         inventory_id: inventory.inventory_id,
+        entry_order_product_id: allocation.entry_order_product_id,
         cell_id: allocation.cell_id,
         cell_reference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
         warehouse_name: allocation.cell.warehouse.name,
         warehouse_location: allocation.cell.warehouse.location,
         warehouse_id: allocation.cell.warehouse.warehouse_id,
+        entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
+        entry_date_time: allocation.entry_order_product.entry_order.entry_date_time, // ✅ FIFO key
+        supplier_name: allocation.entry_order_product.supplier?.name,
+        presentation: allocation.presentation,
         available_quantity: inventory.current_quantity,
         available_packages: inventory.current_package_quantity,
         available_weight: parseFloat(inventory.current_weight),
@@ -353,6 +356,8 @@ async function getProductsWithInventory(warehouseId = null) {
         status_code: allocation.status_code,
         guide_number: allocation.guide_number,
         observations: allocation.observations,
+        allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
+        allocated_at: allocation.allocated_at,
       });
 
       return acc;
@@ -360,15 +365,388 @@ async function getProductsWithInventory(warehouseId = null) {
 
     return Object.values(groupedInventory).map((item) => ({
       ...item,
+      entry_orders: Array.from(item.entry_orders),
+      suppliers: Array.from(item.suppliers),
       warehouses: Array.from(item.warehouses),
-      location_count: item.locations.length,
-      can_depart: item.total_quantity > 0, // Can only depart if there's available quantity
+      location_count: item.fifo_locations.length,
+      oldest_entry_date: item.fifo_locations[0]?.entry_date_time, // ✅ FIFO: Oldest entry
+      newest_entry_date: item.fifo_locations[item.fifo_locations.length - 1]?.entry_date_time,
+      can_depart: item.total_quantity > 0,
     }));
   } catch (error) {
     console.error("Error in getProductsWithInventory:", error);
     throw new Error(
       `Failed to fetch products with inventory: ${error.message}`
     );
+  }
+}
+
+// ✅ NEW: Get FIFO locations for a specific product
+async function getFifoLocationsForProduct(productId, warehouseId = null) {
+  try {
+    const whereClause = {
+      entry_order_product: {
+        product_id: String(productId)
+      },
+      quality_status: "APROBADO", // Only approved inventory for departure
+      status: "ACTIVE",
+    };
+
+    if (warehouseId) {
+      whereClause.cell = {
+        warehouse_id: String(warehouseId)
+      };
+    }
+
+    const allocations = await prisma.inventoryAllocation.findMany({
+      where: whereClause,
+      include: {
+        entry_order_product: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              },
+            },
+            entry_order: {
+              select: {
+                entry_order_id: true,
+                entry_order_no: true,
+                entry_date_time: true, // ✅ FIFO key
+                registration_date: true,
+                document_date: true,
+              },
+            },
+            supplier: {
+              select: {
+                supplier_id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        cell: {
+          select: {
+            id: true,
+            row: true,
+            bay: true,
+            position: true,
+            warehouse: {
+              select: {
+                warehouse_id: true,
+                name: true,
+                location: true,
+              },
+            },
+          },
+        },
+        inventory: {
+          select: {
+            inventory_id: true,
+            current_quantity: true,
+            current_package_quantity: true,
+            current_weight: true,
+            current_volume: true,
+            status: true,
+            quality_status: true,
+          },
+        },
+        allocator: {
+          select: {
+            first_name: true,
+            last_name: true,
+          },
+        },
+      },
+      orderBy: [
+        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ FIFO: Oldest first
+        { cell: { row: "asc" } },
+        { cell: { bay: "asc" } },
+        { cell: { position: "asc" } },
+      ],
+    });
+
+    // ✅ Filter allocations that have available inventory and return FIFO sorted
+    return allocations
+      .filter(allocation => {
+        const inventory = allocation.inventory[0];
+        return inventory && 
+               inventory.status === "AVAILABLE" && 
+               inventory.current_quantity > 0;
+      })
+      .map((allocation) => {
+        const inventory = allocation.inventory[0];
+        const entryOrder = allocation.entry_order_product.entry_order;
+        
+        return {
+          allocation_id: allocation.allocation_id,
+          inventory_id: inventory.inventory_id,
+          entry_order_product_id: allocation.entry_order_product_id,
+          cell_id: allocation.cell_id,
+          cell_reference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+          warehouse_name: allocation.cell.warehouse.name,
+          warehouse_location: allocation.cell.warehouse.location,
+          warehouse_id: allocation.cell.warehouse.warehouse_id,
+          
+          // ✅ Product details
+          product_code: allocation.entry_order_product.product.product_code,
+          product_name: allocation.entry_order_product.product.name,
+          manufacturer: allocation.entry_order_product.product.manufacturer,
+          supplier_name: allocation.entry_order_product.supplier?.name,
+          presentation: allocation.presentation,
+          product_status: allocation.product_status,
+          status_code: allocation.status_code,
+          quality_status: allocation.quality_status,
+          
+          // ✅ FIFO details
+          entry_order_no: entryOrder.entry_order_no,
+          entry_date_time: entryOrder.entry_date_time, // ✅ FIFO sort key
+          registration_date: entryOrder.registration_date,
+          document_date: entryOrder.document_date,
+          fifo_rank: allocation.entry_order_product.entry_order.entry_date_time, // For sorting
+          
+          // Available quantities (current inventory)
+          available_quantity: inventory.current_quantity,
+          available_packages: inventory.current_package_quantity,
+          available_weight: parseFloat(inventory.current_weight),
+          available_volume: inventory.current_volume ? parseFloat(inventory.current_volume) : null,
+          
+          // Allocation details
+          original_quantity: allocation.inventory_quantity,
+          original_packages: allocation.package_quantity,
+          original_weight: parseFloat(allocation.weight_kg),
+          guide_number: allocation.guide_number,
+          observations: allocation.observations,
+          allocated_at: allocation.allocated_at,
+          allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
+        };
+      });
+  } catch (error) {
+    console.error("Error in getFifoLocationsForProduct:", error);
+    throw new Error(`Failed to fetch FIFO locations: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Get suggested FIFO allocation for a product (automatic FIFO selection)
+async function getSuggestedFifoAllocation(productId, requestedQuantity, requestedWeight = null, warehouseId = null) {
+  try {
+    const fifoLocations = await getFifoLocationsForProduct(productId, warehouseId);
+    
+    if (fifoLocations.length === 0) {
+      throw new Error(`No approved inventory found for product ${productId}`);
+    }
+
+    const suggestions = [];
+    let remainingQuantity = requestedQuantity;
+    let remainingWeight = requestedWeight;
+
+    // ✅ FIFO allocation logic
+    for (const location of fifoLocations) {
+      if (remainingQuantity <= 0) break;
+
+      const allocateQty = Math.min(remainingQuantity, location.available_packages);
+      const allocateWeight = remainingWeight 
+        ? Math.min(remainingWeight, location.available_weight)
+        : (allocateQty / location.available_packages) * location.available_weight;
+
+      suggestions.push({
+        inventory_id: location.inventory_id,
+        allocation_id: location.allocation_id,
+        entry_order_product_id: location.entry_order_product_id,
+        cell_id: location.cell_id,
+        cell_reference: location.cell_reference,
+        warehouse_name: location.warehouse_name,
+        entry_order_no: location.entry_order_no,
+        entry_date_time: location.entry_date_time,
+        product_code: location.product_code,
+        product_name: location.product_name,
+        requested_qty: allocateQty,
+        requested_weight: allocateWeight,
+        available_qty: location.available_packages,
+        available_weight: location.available_weight,
+        fifo_rank: location.entry_date_time,
+        will_be_empty: allocateQty >= location.available_packages,
+      });
+
+      remainingQuantity -= allocateQty;
+      if (remainingWeight) remainingWeight -= allocateWeight;
+    }
+
+    const totalAllocated = suggestions.reduce((sum, s) => sum + s.requested_qty, 0);
+    const totalWeightAllocated = suggestions.reduce((sum, s) => sum + s.requested_weight, 0);
+
+    return {
+      product_id: productId,
+      requested_quantity: requestedQuantity,
+      allocated_quantity: totalAllocated,
+      requested_weight: requestedWeight,
+      allocated_weight: totalWeightAllocated,
+      fully_allocated: remainingQuantity <= 0,
+      remaining_quantity: Math.max(0, remainingQuantity),
+      remaining_weight: requestedWeight ? Math.max(0, remainingWeight) : null,
+      suggestions: suggestions,
+      locations_used: suggestions.length,
+      oldest_entry_date: suggestions[0]?.entry_date_time,
+      newest_entry_date: suggestions[suggestions.length - 1]?.entry_date_time,
+    };
+  } catch (error) {
+    console.error("Error in getSuggestedFifoAllocation:", error);
+    throw new Error(`Failed to generate FIFO allocation: ${error.message}`);
+  }
+}
+
+// ✅ UPDATED: Get departure inventory summary by warehouse (product-wise)
+async function getDepartureInventorySummary(warehouseId = null) {
+  try {
+    const whereClause = {
+      quality_status: "APROBADO", // Only approved inventory
+      status: "ACTIVE",
+    };
+
+    if (warehouseId) {
+      whereClause.cell = {
+        warehouse_id: String(warehouseId)
+      };
+    }
+
+    const allocations = await prisma.inventoryAllocation.findMany({
+      where: whereClause,
+      include: {
+        entry_order_product: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                product_line: { select: { name: true } },
+                group: { select: { name: true } },
+              },
+            },
+            entry_order: {
+              select: {
+                entry_order_no: true,
+                entry_date_time: true,
+                registration_date: true,
+              },
+            },
+          },
+        },
+        cell: {
+          select: {
+            warehouse: {
+              select: {
+                warehouse_id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        inventory: {
+          select: {
+            current_quantity: true,
+            current_package_quantity: true,
+            current_weight: true,
+            current_volume: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    // Filter available inventory and create summary
+    const availableAllocations = allocations.filter(allocation => {
+      const inventory = allocation.inventory[0];
+      return inventory && 
+             inventory.status === "AVAILABLE" && 
+             inventory.current_quantity > 0;
+    });
+
+    // ✅ Group by warehouse and product
+    const warehouseSummary = availableAllocations.reduce((acc, allocation) => {
+      const inventory = allocation.inventory[0];
+      const warehouseId = allocation.cell.warehouse.warehouse_id;
+      const warehouseName = allocation.cell.warehouse.name;
+      const product = allocation.entry_order_product.product;
+
+      if (!acc[warehouseId]) {
+        acc[warehouseId] = {
+          warehouse_id: warehouseId,
+          warehouse_name: warehouseName,
+          unique_products: new Set(),
+          total_quantity: 0,
+          total_packages: 0,
+          total_weight: 0,
+          total_volume: 0,
+          product_lines: new Set(),
+          entry_orders: new Set(),
+          oldest_entry: null,
+          newest_entry: null,
+        };
+      }
+
+      acc[warehouseId].unique_products.add(product.product_id);
+      acc[warehouseId].total_quantity += inventory.current_quantity;
+      acc[warehouseId].total_packages += inventory.current_package_quantity;
+      acc[warehouseId].total_weight += parseFloat(inventory.current_weight || 0);
+      acc[warehouseId].total_volume += parseFloat(inventory.current_volume || 0);
+      acc[warehouseId].product_lines.add(product.product_line?.name || 'Unknown');
+      acc[warehouseId].entry_orders.add(allocation.entry_order_product.entry_order.entry_order_no);
+
+      // ✅ Track FIFO dates
+      const entryDate = new Date(allocation.entry_order_product.entry_order.entry_date_time);
+      if (!acc[warehouseId].oldest_entry || entryDate < acc[warehouseId].oldest_entry) {
+        acc[warehouseId].oldest_entry = entryDate;
+      }
+      if (!acc[warehouseId].newest_entry || entryDate > acc[warehouseId].newest_entry) {
+        acc[warehouseId].newest_entry = entryDate;
+      }
+
+      return acc;
+    }, {});
+
+    // Convert to array and format
+    const summary = Object.values(warehouseSummary).map(warehouse => ({
+      ...warehouse,
+      unique_products: warehouse.unique_products.size,
+      product_lines: Array.from(warehouse.product_lines),
+      entry_orders: Array.from(warehouse.entry_orders),
+      total_entries: Array.from(warehouse.entry_orders).length,
+      // ✅ FIFO information
+      oldest_entry_date: warehouse.oldest_entry,
+      newest_entry_date: warehouse.newest_entry,
+      inventory_age_days: warehouse.oldest_entry 
+        ? Math.floor((new Date() - warehouse.oldest_entry) / (1000 * 60 * 60 * 24))
+        : 0,
+    }));
+
+    // Overall totals with FIFO info
+    const allDates = availableAllocations.map(a => new Date(a.entry_order_product.entry_order.entry_date_time));
+    const overallTotals = {
+      total_warehouses: summary.length,
+      total_approved_items: availableAllocations.length,
+      total_unique_products: [...new Set(availableAllocations.map(a => a.entry_order_product.product.product_id))].length,
+      total_quantity: summary.reduce((sum, w) => sum + w.total_quantity, 0),
+      total_packages: summary.reduce((sum, w) => sum + w.total_packages, 0),
+      total_weight: summary.reduce((sum, w) => sum + w.total_weight, 0),
+      total_volume: summary.reduce((sum, w) => sum + w.total_volume, 0),
+      total_entry_orders: [...new Set(availableAllocations.map(a => a.entry_order_product.entry_order.entry_order_no))].length,
+      // ✅ Overall FIFO information
+      oldest_inventory_date: allDates.length > 0 ? new Date(Math.min(...allDates)) : null,
+      newest_inventory_date: allDates.length > 0 ? new Date(Math.max(...allDates)) : null,
+    };
+
+    return {
+      summary: summary,
+      totals: overallTotals,
+      by_warehouse: warehouseId ? summary.filter(w => w.warehouse_id === warehouseId) : summary,
+    };
+  } catch (error) {
+    console.error("Error in getDepartureInventorySummary:", error);
+    throw new Error(`Failed to fetch departure inventory summary: ${error.message}`);
   }
 }
 
@@ -453,6 +831,7 @@ async function getAvailableCellsForProduct(
         },
       },
       orderBy: [
+        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ FIFO
         { cell: { row: "asc" } },
         { cell: { bay: "asc" } },
         { cell: { position: "asc" } },
@@ -501,15 +880,525 @@ async function getAvailableCellsForProduct(
           allocated_at: allocation.allocated_at,
           allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
           
-          // Entry order details
+          // Entry order details with FIFO
           entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
           registration_date: allocation.entry_order_product.entry_order.registration_date,
-          entry_date_time: allocation.entry_order_product.entry_order.entry_date_time,
+          entry_date_time: allocation.entry_order_product.entry_order.entry_date_time, // ✅ FIFO key
+          fifo_rank: allocation.entry_order_product.entry_order.entry_date_time,
         };
       });
   } catch (error) {
     console.error("Error in getAvailableCellsForProduct:", error);
     throw new Error(`Failed to fetch available cells: ${error.message}`);
+  }
+}
+
+// Create Departure order with product-based inventory tracking
+async function createDepartureOrder(departureData) {
+  const { inventory_selections, ...orderData } = departureData;
+
+  // ✅ MANDATORY FIELD VALIDATION
+  const requiredFields = {
+    departure_order_no: "Dispatch Order Number",
+    customer_id: "Customer",
+    warehouse_id: "Warehouse", 
+    departure_date: "Dispatch Date & Time",
+    created_by: "Created By User",
+    organisation_id: "Organisation",
+    document_number: "Dispatch Document Number", // ✅ NEW: Make mandatory
+    document_date: "Document Date", // ✅ NEW: Make mandatory
+  };
+
+  // Validate required main fields
+  for (const [field, displayName] of Object.entries(requiredFields)) {
+    if (!orderData[field]) {
+      throw new Error(`${displayName} is required and cannot be empty`);
+    }
+  }
+
+  if (!inventory_selections || inventory_selections.length === 0) {
+    throw new Error("At least one inventory selection is required");
+  }
+
+  // ✅ VALIDATE EACH INVENTORY SELECTION has required fields
+  for (let i = 0; i < inventory_selections.length; i++) {
+    const selection = inventory_selections[i];
+    const selectionRequiredFields = {
+      inventory_id: "Inventory ID",
+      requested_qty: "Quantity Inventory units", // ✅ FIXED: Use requested_qty not requested_quantity
+      requested_weight: "Weight",
+      // packaging_code is optional - will be derived from product status if not provided
+    };
+
+    for (const [field, displayName] of Object.entries(selectionRequiredFields)) {
+      if (!selection[field] && selection[field] !== 0) {
+        throw new Error(`Selection ${i + 1}: ${displayName} is required`);
+      }
+    }
+
+    // ✅ VALIDATE numeric fields
+    // ✅ FIXED: Use correct field names from frontend payload
+    if (parseInt(selection.requested_qty) <= 0) {
+      throw new Error(`Selection ${i + 1}: Quantity must be greater than 0`);
+    }
+    if (parseFloat(selection.requested_weight) <= 0) {
+      throw new Error(`Selection ${i + 1}: Weight must be greater than 0`);
+    }
+  }
+
+  // ✅ FIXED: Enhanced validation to include packaging_code
+  const validatedCells = [];
+  for (const selection of inventory_selections) {
+    const validated = await validateSelectedCell(
+      selection.inventory_id,
+      parseInt(selection.requested_qty), // ✅ FIXED: Use requested_qty not requested_quantity
+      parseFloat(selection.requested_weight)
+    );
+
+    // ✅ PACKAGING CODE: Use from selection if provided, otherwise derive from inventory
+    if (selection.packaging_code) {
+      validated.packaging_code = parseInt(selection.packaging_code);
+    } else {
+      // ✅ DERIVE packaging code from product status and presentation
+      const statusMapping = {
+        'PAL_NORMAL': 30, 'CAJ_NORMAL': 31, 'SAC_NORMAL': 32, 'UNI_NORMAL': 33,
+        'PAQ_NORMAL': 34, 'TAM_NORMAL': 35, 'BUL_NORMAL': 36, 'OTR_NORMAL': 37,
+        'PAL_DANADA': 40, 'CAJ_DANADA': 41, 'SAC_DANADO': 42, 'UNI_DANADA': 43,
+        'PAQ_DANADO': 44, 'TAM_DANADO': 45, 'BUL_DANADO': 46, 'OTR_DANADO': 47,
+      };
+      validated.packaging_code = statusMapping[validated.product_status] || 31; // Default to CAJ_NORMAL
+    }
+    
+    // ✅ CAPTURE ADDITIONAL MANDATORY INFO from inventory/allocation
+    const allocationInfo = await prisma.inventoryAllocation.findUnique({
+      where: { allocation_id: validated.allocation_id },
+      include: {
+        entry_order_product: {
+          include: {
+            entry_order: {
+              select: {
+                entry_order_no: true,
+                entry_date_time: true,
+                document_date: true,
+              }
+            },
+            product: {
+              select: {
+                product_code: true,
+                name: true,
+              }
+            }
+          }
+        },
+        cell: {
+          select: {
+            row: true,
+            bay: true,
+            position: true,
+          }
+        }
+      }
+    });
+
+    if (!allocationInfo) {
+      throw new Error(`Allocation not found for inventory ${selection.inventory_id}`);
+    }
+
+    // ✅ ADD MANDATORY TRACEABILITY INFO
+    validated.entry_order_no = allocationInfo.entry_order_product.entry_order.entry_order_no;
+    validated.entry_date_time = allocationInfo.entry_order_product.entry_order.entry_date_time;
+    validated.entry_document_date = allocationInfo.entry_order_product.entry_order.document_date;
+    validated.product_code = allocationInfo.entry_order_product.product.product_code;
+    validated.product_name = allocationInfo.entry_order_product.product.name;
+    validated.lot_series = allocationInfo.entry_order_product.lot_series || "N/A";
+    validated.presentation = allocationInfo.presentation;
+    validated.pallets_position = `${allocationInfo.cell.row}.${String(allocationInfo.cell.bay).padStart(2, "0")}.${String(allocationInfo.cell.position).padStart(2, "0")}`;
+    
+    validatedCells.push(validated);
+  }
+
+  return await prisma.$transaction(async (tx) => {
+    // 1. ✅ FIXED: Validate organisation exists BEFORE creating order
+    const organisation = await tx.organisation.findUnique({
+      where: { organisation_id: String(orderData.organisation_id) }
+    });
+    if (!organisation) {
+      throw new Error(`Organisation with ID ${orderData.organisation_id} not found`);
+    }
+
+    // 2. Create base order
+    const newOrder = await tx.order.create({
+      data: {
+        order_type: orderData.order_type || "DEPARTURE",
+        status: orderData.order_status || "PENDING",
+        organisation_id: orderData.organisation_id,
+        created_by: orderData.created_by,
+      },
+    });
+
+    // 3. Calculate totals from selections
+    const totalQty = validatedCells.reduce(
+      (sum, cell) => sum + cell.requested_qty,
+      0
+    );
+    const totalWeight = validatedCells.reduce(
+      (sum, cell) => sum + cell.requested_weight,
+      0
+    );
+    const totalPackages = validatedCells.reduce(
+      (sum, cell) => sum + cell.requested_qty, // Assuming packages = quantity
+      0
+    );
+
+    // 4. Validate foreign key references before creating departure order
+    let validDocumentTypeId = null;
+    if (orderData.document_type_id) {
+      const documentType = await tx.departureDocumentType.findUnique({
+        where: { document_type_id: String(orderData.document_type_id) }
+      });
+      if (documentType) {
+        validDocumentTypeId = String(orderData.document_type_id);
+      }
+    }
+
+    // Validate customer exists
+    const customer = await tx.customer.findUnique({
+      where: { customer_id: String(orderData.customer_id) }
+    });
+    if (!customer) {
+      throw new Error(`Customer with ID ${orderData.customer_id} not found`);
+    }
+
+    // Validate warehouse exists
+    const warehouse = await tx.warehouse.findUnique({
+      where: { warehouse_id: String(orderData.warehouse_id) }
+    });
+    if (!warehouse) {
+      throw new Error(`Warehouse with ID ${orderData.warehouse_id} not found`);
+    }
+
+    // Validate user exists
+    const user = await tx.user.findUnique({
+      where: { id: String(orderData.created_by) }
+    });
+    if (!user) {
+      throw new Error(`User with ID ${orderData.created_by} not found`);
+    }
+
+    // ✅ ENHANCED: Create departure order with ALL MANDATORY FIELDS
+    const newDepartureOrder = await tx.departureOrder.create({
+      data: {
+        departure_order_no: orderData.departure_order_no, // ✅ MANDATORY: Dispatch Order Number
+        registration_date: toUTC(orderData.registration_date) || new Date(),
+        document_date: toUTC(orderData.document_date), // ✅ MANDATORY: Document Date
+        departure_date_time: toUTC(orderData.departure_date), // ✅ MANDATORY: Dispatch Date & Time
+        destination_point: orderData.arrival_point || null,
+        transport_type: orderData.transport_type || null,
+        carrier_name: orderData.carrier_name || null,
+        total_volume: orderData.total_volume ? parseFloat(orderData.total_volume) : null,
+        total_weight: totalWeight, // ✅ CALCULATED: Total weight from selections
+        total_pallets: orderData.total_pallets ? parseInt(orderData.total_pallets) : null, // ✅ MANDATORY: Pallets/Position Quantity
+        observation: orderData.observations || null,
+        order_status: "PENDING",
+        
+        // ✅ MANDATORY: Documents Upload - store as JSON
+        uploaded_documents: orderData.uploaded_documents ? {
+          dispatch_document_number: orderData.document_number, // ✅ MANDATORY: Dispatch Document Number
+          documents: orderData.uploaded_documents,
+          uploaded_at: new Date().toISOString(),
+          uploaded_by: orderData.created_by
+        } : {
+          dispatch_document_number: orderData.document_number, // ✅ MANDATORY: Even if no files
+          documents: [],
+          uploaded_at: new Date().toISOString(),
+          uploaded_by: orderData.created_by
+        },
+        
+        // ✅ FIXED: Use explicit connect syntax for relations
+        customer: { 
+          connect: { customer_id: String(orderData.customer_id) }
+        },
+        documentType: validDocumentTypeId ? {
+          connect: { document_type_id: validDocumentTypeId }
+        } : undefined,
+        creator: {
+          connect: { id: String(orderData.created_by) }
+        },
+        order: {
+          connect: { order_id: newOrder.order_id }
+        },
+        warehouse: {
+          connect: { warehouse_id: String(orderData.warehouse_id) }
+        },
+      },
+    });
+
+    // 5. Create departure products for each unique PRODUCT (not entry order product) WITH ALL MANDATORY FIELDS
+    const productGroups = validatedCells.reduce((groups, cell) => {
+      const key = cell.product_code; // ✅ FIXED: Group by product_code to avoid constraint violation
+      if (!groups[key]) {
+        groups[key] = {
+          product_code: cell.product_code, // ✅ MANDATORY: Product Code
+          product_id: cell.product_id,
+          product_name: cell.product_name, // ✅ MANDATORY: Product Name
+          lot_series: cell.lot_series, // ✅ MANDATORY: Lot Number (use first one found)
+          presentation: cell.presentation, // ✅ MANDATORY: Packaging type
+          entry_order_nos: [cell.entry_order_no], // ✅ MANDATORY: Entry Order Numbers (multiple possible)
+          entry_date_times: [cell.entry_date_time], // ✅ MANDATORY: Entry Dates (multiple possible)
+          entry_order_product_ids: [cell.entry_order_product_id], // Track all source entry products
+          pallets_positions: [], // ✅ MANDATORY: Pallets / Position Quantity
+          total_qty: 0,
+          total_weight: 0,
+          cells: [],
+        };
+      } else {
+        // ✅ FIXED: For additional cells of same product, merge data
+        if (!groups[key].entry_order_nos.includes(cell.entry_order_no)) {
+          groups[key].entry_order_nos.push(cell.entry_order_no);
+        }
+        if (!groups[key].entry_date_times.some(dt => dt?.getTime() === cell.entry_date_time?.getTime())) {
+          groups[key].entry_date_times.push(cell.entry_date_time);
+        }
+        if (!groups[key].entry_order_product_ids.includes(cell.entry_order_product_id)) {
+          groups[key].entry_order_product_ids.push(cell.entry_order_product_id);
+        }
+      }
+      groups[key].total_qty += cell.requested_qty; // ✅ MANDATORY: Quantity Inventory units
+      groups[key].total_weight += cell.requested_weight;
+      groups[key].pallets_positions.push(cell.pallets_position); // ✅ MANDATORY: Position info
+      groups[key].cells.push(cell);
+      return groups;
+    }, {});
+
+    // ✅ UPDATED: Create departure products with ALL MANDATORY TRACEABILITY
+    const departureProducts = [];
+    const entryToDepartureProductMap = {}; // Map entry_order_product_id to departure_order_product_id
+
+    for (const [productCode, group] of Object.entries(productGroups)) {
+      const departureProduct = await tx.departureOrderProduct.create({
+        data: {
+          departure_order_id: newDepartureOrder.departure_order_id,
+          product_code: group.product_code, // ✅ MANDATORY: Product Code
+          product_id: group.product_id,
+          lot_series: group.lot_series, // ✅ MANDATORY: Lot Number (first one)
+          requested_quantity: group.total_qty, // ✅ MANDATORY: Quantity Inventory units
+          requested_packages: group.total_qty, // ✅ MANDATORY: Packaging Quantity
+          requested_pallets: Math.ceil(group.total_qty / 200), // ✅ CALCULATED: Pallets from quantity
+          presentation: group.presentation, // ✅ MANDATORY: Packaging type
+          requested_weight: group.total_weight,
+          requested_volume: parseFloat(orderData.total_volume) || null,
+          unit_price: orderData.unit_price ? parseFloat(orderData.unit_price) : null,
+          total_value: orderData.unit_price ? parseFloat(orderData.unit_price) * group.total_qty : null,
+          temperature_requirement: "AMBIENTE",
+          special_handling: orderData.special_handling || null,
+          delivery_instructions: orderData.delivery_instructions || null,
+        },
+      });
+
+      departureProducts.push({
+        ...departureProduct,
+        // ✅ ADD MANDATORY TRACEABILITY INFO to response (merged from multiple sources)
+        product_name: group.product_name, // ✅ MANDATORY: Product Name
+        entry_order_nos: group.entry_order_nos.join(', '), // ✅ MANDATORY: Entry Order Numbers (multiple)
+        entry_date_times: group.entry_date_times.map(dt => dt?.toISOString()).join(', '), // ✅ MANDATORY: Entry Dates
+        dispatch_date_time: newDepartureOrder.departure_date_time, // ✅ MANDATORY: Dispatch Date & Time
+        dispatch_document_number: orderData.document_number, // ✅ MANDATORY: Dispatch Document Number
+        pallets_positions: group.pallets_positions.join(', '), // ✅ MANDATORY: Pallets / Position Quantity
+      });
+
+      // ✅ FIXED: Store mapping for ALL entry order products in this group
+      for (const entryOrderProductId of group.entry_order_product_ids) {
+        entryToDepartureProductMap[entryOrderProductId] =
+          departureProduct.departure_order_product_id;
+      }
+    }
+
+    // 6. ✅ UPDATED: Update inventory using the new allocation-based system with proper synchronization
+    const cellAllocations = [];
+    for (const cell of validatedCells) {
+      // ✅ FIXED: Calculate proportional package quantity based on actual package to quantity ratio
+      const originalPackageRatio = cell.available_package_qty > 0 ? 
+        cell.available_package_qty / cell.available_qty : 1;
+      const requestedPackageQty = Math.ceil(cell.requested_qty * originalPackageRatio);
+      
+      // ✅ FIXED: Calculate proportional volume if available
+      const originalVolumeRatio = cell.available_volume > 0 ? 
+        cell.available_volume / cell.available_qty : 0;
+      const requestedVolume = cell.requested_qty * originalVolumeRatio;
+
+      // Update inventory (DECREMENT - removing from warehouse) with proper synchronization
+      await tx.inventory.update({
+        where: { inventory_id: cell.inventory_id },
+        data: {
+          current_quantity: { decrement: cell.requested_qty },
+          current_package_quantity: { decrement: requestedPackageQty }, // ✅ FIXED: Use calculated package qty
+          current_weight: { decrement: cell.requested_weight },
+          current_volume: requestedVolume > 0 ? { decrement: requestedVolume } : undefined,
+          status: cell.will_be_empty ? "DEPLETED" : "AVAILABLE",
+        },
+      });
+
+      // Create cell assignment with packaging_code
+      await tx.cellAssignment.create({
+        data: {
+          departure_order_id: newDepartureOrder.departure_order_id,
+          cell_id: cell.cell_id,
+          assigned_by: orderData.created_by,
+          packaging_quantity: requestedPackageQty, // ✅ FIXED: Use calculated package qty
+          weight: cell.requested_weight,
+          packaging_code: cell.packaging_code, // ✅ MANDATORY: From validated selection
+          status: "COMPLETED",
+        },
+      });
+
+      // ✅ FIXED: Update cell status with proper synchronization
+      if (cell.will_be_empty) {
+        await tx.warehouseCell.update({
+          where: { id: cell.cell_id },
+          data: {
+            status: CellStatus.AVAILABLE,
+            currentUsage: 0,
+            current_packaging_qty: 0,
+            current_weight: 0,
+          },
+        });
+      } else {
+        await tx.warehouseCell.update({
+          where: { id: cell.cell_id },
+          data: {
+            current_packaging_qty: { decrement: requestedPackageQty }, // ✅ FIXED: Use calculated package qty
+            current_weight: { decrement: cell.requested_weight },
+            currentUsage: requestedVolume > 0 ? { decrement: requestedVolume } : undefined,
+          },
+        });
+      }
+
+      // ✅ ENHANCED: Create inventory log with proper synchronization
+      await tx.inventoryLog.create({
+        data: {
+          user_id: orderData.created_by,
+          product_id: cell.product_id,
+          movement_type: MovementType.DEPARTURE,
+          quantity_change: -cell.requested_qty,
+          package_change: -requestedPackageQty, // ✅ FIXED: Use calculated package qty
+          weight_change: -cell.requested_weight,
+          volume_change: requestedVolume > 0 ? -requestedVolume : null,
+          departure_order_id: newDepartureOrder.departure_order_id,
+          departure_order_product_id:
+            entryToDepartureProductMap[cell.entry_order_product_id],
+          entry_order_product_id: cell.entry_order_product_id,
+          warehouse_id: cell.warehouse_id,
+          cell_id: cell.cell_id,
+          product_status: cell.product_status || "PAL_NORMAL",
+          status_code: cell.status_code || 37,
+          // ✅ ENHANCED: Complete traceability notes with ALL MANDATORY INFO including sync details
+          notes: `DEPARTURE: ${cell.requested_qty} units (${requestedPackageQty} packages, ${cell.requested_weight} kg) of ${cell.product_code} (${cell.product_name}) | ` +
+                 `Lot: ${cell.lot_series} | Entry Order: ${cell.entry_order_no} | ` +
+                 `Entry Date: ${cell.entry_date_time} | Dispatch Date: ${newDepartureOrder.departure_date_time} | ` +
+                 `Position: ${cell.pallets_position} | Document: ${orderData.document_number} | ` +
+                 `Dispatch Order: ${newDepartureOrder.departure_order_no}`,
+        },
+      });
+
+      cellAllocations.push({
+        cell_reference: cell.cell_reference,
+        warehouse_name: cell.warehouse_name,
+        entry_order_no: cell.entry_order_no,
+        product_code: cell.product_code,
+        product_name: cell.product_name, // ✅ ADD: Product Name
+        lot_series: cell.lot_series, // ✅ ADD: Lot Number
+        departed_qty: cell.requested_qty,
+        departed_packages: requestedPackageQty, // ✅ FIXED: Add calculated package qty
+        departed_weight: cell.requested_weight,
+        departed_volume: requestedVolume, // ✅ ADD: Volume tracking
+        remaining_qty: cell.remaining_qty,
+        remaining_weight: cell.remaining_weight,
+        cell_depleted: cell.will_be_empty,
+        packaging_code: cell.packaging_code, // ✅ ADD: Packaging Code
+        pallets_position: cell.pallets_position, // ✅ ADD: Position info
+        entry_date_time: cell.entry_date_time, // ✅ ADD: Entry Date & Time
+        dispatch_date_time: newDepartureOrder.departure_date_time, // ✅ ADD: Dispatch Date & Time
+      });
+    }
+
+    return {
+      departureOrder: {
+        ...newDepartureOrder,
+        // ✅ ADD MANDATORY FIELDS to response for verification
+        dispatch_order_number: newDepartureOrder.departure_order_no, // ✅ MANDATORY
+        dispatch_document_number: orderData.document_number, // ✅ MANDATORY
+        dispatch_date_time: newDepartureOrder.departure_date_time, // ✅ MANDATORY
+        has_documents_upload: !!orderData.uploaded_documents, // ✅ MANDATORY check
+        total_products: departureProducts.length,
+        total_packaging_quantity: totalPackages, // ✅ MANDATORY
+      },
+      departureProducts, // ✅ Already enhanced with mandatory fields
+      cellAllocations, // ✅ Already enhanced with mandatory fields
+      totals: {
+        total_qty: totalQty,
+        total_weight: totalWeight,
+        total_packages: totalPackages, // ✅ ADD: Packaging Quantity
+        cells_affected: validatedCells.length,
+        cells_depleted: validatedCells.filter((c) => c.will_be_empty).length,
+      },
+      // ✅ MANDATORY COMPLIANCE SUMMARY
+      mandatory_fields_captured: {
+        dispatch_order_number: newDepartureOrder.departure_order_no,
+        product_codes: [...new Set(validatedCells.map(c => c.product_code))],
+        product_names: [...new Set(validatedCells.map(c => c.product_name))],
+        lot_numbers: [...new Set(validatedCells.map(c => c.lot_series))],
+        quantity_inventory_units: totalQty,
+        packaging_quantities: totalPackages,
+        packaging_types: [...new Set(validatedCells.map(c => c.presentation))],
+        dispatch_document_number: orderData.document_number,
+        pallets_positions: [...new Set(validatedCells.map(c => c.pallets_position))],
+        entry_date_times: [...new Set(validatedCells.map(c => c.entry_date_time))],
+        dispatch_date_time: newDepartureOrder.departure_date_time,
+        entry_order_numbers: [...new Set(validatedCells.map(c => c.entry_order_no))],
+        documents_uploaded: !!orderData.uploaded_documents,
+      }
+    };
+  }, {
+    maxWait: 30000, // 30 seconds
+    timeout: 30000, // 30 seconds
+  });
+}
+
+// Get departure order details with products
+async function getDepartureOrderById(departureOrderId) {
+  try {
+    return await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+      include: {
+        customer: { select: { name: true } },
+        documentType: { select: { name: true } },
+        warehouse: { select: { name: true } },
+        products: {
+          include: {
+            product: {
+              select: {
+                product_code: true,
+                name: true,
+              },
+            },
+          },
+        },
+        cellAssignments: {
+          include: {
+            cell: {
+              select: {
+                row: true,
+                bay: true,
+                position: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error in getDepartureOrderById:", error);
+    throw new Error(`Failed to fetch departure order: ${error.message}`);
   }
 }
 
@@ -596,6 +1485,39 @@ async function validateSelectedCell(
     );
   }
 
+  // ✅ NEW: Validate synchronization between requested quantity and weight
+  if (inventory.current_package_quantity > 0 && parseFloat(inventory.current_weight) > 0) {
+    const currentWeightPerUnit = parseFloat(inventory.current_weight) / inventory.current_package_quantity;
+    const requestedWeightPerUnit = requested_weight / requested_qty;
+    
+    // Allow 10% tolerance for weight per unit ratio variations
+    const tolerance = currentWeightPerUnit * 0.1;
+    
+    if (Math.abs(requestedWeightPerUnit - currentWeightPerUnit) > tolerance) {
+      throw new Error(
+        `Weight to quantity ratio out of sync. Current: ${currentWeightPerUnit.toFixed(3)} kg/unit, ` +
+        `Requested: ${requestedWeightPerUnit.toFixed(3)} kg/unit. ` +
+        `Expected weight for ${requested_qty} units: ${(requested_qty * currentWeightPerUnit).toFixed(2)} kg`
+      );
+    }
+  }
+
+  // ✅ NEW: Validate that the remaining quantities will be synchronized
+  const remainingQty = inventory.current_package_quantity - requested_qty;
+  const remainingWeight = parseFloat(inventory.current_weight) - requested_weight;
+  
+  if (remainingQty > 0 && remainingWeight <= 0) {
+    throw new Error(
+      `Invalid operation would leave quantity (${remainingQty}) without corresponding weight`
+    );
+  }
+  
+  if (remainingWeight > 0.01 && remainingQty <= 0) {
+    throw new Error(
+      `Invalid operation would leave weight (${remainingWeight.toFixed(2)} kg) without corresponding quantity`
+    );
+  }
+
   return {
     inventory_id: inventory.inventory_id,
     allocation_id: allocation.allocation_id,
@@ -626,739 +1548,29 @@ async function validateSelectedCell(
   };
 }
 
-// Create Departure order with product-based inventory tracking
-async function createDepartureOrder(departureData) {
-  const { inventory_selections, ...orderData } = departureData;
-
-  if (!inventory_selections || inventory_selections.length === 0) {
-    throw new Error("At least one inventory selection is required");
-  }
-
-  // ✅ FIXED: Enhanced validation to include packaging_code
-  const validatedCells = [];
-  for (const selection of inventory_selections) {
-    const validated = await validateSelectedCell(
-      selection.inventory_id,
-      parseInt(selection.requested_qty),
-      parseFloat(selection.requested_weight)
-    );
-
-    // ✅ FIXED: Add packaging_code from selection to validated cell
-    validated.packaging_code = selection.packaging_code || 37; // Default to 37 if not provided
-    validatedCells.push(validated);
-  }
-
-  return await prisma.$transaction(async (tx) => {
-    // 1. Create base order
-    const newOrder = await tx.order.create({
-      data: {
-        order_type: orderData.order_type || "DEPARTURE",
-        status: orderData.order_status || "PENDING",
-        organisation_id: orderData.organisation_id,
-        created_by: orderData.created_by,
-      },
-    });
-
-    // 2. Calculate totals from selections
-    const totalQty = validatedCells.reduce(
-      (sum, cell) => sum + cell.requested_qty,
-      0
-    );
-    const totalWeight = validatedCells.reduce(
-      (sum, cell) => sum + cell.requested_weight,
-      0
-    );
-
-    // 3. Validate foreign key references before creating departure order
-    let validDocumentTypeId = null;
-    if (orderData.document_type_id) {
-      const documentType = await tx.departureDocumentType.findUnique({
-        where: { document_type_id: String(orderData.document_type_id) }
-      });
-      if (documentType) {
-        validDocumentTypeId = String(orderData.document_type_id);
-      }
-    }
-
-    // Validate customer exists
-    const customer = await tx.customer.findUnique({
-      where: { customer_id: String(orderData.customer_id) }
-    });
-    if (!customer) {
-      throw new Error(`Customer with ID ${orderData.customer_id} not found`);
-    }
-
-    // Validate warehouse exists
-    const warehouse = await tx.warehouse.findUnique({
-      where: { warehouse_id: String(orderData.warehouse_id) }
-    });
-    if (!warehouse) {
-      throw new Error(`Warehouse with ID ${orderData.warehouse_id} not found`);
-    }
-
-    // Validate user exists
-    const user = await tx.user.findUnique({
-      where: { id: String(orderData.created_by) }
-    });
-    if (!user) {
-      throw new Error(`User with ID ${orderData.created_by} not found`);
-    }
-
-    // Create departure order with validated IDs (✅ FIXED: Remove order_id, use relationships only)
-    const newDepartureOrder = await tx.departureOrder.create({
-      data: {
-        departure_order_no: orderData.departure_order_no,
-        registration_date: toUTC(orderData.registration_date) || new Date(),
-        document_date: toUTC(orderData.document_date),
-        departure_date_time: toUTC(orderData.departure_date), // ✅ FIXED: Frontend sends departure_date
-        destination_point: orderData.arrival_point || null,  // ✅ FIXED: Keep as arrival_point (frontend sends this)
-        transport_type: orderData.transport_type || null,    // ✅ FIXED: Match frontend field name
-        carrier_name: orderData.carrier_name || null,       // ✅ FIXED: Match frontend field name
-        total_volume: orderData.total_volume ? parseFloat(orderData.total_volume) : null,
-        total_weight: totalWeight,
-        total_pallets: orderData.total_pallets ? parseInt(orderData.total_pallets) : null, // ✅ FIXED: Match frontend field name
-        observation: orderData.observations || null,        // ✅ FIXED: Frontend sends observations (plural)
-        order_status: "PENDING",
-        // ✅ FIXED: Use explicit connect syntax for relations
-        customer: { 
-          connect: { customer_id: String(orderData.customer_id) }
-        },
-        documentType: validDocumentTypeId ? {
-          connect: { document_type_id: validDocumentTypeId }
-        } : undefined,
-        creator: {
-          connect: { id: String(orderData.created_by) }
-        },
-        order: {
-          connect: { order_id: newOrder.order_id }
-        },
-        warehouse: {
-          connect: { warehouse_id: String(orderData.warehouse_id) }
-        },
-      },
-    });
-
-    // 4. Create departure products for each unique entry order product
-    const productGroups = validatedCells.reduce((groups, cell) => {
-      const key = cell.entry_order_product_id;
-      if (!groups[key]) {
-        groups[key] = {
-          entry_order_product_id: cell.entry_order_product_id,
-          product_code: cell.product_code,
-          product_name: cell.product_name,
-          packaging_type: cell.packaging_type,
-          packaging_status: cell.packaging_status,
-          total_qty: 0,
-          total_weight: 0,
-          cells: [],
-        };
-      }
-      groups[key].total_qty += cell.requested_qty;
-      groups[key].total_weight += cell.requested_weight;
-      groups[key].cells.push(cell);
-      return groups;
-    }, {});
-
-          // ✅ UPDATED: Create departure products with enhanced allocation data
-      const departureProducts = [];
-      const entryToDepartureProductMap = {}; // Map entry_order_product_id to departure_order_product_id
-
-      for (const [entryOrderProductId, group] of Object.entries(productGroups)) {
-        const departureProduct = await tx.departureOrderProduct.create({
-          data: {
-            departure_order_id: newDepartureOrder.departure_order_id,
-            product_code: group.cells[0].product_code,
-            product_id: group.cells[0].product_id,
-            lot_series: group.cells[0].lot_series || null,
-            requested_quantity: group.total_qty,
-            requested_packages: group.total_qty,
-            requested_pallets: orderData.total_pallets ? parseInt(orderData.total_pallets) : null, // ✅ FIXED: Match frontend field
-            presentation: group.cells[0].presentation || "CAJA",
-            requested_weight: group.total_weight,
-            requested_volume: parseFloat(orderData.total_volume) || null,
-            unit_price: orderData.unit_price ? parseFloat(orderData.unit_price) : null, // ✅ FIXED: Match frontend field
-            total_value: orderData.unit_price ? parseFloat(orderData.unit_price) * group.total_qty : null, // ✅ FIXED: Match frontend field
-            temperature_requirement: "AMBIENTE",
-            special_handling: orderData.special_handling || null, // ✅ FIXED: Match frontend field
-            delivery_instructions: orderData.delivery_instructions || null, // ✅ FIXED: Match frontend field
-          },
-        });
-
-        departureProducts.push(departureProduct);
-
-        // ✅ Store the mapping for inventory logs
-        entryToDepartureProductMap[entryOrderProductId] =
-          departureProduct.departure_order_product_id;
-      }
-
-    // 5. ✅ UPDATED: Update inventory using the new allocation-based system
-    const cellAllocations = [];
-    for (const cell of validatedCells) {
-      // Update inventory (DECREMENT - removing from warehouse)
-      await tx.inventory.update({
-        where: { inventory_id: cell.inventory_id },
-        data: {
-          current_quantity: { decrement: cell.requested_qty },
-          current_package_quantity: { decrement: cell.requested_qty },
-          current_weight: { decrement: cell.requested_weight },
-          status: cell.will_be_empty ? "DEPLETED" : "AVAILABLE",
-        },
-      });
-
-      // Create cell assignment with packaging_code
-      await tx.cellAssignment.create({
-        data: {
-          departure_order_id: newDepartureOrder.departure_order_id,
-          cell_id: cell.cell_id,
-          assigned_by: orderData.created_by,
-          packaging_quantity: cell.requested_qty,
-          weight: cell.requested_weight,
-          packaging_code: cell.packaging_code,
-          status: "COMPLETED",
-        },
-      });
-
-      // Update cell status
-      if (cell.will_be_empty) {
-        await tx.warehouseCell.update({
-          where: { id: cell.cell_id },
-          data: {
-            status: CellStatus.AVAILABLE,
-            currentUsage: 0,
-            current_packaging_qty: 0,
-            current_weight: 0,
-          },
-        });
-      } else {
-        await tx.warehouseCell.update({
-          where: { id: cell.cell_id },
-          data: {
-            current_packaging_qty: { decrement: cell.requested_qty },
-            current_weight: { decrement: cell.requested_weight },
-          },
-        });
-      }
-
-      // ✅ FIXED: Create inventory log with departure_order_product_id
-      await tx.inventoryLog.create({
-        data: {
-          user_id: orderData.created_by,
-          product_id: cell.product_id,
-          movement_type: MovementType.DEPARTURE,
-          quantity_change: -cell.requested_qty,
-          package_change: -cell.requested_qty,
-          weight_change: -cell.requested_weight,
-          departure_order_id: newDepartureOrder.departure_order_id,
-          departure_order_product_id:
-            entryToDepartureProductMap[cell.entry_order_product_id], // ✅ FIXED: Add this
-          entry_order_product_id: cell.entry_order_product_id,
-          warehouse_id: cell.warehouse_id,
-          cell_id: cell.cell_id,
-          product_status: cell.product_status || "PAL_NORMAL",
-          status_code: cell.status_code || 37,
-        },
-      });
-
-      cellAllocations.push({
-        cell_reference: cell.cell_reference,
-        warehouse_name: cell.warehouse_name,
-        entry_order_no: cell.entry_order_no,
-        product_code: cell.product_code,
-        departed_qty: cell.requested_qty,
-        departed_weight: cell.requested_weight,
-        remaining_qty: cell.remaining_qty,
-        remaining_weight: cell.remaining_weight,
-        cell_depleted: cell.will_be_empty,
-      });
-    }
-
-    return {
-      departureOrder: newDepartureOrder,
-      departureProducts,
-      cellAllocations,
-      totals: {
-        total_qty: totalQty,
-        total_weight: totalWeight,
-        cells_affected: validatedCells.length,
-        cells_depleted: validatedCells.filter((c) => c.will_be_empty).length,
-      },
-    };
-  });
-}
-
-// Get departure order details with products
-async function getDepartureOrderById(departureOrderId) {
-  try {
-    return await prisma.departureOrder.findUnique({
-      where: { departure_order_id: departureOrderId },
-      include: {
-        customer: { select: { name: true } },
-        documentType: { select: { name: true } },
-        warehouse: { select: { name: true } },
-        products: {
-          include: {
-            product: {
-              select: {
-                product_code: true,
-                name: true,
-              },
-            },
-          },
-        },
-        cellAssignments: {
-          include: {
-            cell: {
-              select: {
-                row: true,
-                bay: true,
-                position: true,
-              },
-            },
-          },
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Error in getDepartureOrderById:", error);
-    throw new Error(`Failed to fetch departure order: ${error.message}`);
-  }
-}
-
-// ✅ NEW: Get departure inventory summary by warehouse
-async function getDepartureInventorySummary(warehouseId = null) {
-  try {
-    const whereClause = {
-      quality_status: "APROBADO", // Only approved inventory
-      status: "ACTIVE",
-    };
-
-    if (warehouseId) {
-      whereClause.cell = {
-        warehouse_id: String(warehouseId)
-      };
-    }
-
-    const allocations = await prisma.inventoryAllocation.findMany({
-      where: whereClause,
-      include: {
-        entry_order_product: {
-          include: {
-            product: {
-              select: {
-                product_code: true,
-                name: true,
-                product_line: { select: { name: true } },
-                group: { select: { name: true } },
-              },
-            },
-            entry_order: {
-              select: {
-                entry_order_no: true,
-                registration_date: true,
-              },
-            },
-          },
-        },
-        cell: {
-          select: {
-            warehouse: {
-              select: {
-                warehouse_id: true,
-                name: true,
-              },
-            },
-          },
-        },
-        inventory: {
-          select: {
-            current_quantity: true,
-            current_package_quantity: true,
-            current_weight: true,
-            current_volume: true,
-            status: true,
-          },
-        },
-      },
-    });
-
-    // Filter available inventory and create summary
-    const availableAllocations = allocations.filter(allocation => {
-      const inventory = allocation.inventory[0];
-      return inventory && 
-             inventory.status === "AVAILABLE" && 
-             inventory.current_quantity > 0;
-    });
-
-    // Group by warehouse
-    const warehouseSummary = availableAllocations.reduce((acc, allocation) => {
-      const inventory = allocation.inventory[0];
-      const warehouseId = allocation.cell.warehouse.warehouse_id;
-      const warehouseName = allocation.cell.warehouse.name;
-
-      if (!acc[warehouseId]) {
-        acc[warehouseId] = {
-          warehouse_id: warehouseId,
-          warehouse_name: warehouseName,
-          total_products: 0,
-          total_entries: 0,
-          total_quantity: 0,
-          total_packages: 0,
-          total_weight: 0,
-          total_volume: 0,
-          product_lines: new Set(),
-          entry_orders: new Set(),
-        };
-      }
-
-      acc[warehouseId].total_quantity += inventory.current_quantity;
-      acc[warehouseId].total_packages += inventory.current_package_quantity;
-      acc[warehouseId].total_weight += parseFloat(inventory.current_weight || 0);
-      acc[warehouseId].total_volume += parseFloat(inventory.current_volume || 0);
-      acc[warehouseId].product_lines.add(allocation.entry_order_product.product.product_line?.name || 'Unknown');
-      acc[warehouseId].entry_orders.add(allocation.entry_order_product.entry_order.entry_order_no);
-
-      return acc;
-    }, {});
-
-    // Convert to array and format
-    const summary = Object.values(warehouseSummary).map(warehouse => ({
-      ...warehouse,
-      product_lines: Array.from(warehouse.product_lines),
-      entry_orders: Array.from(warehouse.entry_orders),
-      total_products: Array.from(warehouse.entry_orders).length,
-      total_entries: Array.from(warehouse.entry_orders).length,
-    }));
-
-    // Overall totals
-    const overallTotals = {
-      total_warehouses: summary.length,
-      total_approved_items: availableAllocations.length,
-      total_quantity: summary.reduce((sum, w) => sum + w.total_quantity, 0),
-      total_packages: summary.reduce((sum, w) => sum + w.total_packages, 0),
-      total_weight: summary.reduce((sum, w) => sum + w.total_weight, 0),
-      total_volume: summary.reduce((sum, w) => sum + w.total_volume, 0),
-      total_entry_orders: [...new Set(availableAllocations.map(a => a.entry_order_product.entry_order.entry_order_no))].length,
-    };
-
-    return {
-      summary: summary,
-      totals: overallTotals,
-      by_warehouse: warehouseId ? summary.filter(w => w.warehouse_id === warehouseId) : summary,
-    };
-  } catch (error) {
-    console.error("Error in getDepartureInventorySummary:", error);
-    throw new Error(`Failed to fetch departure inventory summary: ${error.message}`);
-  }
-}
-
-// ✅ NEW: Get entry orders that have approved inventory available for departure
-async function getEntryOrdersForDeparture(warehouseId = null) {
-  try {
-    const whereClause = {
-      quality_status: "APROBADO", // Only approved inventory
-      status: "ACTIVE",
-    };
-
-    if (warehouseId) {
-      whereClause.cell = {
-        warehouse_id: String(warehouseId)
-      };
-    }
-
-    const allocations = await prisma.inventoryAllocation.findMany({
-      where: whereClause,
-      include: {
-        entry_order_product: {
-          include: {
-            entry_order: {
-              select: {
-                entry_order_id: true,
-                entry_order_no: true,
-                registration_date: true,
-                entry_date_time: true,
-                document_date: true,
-                observation: true,
-                creator: {
-                  select: {
-                    first_name: true,
-                    last_name: true,
-                    organisation: {
-                      select: { name: true }
-                    }
-                  }
-                },
-                origin: { select: { name: true } },
-                documentType: { select: { name: true } },
-              },
-            },
-          },
-        },
-        inventory: {
-          select: {
-            current_quantity: true,
-            current_package_quantity: true,
-            current_weight: true,
-            status: true,
-          },
-        },
-        cell: {
-          select: {
-            warehouse: {
-              select: {
-                warehouse_id: true,
-                name: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Filter allocations with available inventory
-    const availableAllocations = allocations.filter(allocation => {
-      const inventory = allocation.inventory[0];
-      return inventory && 
-             inventory.status === "AVAILABLE" && 
-             inventory.current_quantity > 0;
-    });
-
-    // Group by entry order
-    const groupedByEntryOrder = availableAllocations.reduce((acc, allocation) => {
-      const entryOrder = allocation.entry_order_product.entry_order;
-      const inventory = allocation.inventory[0];
-      
-      if (!acc[entryOrder.entry_order_id]) {
-        acc[entryOrder.entry_order_id] = {
-          entry_order_id: entryOrder.entry_order_id,
-          entry_order_no: entryOrder.entry_order_no,
-          registration_date: entryOrder.registration_date,
-          entry_date_time: entryOrder.entry_date_time,
-          document_date: entryOrder.document_date,
-          observation: entryOrder.observation,
-          creator_name: `${entryOrder.creator.first_name || ""} ${entryOrder.creator.last_name || ""}`.trim(),
-          organisation_name: entryOrder.creator.organisation.name,
-          origin_name: entryOrder.origin?.name,
-          document_type_name: entryOrder.documentType?.name,
-          available_products: 0,
-          total_quantity: 0,
-          total_packages: 0,
-          total_weight: 0,
-          warehouses: new Set(),
-        };
-      }
-
-      acc[entryOrder.entry_order_id].available_products += 1;
-      acc[entryOrder.entry_order_id].total_quantity += inventory.current_quantity;
-      acc[entryOrder.entry_order_id].total_packages += inventory.current_package_quantity;
-      acc[entryOrder.entry_order_id].total_weight += parseFloat(inventory.current_weight || 0);
-      acc[entryOrder.entry_order_id].warehouses.add(allocation.cell.warehouse.name);
-
-      return acc;
-    }, {});
-
-    return Object.values(groupedByEntryOrder).map(entryOrder => ({
-      ...entryOrder,
-      warehouses: Array.from(entryOrder.warehouses),
-      can_depart: entryOrder.available_products > 0,
-    }));
-  } catch (error) {
-    console.error("Error in getEntryOrdersForDeparture:", error);
-    throw new Error(`Failed to fetch entry orders for departure: ${error.message}`);
-  }
-}
-
-// ✅ UPDATED: Get products from a specific entry order for departure
-async function getProductsByEntryOrder(entryOrderId, warehouseId = null) {
-  try {
-    const whereClause = {
-      entry_order_product: {
-        entry_order_id: String(entryOrderId)
-      },
-      quality_status: "APROBADO", // Only approved inventory
-      status: "ACTIVE",
-    };
-
-    if (warehouseId) {
-      whereClause.cell = {
-        warehouse_id: String(warehouseId)
-      };
-    }
-
-    const allocations = await prisma.inventoryAllocation.findMany({
-      where: whereClause,
-      include: {
-        entry_order_product: {
-          select: {
-            entry_order_product_id: true,
-            // ✅ Scalar fields that need to be selected
-            lot_series: true,
-            manufacturing_date: true,
-            expiration_date: true,
-            product: {
-              select: {
-                product_id: true,
-                product_code: true,
-                name: true,
-                manufacturer: true,
-                product_line: { select: { name: true } },
-                group: { select: { name: true } },
-              },
-            },
-            entry_order: {
-              select: {
-                entry_order_id: true,
-                entry_order_no: true,
-                registration_date: true,
-                entry_date_time: true,
-                document_date: true,
-                uploaded_documents: true, // ✅ Documents
-              },
-            },
-            supplier: {
-              select: {
-                supplier_id: true,
-                name: true,
-              },
-            },
-          },
-        },
-        cell: {
-          select: {
-            id: true,
-            row: true,
-            bay: true,
-            position: true,
-            warehouse: {
-              select: {
-                warehouse_id: true,
-                name: true,
-                location: true,
-              },
-            },
-          },
-        },
-        inventory: {
-          select: {
-            inventory_id: true,
-            current_quantity: true,
-            current_package_quantity: true,
-            current_weight: true,
-            current_volume: true,
-            status: true,
-            quality_status: true,
-          },
-        },
-        allocator: {
-          select: {
-            first_name: true,
-            last_name: true,
-          },
-        },
-      },
-      orderBy: [
-        { entry_order_product: { product: { product_code: "asc" } } },
-        { cell: { row: "asc" } },
-        { cell: { bay: "asc" } },
-        { cell: { position: "asc" } },
-      ],
-    });
-
-    // Filter allocations with available inventory
-    const availableAllocations = allocations.filter(allocation => {
-      const inventory = allocation.inventory[0];
-      return inventory && 
-             inventory.status === "AVAILABLE" && 
-             inventory.current_quantity > 0;
-    });
-
-    // Transform to include all required fields
-    return availableAllocations.map(allocation => {
-      const inventory = allocation.inventory[0];
-      const entryOrderProduct = allocation.entry_order_product;
-      const product = entryOrderProduct.product;
-      const entryOrder = entryOrderProduct.entry_order;
-      
-      return {
-        // ✅ Core identification
-        allocation_id: allocation.allocation_id,
-        inventory_id: inventory.inventory_id,
-        entry_order_product_id: allocation.entry_order_product_id,
-        
-        // ✅ Required fields as per user specification
-        entry_order_no: entryOrder.entry_order_no, // Entry Order Number
-        product_code: product.product_code, // Product Code
-        product_name: product.name, // Product Name
-        lot_number: entryOrderProduct.lot_series || entryOrder.lot_series, // LOT Number
-        quantity_inventory_units: inventory.current_quantity, // Quantity Inventory Units
-        packaging_quantity: inventory.current_package_quantity, // Packaging Quantity
-        packaging_type: allocation.presentation, // Packaging Type
-        cell_position: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`, // Pallets/Cell Position
-        entry_date_time: entryOrder.entry_date_time, // Entry Date & Time
-        documents_uploaded: entryOrder.uploaded_documents, // Documents Upload
-        
-        // ✅ Additional product details
-        manufacturer: product.manufacturer,
-        product_line: product.product_line?.name,
-        group_name: product.group?.name,
-        supplier_name: entryOrderProduct.supplier?.name,
-        
-        // ✅ Inventory details
-        available_weight: parseFloat(inventory.current_weight),
-        available_volume: inventory.current_volume ? parseFloat(inventory.current_volume) : null,
-        quality_status: allocation.quality_status,
-        product_status: allocation.product_status,
-        status_code: allocation.status_code,
-        
-        // ✅ Location details
-        cell_id: allocation.cell_id,
-        warehouse_id: allocation.cell.warehouse.warehouse_id,
-        warehouse_name: allocation.cell.warehouse.name,
-        warehouse_location: allocation.cell.warehouse.location,
-        
-        // ✅ Allocation tracking
-        guide_number: allocation.guide_number,
-        observations: allocation.observations,
-        allocated_at: allocation.allocated_at,
-        allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
-        
-        // ✅ Dates
-        manufacturing_date: entryOrderProduct.manufacturing_date,
-        expiration_date: entryOrderProduct.expiration_date,
-        registration_date: entryOrder.registration_date,
-        document_date: entryOrder.document_date,
-        
-        // ✅ Selection helpers
-        can_depart: true,
-        max_selectable_quantity: inventory.current_quantity,
-        max_selectable_packages: inventory.current_package_quantity,
-        max_selectable_weight: parseFloat(inventory.current_weight),
-      };
-    });
-  } catch (error) {
-    console.error("Error in getProductsByEntryOrder:", error);
-    throw new Error(`Failed to fetch products by entry order: ${error.message}`);
-  }
-}
-
-// ✅ NEW: Generate next departure order number
+// ✅ NEW: Generate next departure order number in format OS202501
+// OS = Departure Order prefix, 2025 = full year, 01 = incremental count
 async function getCurrentDepartureOrderNo() {
-  const currentYear = new Date().getFullYear().toString().slice(-2);
+  const currentYear = new Date().getFullYear().toString(); // Full 4-digit year
+  const yearPrefix = `OS${currentYear}`;
+  
   const lastOrder = await prisma.departureOrder.findFirst({
     where: {
-      departure_order_no: { startsWith: `DEP-${currentYear}` },
+      departure_order_no: { startsWith: yearPrefix },
     },
     orderBy: { departure_date_time: "desc" },
   });
 
   let nextCount = 1;
   if (lastOrder?.departure_order_no) {
-    const parts = lastOrder.departure_order_no.split("-");
-    if (parts.length === 3 && !isNaN(parts[2])) {
-      nextCount = parseInt(parts[2]) + 1;
+    // Extract count from format like "OS202501" -> "01"
+    const countPart = lastOrder.departure_order_no.substring(yearPrefix.length);
+    if (!isNaN(countPart)) {
+      nextCount = parseInt(countPart) + 1;
     }
   }
 
-  return `DEP-${currentYear}-${String(nextCount).padStart(4, "0")}`;
+  return `${yearPrefix}${String(nextCount).padStart(2, "0")}`;
 }
 
 module.exports = {
@@ -1371,8 +1583,8 @@ module.exports = {
   validateSelectedCell,
   getDepartureOrderById,
   getDepartureInventorySummary,
-  // ✅ NEW: Entry Order-centric flow
-  getEntryOrdersForDeparture,
-  getProductsByEntryOrder,
   getCurrentDepartureOrderNo,
+  // ✅ NEW: FIFO Product-wise functions
+  getFifoLocationsForProduct,
+  getSuggestedFifoAllocation,
 };

@@ -13,9 +13,9 @@ router.get("/departure-orders", departureController.getAllDepartureOrders);
 router.post("/create-departure-order", departureController.createDepartureOrder);
 router.get("/departure-orders/:departureOrderId", departureController.getDepartureOrderById);
 
-// ✅ NEW: Entry Order-centric departure flow
-router.get("/entry-orders-for-departure", departureController.getEntryOrdersForDeparture);
-router.get("/entry-order/:entryOrderId/products", departureController.getProductsByEntryOrder);
+// ✅ NEW: FIFO Product-wise departure flow
+router.get("/products/:productId/fifo-locations", departureController.getFifoLocationsForProduct);
+router.get("/products/:productId/fifo-allocation", departureController.getSuggestedFifoAllocation);
 
 // Inventory management endpoints for departure (product-based flow)
 router.get("/products-with-inventory", departureController.getProductsWithInventory);

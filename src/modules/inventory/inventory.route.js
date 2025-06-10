@@ -37,4 +37,10 @@ router.get("/available-for-departure", controller.getAvailableInventoryForDepart
 // Get audit trail for inventory operations
 router.get("/audit-trail", controller.getInventoryAuditTrail);
 
+// ✅ NEW: Validate inventory synchronization across the system
+router.get("/validate-synchronization", controller.validateInventorySynchronization);
+
+// ✅ NEW: Get cells filtered by quality status for transitions
+router.get("/cells-by-quality-status", controller.getCellsByQualityStatus);
+
 module.exports = router;

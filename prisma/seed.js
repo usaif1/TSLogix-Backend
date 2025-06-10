@@ -601,7 +601,7 @@ async function createWarehousesAndCells() {
 
 async function createEntryOrdersWithProducts() {
   try {
-    console.log("🌱 Creating entry orders with products...");
+    console.log("🌱 Creating entry orders with products (FIFO scenarios)...");
     
     // Get required data
     const customerUsers = await prisma.user.findMany({
@@ -618,7 +618,116 @@ async function createEntryOrdersWithProducts() {
     
     const entryOrders = [];
     
-    for (let i = 0; i < COUNT.ENTRY_ORDERS; i++) {
+    // ✅ NEW: Create FIFO test scenarios with specific dates
+    const fifoTestProducts = products.slice(0, 5); // Use first 5 products for FIFO testing
+    const baseDate = new Date('2024-01-01'); // Start from this date
+    
+    // ✅ Create multiple entries of the same products at different dates (for FIFO testing)
+    for (let fifoIndex = 0; fifoIndex < 3; fifoIndex++) {
+      const entryDate = new Date(baseDate);
+      entryDate.setDate(baseDate.getDate() + (fifoIndex * 10)); // 10 days apart
+      
+      for (const product of fifoTestProducts) {
+        const customerUser = faker.helpers.arrayElement(customerUsers);
+        const warehouse = warehouses[0]; // Use same warehouse for FIFO testing
+        
+        // Create base order
+        const order = await prisma.order.create({
+          data: {
+            order_type: "ENTRY",
+            status: "PENDING",
+            organisation_id: customerUser.organisation_id,
+            created_by: customerUser.id,
+            created_at: entryDate,
+          },
+        });
+        
+        // Create entry order with specific entry_date_time for FIFO
+        const entryOrder = await prisma.entryOrder.create({
+          data: {
+            order_id: order.order_id,
+            entry_order_no: `FIFO-${fifoIndex + 1}-${product.product_code}`,
+            origin_id: faker.helpers.arrayElement(origins).origin_id,
+            document_type_id: faker.helpers.arrayElement(documentTypes).document_type_id,
+            registration_date: entryDate,
+            document_date: entryDate,
+            entry_date_time: entryDate, // ✅ Specific date for FIFO testing
+            created_by: customerUser.id,
+            order_status: OrderStatusEntry.FINALIZACION,
+            total_volume: parseFloat(faker.commerce.price({ min: 100, max: 500 })),
+            total_weight: parseFloat(faker.commerce.price({ min: 500, max: 2000 })),
+            cif_value: parseFloat(faker.commerce.price({ min: 10000, max: 50000 })),
+            total_pallets: faker.number.int({ min: 3, max: 8 }),
+            observation: `FIFO Test Entry #${fifoIndex + 1} for ${product.name}`,
+            uploaded_documents: {
+              documents: [
+                { name: `fifo_invoice_${fifoIndex + 1}.pdf`, url: `/documents/fifo_invoice_${fifoIndex + 1}.pdf` },
+                { name: `fifo_packing_${fifoIndex + 1}.pdf`, url: `/documents/fifo_packing_${fifoIndex + 1}.pdf` }
+              ]
+            },
+            warehouse_id: warehouse.warehouse_id,
+            review_status: ReviewStatus.APPROVED, // Auto-approve for FIFO testing
+            review_comments: `Approved for FIFO testing scenario ${fifoIndex + 1}`,
+            reviewed_by: faker.helpers.arrayElement(adminUsers).id,
+            reviewed_at: entryDate,
+          },
+        });
+        
+        entryOrders.push(entryOrder);
+        
+        // ✅ Create audit log for FIFO entry
+        await createAuditLog(
+          customerUser.id,
+          SystemAction.ENTRY_ORDER_CREATED,
+          "EntryOrder",
+          entryOrder.entry_order_id,
+          `Created FIFO test entry order ${entryOrder.entry_order_no} for ${product.name}`,
+          null,
+          {
+            entry_order_no: entryOrder.entry_order_no,
+            entry_date_time: entryOrder.entry_date_time,
+            product_code: product.product_code,
+            fifo_sequence: fifoIndex + 1
+          },
+          {
+            warehouse_id: entryOrder.warehouse_id,
+            fifo_test: true
+          }
+        );
+        
+        // Create specific EntryOrderProduct for FIFO testing
+        const inventoryQuantity = 100 + (fifoIndex * 50); // Different quantities
+        const packageQuantity = 20 + (fifoIndex * 10);
+        const weightKg = 50 + (fifoIndex * 25);
+        
+        await prisma.entryOrderProduct.create({
+          data: {
+            entry_order_id: entryOrder.entry_order_id,
+            serial_number: `FIFO-SN-${fifoIndex + 1}-${product.product_code}`,
+            supplier_id: faker.helpers.arrayElement(suppliers).supplier_id,
+            product_code: product.product_code,
+            product_id: product.product_id,
+            lot_series: `FIFO-LOT-${fifoIndex + 1}-${faker.string.alphanumeric(6)}`,
+            manufacturing_date: new Date(entryDate.getTime() - (30 * 24 * 60 * 60 * 1000)), // 30 days before entry
+            expiration_date: new Date(entryDate.getTime() + (365 * 24 * 60 * 60 * 1000)), // 1 year after entry
+            inventory_quantity: inventoryQuantity,
+            package_quantity: packageQuantity,
+            quantity_pallets: Math.ceil(packageQuantity / 20),
+            presentation: "CAJA",
+            guide_number: `FIFO-GN-${fifoIndex + 1}-${faker.string.numeric(6)}`,
+            weight_kg: weightKg,
+            volume_m3: parseFloat((weightKg * 0.1).toFixed(2)), // Calculate volume based on weight
+            insured_value: parseFloat(faker.commerce.price({ min: 5000, max: 25000 })),
+            temperature_range: "AMBIENTE",
+            humidity: "50%",
+            health_registration: `FIFO-HR-${fifoIndex + 1}-${faker.string.alphanumeric(8)}`,
+          },
+        });
+      }
+    }
+    
+    // ✅ Create remaining random entry orders
+    for (let i = 0; i < (COUNT.ENTRY_ORDERS - (fifoTestProducts.length * 3)); i++) {
       const customerUser = faker.helpers.arrayElement(customerUsers);
       const warehouse = faker.helpers.arrayElement(warehouses);
       
@@ -904,8 +1013,82 @@ async function createQualityControlTransitions() {
       where: { role: { name: "WAREHOUSE" } },
     });
     
-    // Process each quarantine allocation
-    for (const allocation of quarantineAllocations.slice(0, 20)) { // Limit transitions
+    // ✅ NEW: Prioritize FIFO test products for approval
+    const fifoTestAllocations = quarantineAllocations.filter(allocation => 
+      allocation.entry_order_product.guide_number?.startsWith('FIFO-GN')
+    );
+    const otherAllocations = quarantineAllocations.filter(allocation => 
+      !allocation.entry_order_product.guide_number?.startsWith('FIFO-GN')
+    );
+    
+    // First, approve ALL FIFO test products for departure testing
+    for (const allocation of fifoTestAllocations) {
+      const warehouseUser = faker.helpers.arrayElement(warehouseUsers);
+      const product = allocation.entry_order_product.product;
+      
+      // ✅ FIFO test products are always approved
+      const finalStatus = QualityControlStatus.APROBADO;
+      
+      // Create quality control transition record
+      const qcTransition = await prisma.qualityControlTransition.create({
+        data: {
+          allocation_id: allocation.allocation_id,
+          inventory_id: allocation.inventory[0]?.inventory_id,
+          from_status: QualityControlStatus.CUARENTENA,
+          to_status: finalStatus,
+          quantity_moved: allocation.inventory_quantity,
+          package_quantity_moved: allocation.package_quantity,
+          weight_moved: parseFloat(allocation.weight_kg),
+          volume_moved: allocation.volume_m3 ? parseFloat(allocation.volume_m3) : null,
+          performed_by: warehouseUser.id,
+          reason: "FIFO test product - approved for departure testing",
+          notes: `FIFO test allocation approved for product ${product.product_code}`,
+        },
+      });
+      
+      // Update allocation and inventory status
+      await prisma.inventoryAllocation.update({
+        where: { allocation_id: allocation.allocation_id },
+        data: {
+          quality_status: finalStatus,
+          last_modified_by: warehouseUser.id,
+          last_modified_at: new Date(),
+          observations: `FIFO test product - approved for departure testing`,
+        },
+      });
+      
+      if (allocation.inventory.length > 0) {
+        await prisma.inventory.update({
+          where: { inventory_id: allocation.inventory[0].inventory_id },
+          data: {
+            quality_status: finalStatus,
+            status: InventoryStatus.AVAILABLE,
+            last_modified_by: warehouseUser.id,
+            last_modified_at: new Date(),
+          },
+        });
+      }
+      
+      // Create audit logs
+      await createAuditLog(
+        warehouseUser.id,
+        SystemAction.QUALITY_STATUS_CHANGED,
+        "QualityControlTransition",
+        qcTransition.transition_id,
+        `FIFO test product approved: ${allocation.inventory_quantity} units of ${product.name}`,
+        { quality_status: "CUARENTENA" },
+        { quality_status: finalStatus },
+        {
+          allocation_id: allocation.allocation_id,
+          product_code: product.product_code,
+          fifo_test: true,
+          cell: `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`
+        }
+      );
+    }
+    
+    // Process remaining allocations with normal distribution
+    for (const allocation of otherAllocations.slice(0, 15)) { // Limit transitions
       const warehouseUser = faker.helpers.arrayElement(warehouseUsers);
       const product = allocation.entry_order_product.product;
       
@@ -1254,12 +1437,14 @@ async function main() {
     
     await createDepartureOrdersWithProducts();
     
-    console.log("🎉 Database seeded successfully with quarantine flow and full user traceability!");
+    console.log("🎉 Database seeded successfully with quarantine flow, FIFO departures, and full user traceability!");
     console.log("\n📊 Seed Summary:");
     console.log("   • Products start in CUARENTENA (Quarantine)");
     console.log("   • Quality control transitions to APROBADO (Approved), DEVOLUCIONES (Returns), etc.");
     console.log("   • Complete audit trail with user tracking");
     console.log("   • Only approved inventory available for departure orders");
+    console.log("   • FIFO test data: 5 products × 3 entry dates for departure testing");
+    console.log("   • Product-wise departure flow with FIFO allocation (oldest inventory first)");
     
     // Print some stats
     const stats = await Promise.all([

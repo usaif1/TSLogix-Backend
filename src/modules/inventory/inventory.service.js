@@ -316,23 +316,49 @@ async function assignProductToCell(assignmentData) {
       throw new Error("Cannot assign inventory for products from non-approved entry orders");
     }
 
-    // 2. Check available quantities
+    // 2. ✅ FIXED: Check available quantities with proper synchronization validation
     const existingAllocations = await tx.inventoryAllocation.findMany({
       where: { entry_order_product_id },
     });
     
     const totalAllocatedQuantity = existingAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+    const totalAllocatedPackages = existingAllocations.reduce((sum, alloc) => sum + alloc.package_quantity, 0);
     const totalAllocatedWeight = existingAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.weight_kg), 0);
     
     const availableQuantity = entryOrderProduct.inventory_quantity - totalAllocatedQuantity;
+    const availablePackages = entryOrderProduct.package_quantity - totalAllocatedPackages;
     const availableWeight = parseFloat(entryOrderProduct.weight_kg) - totalAllocatedWeight;
 
+    // ✅ VALIDATION: Check all three fields for availability
     if (inventory_quantity > availableQuantity) {
       throw new Error(`Not enough inventory quantity. Available: ${availableQuantity}, Requested: ${inventory_quantity}`);
     }
     
+    if (package_quantity > availablePackages) {
+      throw new Error(`Not enough package quantity. Available: ${availablePackages}, Requested: ${package_quantity}`);
+    }
+    
     if (parseFloat(weight_kg) > availableWeight) {
       throw new Error(`Not enough weight. Available: ${availableWeight.toFixed(2)} kg, Requested: ${weight_kg} kg`);
+    }
+
+    // ✅ VALIDATION: Ensure proper ratios for synchronization
+    const entryProductRatio = entryOrderProduct.package_quantity / entryOrderProduct.inventory_quantity;
+    const requestedRatio = package_quantity / inventory_quantity;
+    const ratioTolerance = 0.1; // 10% tolerance for rounding
+    
+    if (Math.abs(entryProductRatio - requestedRatio) > ratioTolerance) {
+      const expectedPackages = Math.ceil(inventory_quantity * entryProductRatio);
+      throw new Error(`Package quantity out of sync with inventory quantity. Expected approximately: ${expectedPackages} packages for ${inventory_quantity} units (ratio: ${entryProductRatio.toFixed(3)})`);
+    }
+
+    // ✅ VALIDATION: Weight should be proportional to quantity
+    const entryWeightPerUnit = parseFloat(entryOrderProduct.weight_kg) / entryOrderProduct.inventory_quantity;
+    const expectedWeight = inventory_quantity * entryWeightPerUnit;
+    const weightTolerance = expectedWeight * 0.05; // 5% tolerance
+    
+    if (Math.abs(parseFloat(weight_kg) - expectedWeight) > weightTolerance) {
+      throw new Error(`Weight out of sync with inventory quantity. Expected approximately: ${expectedWeight.toFixed(2)} kg for ${inventory_quantity} units`);
     }
 
     // 3. Verify cell availability
@@ -911,7 +937,67 @@ async function getInventoryByQualityStatus(qualityStatus, warehouseId = null) {
   });
 }
 
-// ✅ NEW: Transition inventory from quarantine to other quality states
+// ✅ NEW: Get cells filtered by quality status destination
+async function getCellsByQualityStatus(qualityStatus, warehouseId = null) {
+  // Map quality status to appropriate cell roles
+  const statusToCellRoleMap = {
+    CUARENTENA: ["STANDARD"], // Quarantine can use standard cells
+    APROBADO: ["STANDARD"], // Approved can use standard cells
+    DEVOLUCIONES: ["RETURNS"], // Returns need RETURNS role cells
+    CONTRAMUESTRAS: ["SAMPLES"], // Samples need SAMPLES role cells
+    RECHAZADOS: ["REJECTED", "DAMAGED"], // Rejected can use REJECTED or DAMAGED cells
+  };
+
+  const allowedRoles = statusToCellRoleMap[qualityStatus] || ["STANDARD"];
+  
+  const where = {
+    status: "AVAILABLE",
+    cell_role: { in: allowedRoles }
+  };
+
+  if (warehouseId) {
+    where.warehouse_id = warehouseId;
+  }
+
+  const cells = await prisma.warehouseCell.findMany({
+    where,
+    select: {
+      id: true,
+      row: true,
+      bay: true,
+      position: true,
+      capacity: true,
+      currentUsage: true,
+      current_packaging_qty: true,
+      current_weight: true,
+      status: true,
+      kind: true,
+      cell_role: true,
+      warehouse: {
+        select: {
+          warehouse_id: true,
+          name: true,
+        }
+      }
+    },
+    orderBy: [{ row: "asc" }, { bay: "asc" }, { position: "asc" }],
+  });
+
+  return cells.map(cell => ({
+    ...cell,
+    cell_reference: `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(cell.position).padStart(2, "0")}`,
+    role_description: {
+      STANDARD: "Standard Storage",
+      RETURNS: "Returns Area",
+      SAMPLES: "Sample Storage", 
+      REJECTED: "Rejected Items",
+      DAMAGED: "Damaged Items",
+      EXPIRED: "Expired Items"
+    }[cell.cell_role]
+  }));
+}
+
+// ✅ UPDATED: Enhanced transition function with cell role validation
 async function transitionQualityStatus(transitionData) {
   const {
     allocation_id,
@@ -922,19 +1008,25 @@ async function transitionQualityStatus(transitionData) {
     volume_to_move,
     reason,
     notes,
-    new_cell_id,
+    new_cell_id, // ✅ REQUIRED for non-approved transitions
     performed_by
   } = transitionData;
 
   // ✅ FIXED: Validate and clean up input data to avoid NaN values
   const cleanQuantityToMove = parseInt(quantity_to_move) || 0;
-  const cleanPackageQuantityToMove = package_quantity_to_move ? parseInt(package_quantity_to_move) : null;
-  const cleanWeightToMove = weight_to_move ? parseFloat(weight_to_move) : null;
-  const cleanVolumeToMove = volume_to_move ? parseFloat(volume_to_move) : null;
+  let cleanPackageQuantityToMove = package_quantity_to_move ? parseInt(package_quantity_to_move) : null;
+  let cleanWeightToMove = weight_to_move ? parseFloat(weight_to_move) : null;
+  let cleanVolumeToMove = volume_to_move ? parseFloat(volume_to_move) : null;
 
   // Validate required fields
   if (!allocation_id || !to_status || cleanQuantityToMove <= 0 || !performed_by || !reason) {
     throw new Error("Missing or invalid required fields: allocation_id, to_status, quantity_to_move, performed_by, reason");
+  }
+
+  // ✅ NEW: Validate cell requirement for special quality statuses
+  const specialStatuses = ["DEVOLUCIONES", "CONTRAMUESTRAS", "RECHAZADOS"];
+  if (specialStatuses.includes(to_status) && !new_cell_id) {
+    throw new Error(`Cell assignment required when transitioning to ${to_status}. Please select an appropriate cell.`);
   }
 
   return await prisma.$transaction(async (tx) => {
@@ -946,7 +1038,9 @@ async function transitionQualityStatus(transitionData) {
         entry_order_product: {
           include: { product: true }
         },
-        cell: true
+        cell: {
+          include: { warehouse: true }
+        }
       }
     });
 
@@ -958,18 +1052,89 @@ async function transitionQualityStatus(transitionData) {
       throw new Error("Can only transition from quarantine status");
     }
 
-    // 2. Validate quantities
+    // ✅ NEW: Validate destination cell role if new cell provided
+    if (new_cell_id) {
+      const destinationCell = await tx.warehouseCell.findUnique({
+        where: { id: new_cell_id },
+        include: { warehouse: true }
+      });
+
+      if (!destinationCell) {
+        throw new Error("Destination cell not found");
+      }
+
+      if (destinationCell.status !== "AVAILABLE") {
+        throw new Error("Destination cell is not available");
+      }
+
+      // Validate cell role matches quality status
+      const requiredRoles = {
+        DEVOLUCIONES: ["RETURNS"],
+        CONTRAMUESTRAS: ["SAMPLES"], 
+        RECHAZADOS: ["REJECTED", "DAMAGED"],
+        APROBADO: ["STANDARD"]
+      };
+
+      const allowedRoles = requiredRoles[to_status] || ["STANDARD"];
+      if (!allowedRoles.includes(destinationCell.cell_role)) {
+        const roleNames = {
+          RETURNS: "Returns",
+          SAMPLES: "Samples", 
+          REJECTED: "Rejected",
+          DAMAGED: "Damaged",
+          STANDARD: "Standard"
+        };
+        
+        const expectedRoleNames = allowedRoles.map(role => roleNames[role]).join(" or ");
+        const actualRoleName = roleNames[destinationCell.cell_role];
+        
+        throw new Error(`Invalid cell role for ${to_status}. Expected ${expectedRoleNames} cell, but selected ${actualRoleName} cell.`);
+      }
+    }
+
+    // 2. Validate quantities (existing validation logic)
     if (cleanQuantityToMove > allocation.inventory_quantity) {
       throw new Error(`Cannot move more than available quantity. Available: ${allocation.inventory_quantity}, Requested: ${cleanQuantityToMove}`);
     }
 
-    // Calculate proportional quantities if not provided
+    // ✅ FIXED: Calculate proportional quantities with proper synchronization
     const proportionRatio = cleanQuantityToMove / allocation.inventory_quantity;
-    const calculatedPackageQty = cleanPackageQuantityToMove || Math.ceil(allocation.package_quantity * proportionRatio);
-    const calculatedWeight = cleanWeightToMove || (parseFloat(allocation.weight_kg) * proportionRatio);
-    const calculatedVolume = cleanVolumeToMove || (allocation.volume_m3 ? parseFloat(allocation.volume_m3) * proportionRatio : null);
+    
+    // Calculate package quantity with proper ratio
+    if (!cleanPackageQuantityToMove) {
+      const originalPackageRatio = allocation.package_quantity > 0 ? 
+        allocation.package_quantity / allocation.inventory_quantity : 1;
+      cleanPackageQuantityToMove = Math.ceil(cleanQuantityToMove * originalPackageRatio);
+    }
+    
+    // Calculate weight with proper ratio
+    if (!cleanWeightToMove) {
+      cleanWeightToMove = parseFloat(allocation.weight_kg) * proportionRatio;
+    }
+    
+    // Calculate volume with proper ratio
+    if (!cleanVolumeToMove && allocation.volume_m3) {
+      cleanVolumeToMove = parseFloat(allocation.volume_m3) * proportionRatio;
+    }
 
-    // 3. ✅ FIXED: Create quality control transition record with clean data
+    // ✅ VALIDATION: Ensure the provided quantities are proportionally correct
+    const expectedPackageQty = Math.ceil(allocation.package_quantity * proportionRatio);
+    const expectedWeight = parseFloat(allocation.weight_kg) * proportionRatio;
+    
+    // Allow 5% tolerance for rounding differences
+    const packageTolerance = Math.max(1, expectedPackageQty * 0.05);
+    const weightTolerance = expectedWeight * 0.05;
+    
+    if (Math.abs(cleanPackageQuantityToMove - expectedPackageQty) > packageTolerance) {
+      throw new Error(`Package quantity out of sync. Expected: ${expectedPackageQty}, Provided: ${cleanPackageQuantityToMove}`);
+    }
+    
+    if (Math.abs(cleanWeightToMove - expectedWeight) > weightTolerance) {
+      throw new Error(`Weight out of sync. Expected: ${expectedWeight.toFixed(2)} kg, Provided: ${cleanWeightToMove} kg`);
+    }
+
+    // 3. ✅ UPDATED: Create quality control transition record with cell movement
+    const finalCellId = new_cell_id || allocation.cell_id;
     const transition = await tx.qualityControlTransition.create({
       data: {
         allocation_id,
@@ -977,29 +1142,81 @@ async function transitionQualityStatus(transitionData) {
         from_status: "CUARENTENA",
         to_status,
         quantity_moved: cleanQuantityToMove,
-        package_quantity_moved: calculatedPackageQty,
-        weight_moved: calculatedWeight,
-        volume_moved: calculatedVolume,
+        package_quantity_moved: cleanPackageQuantityToMove,
+        weight_moved: cleanWeightToMove,
+        volume_moved: cleanVolumeToMove,
         from_cell_id: allocation.cell_id,
-        to_cell_id: new_cell_id || allocation.cell_id,
+        to_cell_id: finalCellId,
         performed_by,
         reason,
-        notes: notes || `Quality transition from CUARENTENA to ${to_status}`
+        notes: notes || `Quality transition from CUARENTENA to ${to_status} - Synchronized: ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to cell ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}` : ''}`
       }
     });
 
-    // 4. Update allocation status
+    // 4. ✅ UPDATED: Handle cell movement if new cell specified
+    if (new_cell_id && new_cell_id !== allocation.cell_id) {
+      // Remove from old cell
+      await tx.warehouseCell.update({
+        where: { id: allocation.cell_id },
+        data: {
+          current_packaging_qty: { decrement: cleanPackageQuantityToMove },
+          current_weight: { decrement: cleanWeightToMove },
+          currentUsage: cleanVolumeToMove ? { decrement: cleanVolumeToMove } : undefined,
+        }
+      });
+
+      // Add to new cell
+      await tx.warehouseCell.update({
+        where: { id: new_cell_id },
+        data: {
+          status: "OCCUPIED",
+          current_packaging_qty: { increment: cleanPackageQuantityToMove },
+          current_weight: { increment: cleanWeightToMove },
+          currentUsage: cleanVolumeToMove ? { increment: cleanVolumeToMove } : undefined,
+        }
+      });
+
+      // Update inventory record with new cell
+      if (allocation.inventory.length > 0) {
+        await tx.inventory.update({
+          where: { inventory_id: allocation.inventory[0].inventory_id },
+          data: {
+            cell_id: new_cell_id,
+          }
+        });
+      }
+    } else {
+      // Just update quantities in current cell
+      await tx.warehouseCell.update({
+        where: { id: allocation.cell_id },
+        data: {
+          current_packaging_qty: { decrement: cleanPackageQuantityToMove },
+          current_weight: { decrement: cleanWeightToMove },
+          currentUsage: cleanVolumeToMove ? { decrement: cleanVolumeToMove } : undefined,
+        }
+      });
+    }
+
+    // 5. ✅ FIXED: Update allocation status with moved quantities (not remaining)
+    // When transitioning quality status, the allocation should represent what's in that status
+    
     await tx.inventoryAllocation.update({
       where: { allocation_id },
       data: {
         quality_status: to_status,
+        cell_id: finalCellId, // ✅ Update cell if moved
+        // ✅ CORRECTED: Keep the moved quantities, not remaining quantities
+        inventory_quantity: cleanQuantityToMove,
+        package_quantity: cleanPackageQuantityToMove,
+        weight_kg: cleanWeightToMove,
+        volume_m3: cleanVolumeToMove,
         last_modified_by: performed_by,
         last_modified_at: new Date(),
-        observations: `${allocation.observations || ''}\nQuality transition: ${reason}`
+        observations: `${allocation.observations || ''}\nQuality transition: ${reason} - Transitioned: ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to new cell` : ''}`
       }
     });
 
-    // 5. Update inventory status
+    // 6. ✅ FIXED: Update inventory status with moved quantities  
     if (allocation.inventory.length > 0) {
       const newInventoryStatus = to_status === "APROBADO" ? "AVAILABLE" :
                                 to_status === "RECHAZADOS" ? "DAMAGED" : "RETURNED";
@@ -1009,35 +1226,87 @@ async function transitionQualityStatus(transitionData) {
         data: {
           quality_status: to_status,
           status: newInventoryStatus,
+          // ✅ CORRECTED: Update current quantities to moved quantities
+          current_quantity: cleanQuantityToMove,
+          current_package_quantity: cleanPackageQuantityToMove,
+          current_weight: cleanWeightToMove,
+          current_volume: cleanVolumeToMove,
           last_modified_by: performed_by,
           last_modified_at: new Date()
         }
       });
     }
 
-    // 6. Create audit log
+    // 7. ✅ FIXED: Create inventory log with synchronized data
+    await tx.inventoryLog.create({
+      data: {
+        user_id: performed_by,
+        product_id: allocation.entry_order_product.product.product_id,
+        movement_type: new_cell_id && new_cell_id !== allocation.cell_id ? "TRANSFER" : "ADJUSTMENT",
+        quantity_change: -cleanQuantityToMove,
+        package_change: -cleanPackageQuantityToMove,
+        weight_change: -cleanWeightToMove,
+        volume_change: cleanVolumeToMove ? -cleanVolumeToMove : null,
+        allocation_id: allocation.allocation_id,
+        warehouse_id: allocation.inventory[0]?.warehouse_id,
+        cell_id: finalCellId,
+        product_status: allocation.product_status,
+        status_code: allocation.status_code,
+        notes: `Quality transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) moved from CUARENTENA to ${to_status}. Reason: ${reason}. ${new_cell_id ? `Cell: ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position} → New cell` : `Updated status in current cell: ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg`}`,
+      },
+    });
+
+    // 8. Create audit log with synchronized data and cell movement info
     await createAuditLog(
       performed_by,
       "QUALITY_STATUS_CHANGED",
       "QualityControlTransition",
       transition.transition_id,
-      `Quality status changed: ${cleanQuantityToMove} units of ${allocation.entry_order_product.product.name} from CUARENTENA to ${to_status}`,
-      { quality_status: "CUARENTENA" },
-      { quality_status: to_status },
+      `Quality status changed: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) of ${allocation.entry_order_product.product.name} from CUARENTENA to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`,
+      { 
+        quality_status: "CUARENTENA",
+        quantity: allocation.inventory_quantity,
+        packages: allocation.package_quantity,
+        weight: parseFloat(allocation.weight_kg),
+        cell_id: allocation.cell_id
+      },
+      { 
+        quality_status: to_status,
+        quantity: cleanQuantityToMove,
+        packages: cleanPackageQuantityToMove,
+        weight: cleanWeightToMove,
+        cell_id: finalCellId
+      },
       {
         allocation_id,
         product_code: allocation.entry_order_product.product.product_code,
-        cell: `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`,
+        from_cell: `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`,
+        to_cell: new_cell_id ? `New cell assigned` : `Same cell`,
         reason,
         quantity_moved: cleanQuantityToMove,
-        weight_moved: calculatedWeight
+        packages_moved: cleanPackageQuantityToMove,
+        weight_moved: cleanWeightToMove,
+        synchronized: true,
+        cell_reassigned: !!new_cell_id
       }
     );
 
     return {
       transition,
       allocation,
-      cellReference: `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`
+      cell_moved: !!new_cell_id,
+      destination_cell_id: finalCellId,
+      quantities_synchronized: {
+        transitioned: {
+          quantity: cleanQuantityToMove,
+          packages: cleanPackageQuantityToMove,
+          weight: cleanWeightToMove,
+          volume: cleanVolumeToMove
+        },
+        new_status: to_status,
+        original_quantity: allocation.inventory_quantity
+      },
+      cellReference: new_cell_id ? `New cell assigned` : `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`
     };
   });
 }
@@ -1136,6 +1405,207 @@ async function getInventoryAuditTrail(filters = {}) {
   });
 }
 
+// ✅ NEW: Validate synchronization across the entire inventory system
+async function validateInventorySynchronization(options = {}) {
+  const { autoFix = false, warehouseId = null } = options;
+  
+  const issues = [];
+  const fixes = [];
+  
+  try {
+    // 1. Check EntryOrderProduct sync
+    console.log("🔍 Checking EntryOrderProduct synchronization...");
+    const entryProducts = await prisma.entryOrderProduct.findMany({
+      where: warehouseId ? {
+        entry_order: { warehouse_id: warehouseId }
+      } : {},
+      include: {
+        entry_order: true,
+        product: true,
+        inventoryAllocations: true
+      }
+    });
+    
+    for (const entryProduct of entryProducts) {
+      // Check if allocations exceed entry product quantities
+      const totalAllocatedQty = entryProduct.inventoryAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+      const totalAllocatedPkg = entryProduct.inventoryAllocations.reduce((sum, alloc) => sum + alloc.package_quantity, 0);
+      const totalAllocatedWeight = entryProduct.inventoryAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.weight_kg), 0);
+      
+      if (totalAllocatedQty > entryProduct.inventory_quantity) {
+        issues.push({
+          type: "OVER_ALLOCATION",
+          entity: "EntryOrderProduct",
+          id: entryProduct.entry_order_product_id,
+          issue: `Allocated quantity (${totalAllocatedQty}) exceeds entry quantity (${entryProduct.inventory_quantity})`,
+          severity: "HIGH"
+        });
+      }
+      
+      if (totalAllocatedPkg > entryProduct.package_quantity) {
+        issues.push({
+          type: "OVER_ALLOCATION_PACKAGES",
+          entity: "EntryOrderProduct", 
+          id: entryProduct.entry_order_product_id,
+          issue: `Allocated packages (${totalAllocatedPkg}) exceeds entry packages (${entryProduct.package_quantity})`,
+          severity: "HIGH"
+        });
+      }
+      
+      if (totalAllocatedWeight > parseFloat(entryProduct.weight_kg)) {
+        issues.push({
+          type: "OVER_ALLOCATION_WEIGHT",
+          entity: "EntryOrderProduct",
+          id: entryProduct.entry_order_product_id,
+          issue: `Allocated weight (${totalAllocatedWeight} kg) exceeds entry weight (${entryProduct.weight_kg} kg)`,
+          severity: "HIGH"
+        });
+      }
+    }
+    
+    // 2. Check InventoryAllocation vs Inventory sync
+    console.log("🔍 Checking InventoryAllocation vs Inventory synchronization...");
+    const allocations = await prisma.inventoryAllocation.findMany({
+      where: warehouseId ? {
+        inventory: { some: { warehouse_id: warehouseId } }
+      } : {},
+      include: {
+        inventory: true
+      }
+    });
+    
+    for (const allocation of allocations) {
+      for (const inventory of allocation.inventory) {
+        // Check quantity sync
+        if (inventory.current_quantity > allocation.inventory_quantity) {
+          issues.push({
+            type: "INVENTORY_QUANTITY_MISMATCH",
+            entity: "Inventory",
+            id: inventory.inventory_id,
+            issue: `Inventory current_quantity (${inventory.current_quantity}) exceeds allocation quantity (${allocation.inventory_quantity})`,
+            severity: "MEDIUM"
+          });
+        }
+        
+        // Check package sync
+        if (inventory.current_package_quantity > allocation.package_quantity) {
+          issues.push({
+            type: "INVENTORY_PACKAGE_MISMATCH", 
+            entity: "Inventory",
+            id: inventory.inventory_id,
+            issue: `Inventory packages (${inventory.current_package_quantity}) exceeds allocation packages (${allocation.package_quantity})`,
+            severity: "MEDIUM"
+          });
+        }
+        
+        // Check weight sync
+        if (parseFloat(inventory.current_weight) > parseFloat(allocation.weight_kg)) {
+          issues.push({
+            type: "INVENTORY_WEIGHT_MISMATCH",
+            entity: "Inventory", 
+            id: inventory.inventory_id,
+            issue: `Inventory weight (${inventory.current_weight} kg) exceeds allocation weight (${allocation.weight_kg} kg)`,
+            severity: "MEDIUM"
+          });
+        }
+      }
+    }
+    
+    // 3. Check WarehouseCell sync with contained inventory
+    console.log("🔍 Checking WarehouseCell synchronization...");
+    const cells = await prisma.warehouseCell.findMany({
+      where: warehouseId ? { warehouse_id: warehouseId } : {},
+      include: {
+        inventory: true
+      }
+    });
+    
+    for (const cell of cells) {
+      const totalCellPackages = cell.inventory.reduce((sum, inv) => sum + inv.current_package_quantity, 0);
+      const totalCellWeight = cell.inventory.reduce((sum, inv) => sum + parseFloat(inv.current_weight), 0);
+      
+      // Check package sync
+      if (Math.abs(cell.current_packaging_qty - totalCellPackages) > 1) {
+        issues.push({
+          type: "CELL_PACKAGE_MISMATCH",
+          entity: "WarehouseCell",
+          id: cell.id,
+          issue: `Cell packages (${cell.current_packaging_qty}) doesn't match inventory total (${totalCellPackages})`,
+          severity: "LOW",
+          autoFixable: true
+        });
+        
+        if (autoFix) {
+          await prisma.warehouseCell.update({
+            where: { id: cell.id },
+            data: { current_packaging_qty: totalCellPackages }
+          });
+          fixes.push(`Fixed cell ${cell.row}.${cell.bay}.${cell.position} package count: ${cell.current_packaging_qty} → ${totalCellPackages}`);
+        }
+      }
+      
+      // Check weight sync
+      if (Math.abs(parseFloat(cell.current_weight) - totalCellWeight) > 0.1) {
+        issues.push({
+          type: "CELL_WEIGHT_MISMATCH",
+          entity: "WarehouseCell", 
+          id: cell.id,
+          issue: `Cell weight (${cell.current_weight} kg) doesn't match inventory total (${totalCellWeight.toFixed(2)} kg)`,
+          severity: "LOW",
+          autoFixable: true
+        });
+        
+        if (autoFix) {
+          await prisma.warehouseCell.update({
+            where: { id: cell.id },
+            data: { current_weight: totalCellWeight }
+          });
+          fixes.push(`Fixed cell ${cell.row}.${cell.bay}.${cell.position} weight: ${cell.current_weight} kg → ${totalCellWeight.toFixed(2)} kg`);
+        }
+      }
+    }
+    
+    // 4. Check for orphaned records
+    console.log("🔍 Checking for orphaned records...");
+    
+    // Inventory without allocations
+    const orphanedInventory = await prisma.inventory.findMany({
+      where: {
+        allocation_id: null,
+        ...(warehouseId && { warehouse_id: warehouseId })
+      }
+    });
+    
+    if (orphanedInventory.length > 0) {
+      issues.push({
+        type: "ORPHANED_INVENTORY",
+        entity: "Inventory",
+        count: orphanedInventory.length,
+        issue: `Found ${orphanedInventory.length} inventory records without allocations`,
+        severity: "MEDIUM"
+      });
+    }
+    
+    const summary = {
+      totalIssues: issues.length,
+      highSeverity: issues.filter(i => i.severity === "HIGH").length,
+      mediumSeverity: issues.filter(i => i.severity === "MEDIUM").length,
+      lowSeverity: issues.filter(i => i.severity === "LOW").length,
+      autoFixesApplied: fixes.length,
+      issues,
+      fixes
+    };
+    
+    console.log(`✅ Synchronization check complete: ${summary.totalIssues} issues found`);
+    
+    return summary;
+    
+  } catch (error) {
+    console.error("❌ Error during synchronization validation:", error);
+    throw new Error(`Synchronization validation failed: ${error.message}`);
+  }
+}
+
 module.exports = {
   getApprovedEntryOrdersForInventory,
   getEntryOrderProductsForInventory,
@@ -1151,4 +1621,6 @@ module.exports = {
   transitionQualityStatus,
   getAvailableInventoryForDeparture,
   getInventoryAuditTrail,
+  validateInventorySynchronization,
+  getCellsByQualityStatus, // ✅ NEW: Cell filtering by quality status
 };

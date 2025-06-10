@@ -497,6 +497,90 @@ async function getInventoryAuditTrail(req, res) {
   }
 }
 
+/**
+ * ✅ NEW: Validate inventory synchronization across the system
+ */
+async function validateInventorySynchronization(req, res) {
+  try {
+    const { autoFix = false, warehouseId } = req.query;
+    
+    // Convert string to boolean
+    const shouldAutoFix = autoFix === 'true' || autoFix === true;
+    
+    console.log(`🔧 Starting inventory synchronization validation (autoFix: ${shouldAutoFix})...`);
+    
+    const result = await inventoryService.validateInventorySynchronization({
+      autoFix: shouldAutoFix,
+      warehouseId: warehouseId || null
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: result.totalIssues > 0 ? 
+        `Found ${result.totalIssues} synchronization issues${shouldAutoFix ? `, applied ${result.autoFixesApplied} fixes` : ''}` :
+        "All inventory quantities are properly synchronized",
+      data: result,
+      recommendations: result.totalIssues > 0 ? [
+        result.highSeverity > 0 ? "🚨 HIGH PRIORITY: Manual intervention required for data integrity issues" : null,
+        result.mediumSeverity > 0 ? "⚠️ MEDIUM PRIORITY: Check allocation vs inventory discrepancies" : null,
+        result.lowSeverity > 0 && !shouldAutoFix ? "💡 TIP: Use autoFix=true to automatically fix minor cell synchronization issues" : null,
+        "🔄 Consider running this validation regularly to maintain data integrity"
+      ].filter(Boolean) : [
+        "✅ System is properly synchronized",
+        "🔄 Run this check regularly to maintain data integrity"
+      ]
+    });
+  } catch (error) {
+    console.error("❌ Error in validateInventorySynchronization:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
+
+// ✅ NEW: Get cells filtered by quality status destination
+async function getCellsByQualityStatus(req, res) {
+  try {
+    const { quality_status, warehouse_id } = req.query;
+    
+    if (!quality_status) {
+      return res.status(400).json({
+        success: false,
+        message: "Quality status is required"
+      });
+    }
+
+    // Validate quality status
+    const validStatuses = ["CUARENTENA", "APROBADO", "DEVOLUCIONES", "CONTRAMUESTRAS", "RECHAZADOS"];
+    if (!validStatuses.includes(quality_status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid quality status. Must be one of: ${validStatuses.join(", ")}`
+      });
+    }
+
+    const cells = await inventoryService.getCellsByQualityStatus(quality_status, warehouse_id);
+    
+    res.json({
+      success: true,
+      data: {
+        quality_status,
+        warehouse_id: warehouse_id || "all",
+        cells_count: cells.length,
+        cells
+      }
+    });
+  } catch (error) {
+    console.error("❌ Error getting cells by quality status:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get cells by quality status",
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getApprovedEntryOrdersForInventory,
   getEntryOrderProductsForInventory,
@@ -511,4 +595,6 @@ module.exports = {
   transitionQualityStatus,
   getAvailableInventoryForDeparture,
   getInventoryAuditTrail,
+  validateInventorySynchronization,
+  getCellsByQualityStatus, // ✅ NEW: Cell filtering endpoint
 };
