@@ -841,7 +841,9 @@ async function getInventoryByQualityStatus(qualityStatus, warehouseId = null) {
 
   const where = {
     quality_status: qualityStatus,
-    status: "ACTIVE"
+    status: "ACTIVE",
+    // ✅ FIXED: Only return allocations with positive quantities
+    inventory_quantity: { gt: 0 }
   };
 
   if (warehouseId) {
@@ -850,7 +852,7 @@ async function getInventoryByQualityStatus(qualityStatus, warehouseId = null) {
     };
   }
 
-  return await prisma.inventoryAllocation.findMany({
+  const allocations = await prisma.inventoryAllocation.findMany({
     where,
     include: {
       entry_order_product: {
@@ -935,6 +937,23 @@ async function getInventoryByQualityStatus(qualityStatus, warehouseId = null) {
       { entry_order_product: { entry_order: { registration_date: 'desc' } } }
     ]
   });
+
+  // ✅ FIXED: Add additional filtering to ensure we only return meaningful data
+  return allocations.filter(allocation => {
+    // Double-check quantities are positive
+    if (allocation.inventory_quantity <= 0) return false;
+    
+    // If inventory records exist, ensure they also have positive quantities
+    if (allocation.inventory.length > 0) {
+      const hasPositiveInventory = allocation.inventory.some(inv => 
+        inv.current_quantity > 0 && inv.status !== 'DEPLETED'
+      );
+      return hasPositiveInventory;
+    }
+    
+    // If no inventory records but allocation has positive quantity, include it
+    return true;
+  });
 }
 
 // ✅ NEW: Get cells filtered by quality status destination
@@ -997,7 +1016,7 @@ async function getCellsByQualityStatus(qualityStatus, warehouseId = null) {
   }));
 }
 
-// ✅ UPDATED: Enhanced transition function with cell role validation
+// ✅ UPDATED: Enhanced transition function with PARTIAL TRANSITIONS support
 async function transitionQualityStatus(transitionData) {
   const {
     allocation_id,
@@ -1133,8 +1152,17 @@ async function transitionQualityStatus(transitionData) {
       throw new Error(`Weight out of sync. Expected: ${expectedWeight.toFixed(2)} kg, Provided: ${cleanWeightToMove} kg`);
     }
 
-    // 3. ✅ UPDATED: Create quality control transition record with cell movement
+    // ✅ NEW: Calculate remaining quantities that will stay in original allocation
+    const remainingQuantity = allocation.inventory_quantity - cleanQuantityToMove;
+    const remainingPackages = allocation.package_quantity - cleanPackageQuantityToMove;
+    const remainingWeight = parseFloat(allocation.weight_kg) - cleanWeightToMove;
+    const remainingVolume = allocation.volume_m3 ? parseFloat(allocation.volume_m3) - (cleanVolumeToMove || 0) : null;
+
+    // ✅ NEW: Determine if this is a FULL or PARTIAL transition
+    const isFullTransition = (remainingQuantity === 0);
     const finalCellId = new_cell_id || allocation.cell_id;
+
+    // 3. ✅ NEW: Create quality control transition record
     const transition = await tx.qualityControlTransition.create({
       data: {
         allocation_id,
@@ -1149,120 +1177,214 @@ async function transitionQualityStatus(transitionData) {
         to_cell_id: finalCellId,
         performed_by,
         reason,
-        notes: notes || `Quality transition from CUARENTENA to ${to_status} - Synchronized: ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to cell ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}` : ''}`
+        notes: notes || `${isFullTransition ? 'Full' : 'Partial'} quality transition from CUARENTENA to ${to_status} - ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to new cell` : ' - Same cell'}`
       }
     });
 
-    // 4. ✅ UPDATED: Handle cell movement if new cell specified
-    if (new_cell_id && new_cell_id !== allocation.cell_id) {
-      // Remove from old cell
-      await tx.warehouseCell.update({
-        where: { id: allocation.cell_id },
+    let newAllocation = null;
+    let newInventory = null;
+
+    if (isFullTransition) {
+      // ✅ FULL TRANSITION: Update existing allocation completely
+      
+      // 4a. Handle cell movement for full transition
+      if (new_cell_id && new_cell_id !== allocation.cell_id) {
+        // Remove from old cell
+        await tx.warehouseCell.update({
+          where: { id: allocation.cell_id },
+          data: {
+            current_packaging_qty: { decrement: allocation.package_quantity },
+            current_weight: { decrement: parseFloat(allocation.weight_kg) },
+            currentUsage: allocation.volume_m3 ? { decrement: parseFloat(allocation.volume_m3) } : undefined,
+          }
+        });
+
+        // Add to new cell
+        await tx.warehouseCell.update({
+          where: { id: new_cell_id },
+          data: {
+            status: "OCCUPIED",
+            current_packaging_qty: { increment: allocation.package_quantity },
+            current_weight: { increment: parseFloat(allocation.weight_kg) },
+            currentUsage: allocation.volume_m3 ? { increment: parseFloat(allocation.volume_m3) } : undefined,
+          }
+        });
+
+        // Update inventory record with new cell
+        if (allocation.inventory.length > 0) {
+          await tx.inventory.update({
+            where: { inventory_id: allocation.inventory[0].inventory_id },
+            data: {
+              cell_id: new_cell_id,
+            }
+          });
+        }
+      }
+
+      // 5a. Update existing allocation with new status
+      await tx.inventoryAllocation.update({
+        where: { allocation_id },
         data: {
-          current_packaging_qty: { decrement: cleanPackageQuantityToMove },
-          current_weight: { decrement: cleanWeightToMove },
-          currentUsage: cleanVolumeToMove ? { decrement: cleanVolumeToMove } : undefined,
+          quality_status: to_status,
+          cell_id: finalCellId,
+          last_modified_by: performed_by,
+          last_modified_at: new Date(),
+          observations: `${allocation.observations || ''}\nFull quality transition: ${reason} - All ${cleanQuantityToMove} units moved to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`
         }
       });
 
-      // Add to new cell
-      await tx.warehouseCell.update({
-        where: { id: new_cell_id },
-        data: {
-          status: "OCCUPIED",
-          current_packaging_qty: { increment: cleanPackageQuantityToMove },
-          current_weight: { increment: cleanWeightToMove },
-          currentUsage: cleanVolumeToMove ? { increment: cleanVolumeToMove } : undefined,
-        }
-      });
-
-      // Update inventory record with new cell
+      // 6a. Update inventory status
       if (allocation.inventory.length > 0) {
+        const newInventoryStatus = to_status === "APROBADO" ? "AVAILABLE" :
+                                  to_status === "RECHAZADOS" ? "DAMAGED" : "RETURNED";
+
         await tx.inventory.update({
           where: { inventory_id: allocation.inventory[0].inventory_id },
           data: {
-            cell_id: new_cell_id,
+            quality_status: to_status,
+            status: newInventoryStatus,
+            last_modified_by: performed_by,
+            last_modified_at: new Date()
           }
         });
       }
+
     } else {
-      // Just update quantities in current cell
-      await tx.warehouseCell.update({
-        where: { id: allocation.cell_id },
+      // ✅ PARTIAL TRANSITION: Create new allocation for moved portion, update original for remaining
+      
+      // 4b. Create NEW allocation for the transitioned portion
+      newAllocation = await tx.inventoryAllocation.create({
         data: {
-          current_packaging_qty: { decrement: cleanPackageQuantityToMove },
-          current_weight: { decrement: cleanWeightToMove },
-          currentUsage: cleanVolumeToMove ? { decrement: cleanVolumeToMove } : undefined,
+          entry_order_id: allocation.entry_order_id,
+          entry_order_product_id: allocation.entry_order_product_id,
+          inventory_quantity: cleanQuantityToMove,
+          package_quantity: cleanPackageQuantityToMove,
+          quantity_pallets: Math.ceil(cleanPackageQuantityToMove / 20),
+          presentation: allocation.presentation,
+          weight_kg: cleanWeightToMove,
+          volume_m3: cleanVolumeToMove,
+          cell_id: finalCellId,
+          product_status: allocation.product_status,
+          status_code: allocation.status_code,
+          quality_status: to_status, // ✅ NEW STATUS
+          guide_number: allocation.guide_number,
+          uploaded_documents: allocation.uploaded_documents,
+          observations: `Partial transition from allocation ${allocation_id}. Moved ${cleanQuantityToMove} units to ${to_status}. Reason: ${reason}`,
+          allocated_by: allocation.allocated_by,
+          allocated_at: allocation.allocated_at,
+          last_modified_by: performed_by,
+          last_modified_at: new Date(),
+          status: "ACTIVE"
         }
       });
-    }
 
-    // 5. ✅ FIXED: Update allocation status with moved quantities (not remaining)
-    // When transitioning quality status, the allocation should represent what's in that status
-    
-    await tx.inventoryAllocation.update({
-      where: { allocation_id },
-      data: {
-        quality_status: to_status,
-        cell_id: finalCellId, // ✅ Update cell if moved
-        // ✅ CORRECTED: Keep the moved quantities, not remaining quantities
-        inventory_quantity: cleanQuantityToMove,
-        package_quantity: cleanPackageQuantityToMove,
-        weight_kg: cleanWeightToMove,
-        volume_m3: cleanVolumeToMove,
-        last_modified_by: performed_by,
-        last_modified_at: new Date(),
-        observations: `${allocation.observations || ''}\nQuality transition: ${reason} - Transitioned: ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to new cell` : ''}`
-      }
-    });
-
-    // 6. ✅ FIXED: Update inventory status with moved quantities  
-    if (allocation.inventory.length > 0) {
+      // 5b. Create NEW inventory record for the transitioned portion
       const newInventoryStatus = to_status === "APROBADO" ? "AVAILABLE" :
                                 to_status === "RECHAZADOS" ? "DAMAGED" : "RETURNED";
 
-      await tx.inventory.update({
-        where: { inventory_id: allocation.inventory[0].inventory_id },
+      newInventory = await tx.inventory.create({
         data: {
-          quality_status: to_status,
-          status: newInventoryStatus,
-          // ✅ CORRECTED: Update current quantities to moved quantities
+          allocation_id: newAllocation.allocation_id,
+          product_id: allocation.entry_order_product.product.product_id,
+          cell_id: finalCellId,
+          warehouse_id: allocation.inventory[0]?.warehouse_id,
           current_quantity: cleanQuantityToMove,
           current_package_quantity: cleanPackageQuantityToMove,
           current_weight: cleanWeightToMove,
           current_volume: cleanVolumeToMove,
+          status: newInventoryStatus,
+          product_status: allocation.product_status,
+          status_code: allocation.status_code,
+          quality_status: to_status, // ✅ NEW STATUS
+          created_by: performed_by,
           last_modified_by: performed_by,
           last_modified_at: new Date()
         }
       });
+
+      // 6b. Update ORIGINAL allocation to reduce quantities (remaining portion stays in CUARENTENA)
+      await tx.inventoryAllocation.update({
+        where: { allocation_id },
+        data: {
+          inventory_quantity: remainingQuantity,
+          package_quantity: remainingPackages,
+          weight_kg: remainingWeight,
+          volume_m3: remainingVolume,
+          last_modified_by: performed_by,
+          last_modified_at: new Date(),
+          observations: `${allocation.observations || ''}\nPartial transition: ${cleanQuantityToMove} units moved to ${to_status}. Remaining ${remainingQuantity} units stay in CUARENTENA. Reason: ${reason}`
+        }
+      });
+
+      // 7b. Update ORIGINAL inventory to reduce quantities (remaining portion stays in CUARENTENA)
+      if (allocation.inventory.length > 0) {
+        await tx.inventory.update({
+          where: { inventory_id: allocation.inventory[0].inventory_id },
+          data: {
+            current_quantity: remainingQuantity,
+            current_package_quantity: remainingPackages,
+            current_weight: remainingWeight,
+            current_volume: remainingVolume,
+            last_modified_by: performed_by,
+            last_modified_at: new Date()
+          }
+        });
+      }
+
+      // 8b. Handle cell assignments for partial transition
+      if (new_cell_id && new_cell_id !== allocation.cell_id) {
+        // Remove transitioned quantities from original cell
+        await tx.warehouseCell.update({
+          where: { id: allocation.cell_id },
+          data: {
+            current_packaging_qty: { decrement: cleanPackageQuantityToMove },
+            current_weight: { decrement: cleanWeightToMove },
+            currentUsage: cleanVolumeToMove ? { decrement: cleanVolumeToMove } : undefined,
+          }
+        });
+
+        // Add transitioned quantities to new cell
+        await tx.warehouseCell.update({
+          where: { id: new_cell_id },
+          data: {
+            status: "OCCUPIED",
+            current_packaging_qty: { increment: cleanPackageQuantityToMove },
+            current_weight: { increment: cleanWeightToMove },
+            currentUsage: cleanVolumeToMove ? { increment: cleanVolumeToMove } : undefined,
+          }
+        });
+      } else {
+        // If same cell, just adjust the quantities (no movement needed since both portions stay in same cell)
+        // The cell quantities don't change because both portions are still in the same cell
+      }
     }
 
-    // 7. ✅ FIXED: Create inventory log with synchronized data
+    // 9. ✅ Create inventory log for the transition
     await tx.inventoryLog.create({
       data: {
         user_id: performed_by,
         product_id: allocation.entry_order_product.product.product_id,
         movement_type: new_cell_id && new_cell_id !== allocation.cell_id ? "TRANSFER" : "ADJUSTMENT",
-        quantity_change: -cleanQuantityToMove,
-        package_change: -cleanPackageQuantityToMove,
-        weight_change: -cleanWeightToMove,
-        volume_change: cleanVolumeToMove ? -cleanVolumeToMove : null,
-        allocation_id: allocation.allocation_id,
+        quantity_change: isFullTransition ? -cleanQuantityToMove : 0, // For partial, we're not removing, just splitting
+        package_change: isFullTransition ? -cleanPackageQuantityToMove : 0,
+        weight_change: isFullTransition ? -cleanWeightToMove : 0,
+        volume_change: (isFullTransition && cleanVolumeToMove) ? -cleanVolumeToMove : null,
+        allocation_id: newAllocation ? newAllocation.allocation_id : allocation.allocation_id,
         warehouse_id: allocation.inventory[0]?.warehouse_id,
         cell_id: finalCellId,
         product_status: allocation.product_status,
         status_code: allocation.status_code,
-        notes: `Quality transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) moved from CUARENTENA to ${to_status}. Reason: ${reason}. ${new_cell_id ? `Cell: ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position} → New cell` : `Updated status in current cell: ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg`}`,
+        notes: `${isFullTransition ? 'Full' : 'Partial'} quality transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) ${isFullTransition ? 'moved' : 'split'} from CUARENTENA to ${to_status}. Reason: ${reason}.${isFullTransition ? '' : ` Remaining ${remainingQuantity} units stay in CUARENTENA.`}${new_cell_id && new_cell_id !== allocation.cell_id ? ` Cell: ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position} → New cell` : ' Same cell'}`,
       },
     });
 
-    // 8. Create audit log with synchronized data and cell movement info
+    // 10. Create audit log
     await createAuditLog(
       performed_by,
       "QUALITY_STATUS_CHANGED",
       "QualityControlTransition",
       transition.transition_id,
-      `Quality status changed: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) of ${allocation.entry_order_product.product.name} from CUARENTENA to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`,
+      `${isFullTransition ? 'Full' : 'Partial'} quality status transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) of ${allocation.entry_order_product.product.name} from CUARENTENA to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`,
       { 
         quality_status: "CUARENTENA",
         quantity: allocation.inventory_quantity,
@@ -1275,10 +1397,12 @@ async function transitionQualityStatus(transitionData) {
         quantity: cleanQuantityToMove,
         packages: cleanPackageQuantityToMove,
         weight: cleanWeightToMove,
-        cell_id: finalCellId
+        cell_id: finalCellId,
+        remaining_in_quarantine: isFullTransition ? 0 : remainingQuantity
       },
       {
         allocation_id,
+        new_allocation_id: newAllocation?.allocation_id,
         product_code: allocation.entry_order_product.product.product_code,
         from_cell: `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`,
         to_cell: new_cell_id ? `New cell assigned` : `Same cell`,
@@ -1286,26 +1410,33 @@ async function transitionQualityStatus(transitionData) {
         quantity_moved: cleanQuantityToMove,
         packages_moved: cleanPackageQuantityToMove,
         weight_moved: cleanWeightToMove,
-        synchronized: true,
+        is_full_transition: isFullTransition,
+        remaining_quantity: isFullTransition ? 0 : remainingQuantity,
         cell_reassigned: !!new_cell_id
       }
     );
 
     return {
       transition,
-      allocation,
+      original_allocation: allocation,
+      new_allocation: newAllocation,
+      new_inventory: newInventory,
+      is_full_transition: isFullTransition,
       cell_moved: !!new_cell_id,
       destination_cell_id: finalCellId,
-      quantities_synchronized: {
-        transitioned: {
-          quantity: cleanQuantityToMove,
-          packages: cleanPackageQuantityToMove,
-          weight: cleanWeightToMove,
-          volume: cleanVolumeToMove
-        },
-        new_status: to_status,
-        original_quantity: allocation.inventory_quantity
+      quantities_transitioned: {
+        quantity: cleanQuantityToMove,
+        packages: cleanPackageQuantityToMove,
+        weight: cleanWeightToMove,
+        volume: cleanVolumeToMove
       },
+      quantities_remaining: isFullTransition ? null : {
+        quantity: remainingQuantity,
+        packages: remainingPackages,
+        weight: remainingWeight,
+        volume: remainingVolume
+      },
+      new_status: to_status,
       cellReference: new_cell_id ? `New cell assigned` : `${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position}`
     };
   });
