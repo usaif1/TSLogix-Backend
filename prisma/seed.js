@@ -90,11 +90,11 @@ async function createBaseLookupTables() {
     console.log("Creating product lines...");
     await prisma.productLine.createMany({
       data: [
-        { name: "Electronics" },
-        { name: "Food & Beverages" },
-        { name: "Textiles" },
-        { name: "Automotive" },
-        { name: "Chemicals" },
+        { name: "Scleccionar" },
+        { name: "Disposotivos medicos" },
+        { name: "Productos farmaceuticos" },
+        { name: "Productos Sanitarios" },
+        { name: "Otros" },
         { name: "Pharmaceuticals" },
       ],
       skipDuplicates: true,

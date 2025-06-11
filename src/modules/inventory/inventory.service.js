@@ -622,6 +622,28 @@ async function getInventorySummary(filters = {}) {
               expiration_date: true,
             },
           },
+
+          // ✅ NEW: Include departure allocations to get departure order info
+          departureAllocations: {
+            select: {
+              allocation_id: true,
+              allocated_quantity: true,
+              departure_order: {
+                select: {
+                  departure_order_no: true,
+                  departure_date_time: true,
+                  order_status: true,
+                  destination_point: true,
+                  carrier_name: true,
+                  customer: {
+                    select: {
+                      name: true,
+                    }
+                  }
+                }
+              }
+            }
+          },
         },
       },
     },
@@ -638,6 +660,13 @@ async function getInventorySummary(filters = {}) {
   if (include_logs === true || include_logs === 'true') {
     const enrichedInventory = await Promise.all(
       inventory.map(async (item) => {
+        // ✅ UPDATED: Get departure order details from departure allocations
+        let departureOrderDetails = null;
+        if (item.allocation?.departureAllocations && item.allocation.departureAllocations.length > 0) {
+          // Use the first departure allocation's order details
+          departureOrderDetails = item.allocation.departureAllocations[0].departure_order;
+        }
+
         // Get movement logs for this inventory item
         const movementLogs = await prisma.inventoryLog.findMany({
           where: {
@@ -665,6 +694,23 @@ async function getInventorySummary(filters = {}) {
             departure_order_id: true,
             departure_order_product_id: true,
             
+            // ✅ NEW: Add departure order details
+            departure_order: {
+              select: {
+                departure_order_no: true,
+                departure_date_time: true, // ✅ FIXED: Use correct field name
+                order_status: true,
+              }
+            },
+            
+            // ✅ NEW: Add entry order details  
+            entry_order: {
+              select: {
+                entry_order_no: true,
+                registration_date: true,
+              }
+            },
+            
             // User information
             user_id: true,
             
@@ -689,6 +735,7 @@ async function getInventorySummary(filters = {}) {
         return {
           ...item,
           cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
+          departure_order: departureOrderDetails, // ✅ UPDATED: Get from departure allocations
           movement_logs: movementLogs,
           movement_summary: movementSummary,
         };
@@ -698,11 +745,23 @@ async function getInventorySummary(filters = {}) {
     return enrichedInventory;
   }
 
-  // Return basic inventory without logs
-  return inventory.map(item => ({
-    ...item,
-    cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
-  }));
+  // Return basic inventory without logs but with departure order details
+  const enrichedBasicInventory = inventory.map(item => {
+    // ✅ UPDATED: Get departure order details from departure allocations
+    let departureOrderDetails = null;
+    if (item.allocation?.departureAllocations && item.allocation.departureAllocations.length > 0) {
+      // Use the first departure allocation's order details
+      departureOrderDetails = item.allocation.departureAllocations[0].departure_order;
+    }
+
+    return {
+      ...item,
+      cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
+      departure_order: departureOrderDetails, // ✅ UPDATED: Get from departure allocations
+    };
+  });
+
+  return enrichedBasicInventory;
 }
 
 /** Fetch all warehouses */
@@ -1016,7 +1075,11 @@ async function getCellsByQualityStatus(qualityStatus, warehouseId = null) {
   }));
 }
 
-// ✅ UPDATED: Enhanced transition function with PARTIAL TRANSITIONS support
+// ✅ UPDATED: Enhanced transition function with PARTIAL TRANSITIONS and FULL BIDIRECTIONAL support
+// Supports all quality status transitions including:
+// - CUARENTENA ↔ APROBADO ↔ RECHAZADOS ↔ DEVOLUCIONES ↔ CONTRAMUESTRAS
+// - Any status can transition to any other status with proper cell assignment
+// - CONTRAMUESTRAS fully supported from/to all statuses
 async function transitionQualityStatus(transitionData) {
   const {
     allocation_id,
@@ -1042,11 +1105,33 @@ async function transitionQualityStatus(transitionData) {
     throw new Error("Missing or invalid required fields: allocation_id, to_status, quantity_to_move, performed_by, reason");
   }
 
-  // ✅ NEW: Validate cell requirement for special quality statuses
-  const specialStatuses = ["DEVOLUCIONES", "CONTRAMUESTRAS", "RECHAZADOS"];
-  if (specialStatuses.includes(to_status) && !new_cell_id) {
-    throw new Error(`Cell assignment required when transitioning to ${to_status}. Please select an appropriate cell.`);
-  }
+  // ✅ UPDATED: Validate cell requirement for special quality statuses (bidirectional support)
+  // Note: Cell requirements will be validated inside the transaction after fetching allocation data
+  
+  // ✅ NOTE: Cell validation for transitions FROM special statuses will be handled inside the transaction
+
+  // ✅ NEW: Helper function to validate transition compatibility
+  const validateTransitionCompatibility = (from_status, to_status) => {
+    // Define invalid transitions (if any) - currently allowing all transitions
+    const invalidTransitions = [
+      // Example: "RECHAZADOS_TO_CUARENTENA" - if we wanted to prevent this
+    ];
+    
+    const transitionKey = `${from_status}_TO_${to_status}`;
+    if (invalidTransitions.includes(transitionKey)) {
+      throw new Error(`Transition from ${from_status} to ${to_status} is not allowed by business rules.`);
+    }
+    
+    // Log transition for audit purposes  
+    console.log(`✅ Validated transition: ${from_status} → ${to_status}`);
+    
+    // ✅ NEW: Special logging for CONTRAMUESTRAS transitions
+    if (from_status === "CONTRAMUESTRAS" || to_status === "CONTRAMUESTRAS") {
+      console.log(`📋 CONTRAMUESTRAS transition: Moving ${from_status === "CONTRAMUESTRAS" ? "FROM" : "TO"} sample status`);
+    }
+    
+    return true;
+  };
 
   return await prisma.$transaction(async (tx) => {
     // 1. Get current allocation
@@ -1067,8 +1152,26 @@ async function transitionQualityStatus(transitionData) {
       throw new Error("Allocation not found");
     }
 
-    if (allocation.quality_status !== "CUARENTENA") {
-      throw new Error("Can only transition from quarantine status");
+    // ✅ UPDATED: Allow transitions between all quality statuses (two-way transitions)
+    const validFromStatuses = ["CUARENTENA", "APROBADO", "DEVOLUCIONES", "CONTRAMUESTRAS", "RECHAZADOS"];
+    if (!validFromStatuses.includes(allocation.quality_status)) {
+      throw new Error(`Invalid source quality status: ${allocation.quality_status}. Cannot transition from this status.`);
+    }
+
+    // ✅ NEW: Validate the requested transition compatibility
+    validateTransitionCompatibility(allocation.quality_status, to_status);
+
+    // ✅ NEW: Validate cell requirements for special quality statuses
+    const specialStatuses = ["DEVOLUCIONES", "CONTRAMUESTRAS", "RECHAZADOS"];
+    
+    // ✅ NEW: Handle bidirectional transitions - cell required when moving TO special statuses from any status
+    if (specialStatuses.includes(to_status) && !new_cell_id) {
+      throw new Error(`Cell assignment required when transitioning to ${to_status}. Please select an appropriate cell.`);
+    }
+    
+    // ✅ NEW: When transitioning FROM special statuses back to APROBADO, new cell is recommended but not required
+    if (specialStatuses.includes(allocation.quality_status) && to_status === "APROBADO" && !new_cell_id) {
+      console.log(`⚠️  WARNING: Transitioning from ${allocation.quality_status} to APROBADO without cell reassignment. Items will remain in current cell.`);
     }
 
     // ✅ NEW: Validate destination cell role if new cell provided
@@ -1091,7 +1194,8 @@ async function transitionQualityStatus(transitionData) {
         DEVOLUCIONES: ["RETURNS"],
         CONTRAMUESTRAS: ["SAMPLES"], 
         RECHAZADOS: ["REJECTED", "DAMAGED"],
-        APROBADO: ["STANDARD"]
+        APROBADO: ["STANDARD"],
+        CUARENTENA: ["STANDARD"] // ✅ UPDATED: Quarantine can use standard cells
       };
 
       const allowedRoles = requiredRoles[to_status] || ["STANDARD"];
@@ -1167,7 +1271,7 @@ async function transitionQualityStatus(transitionData) {
       data: {
         allocation_id,
         inventory_id: allocation.inventory[0]?.inventory_id,
-        from_status: "CUARENTENA",
+        from_status: allocation.quality_status, // ✅ UPDATED: Use actual current status
         to_status,
         quantity_moved: cleanQuantityToMove,
         package_quantity_moved: cleanPackageQuantityToMove,
@@ -1177,7 +1281,7 @@ async function transitionQualityStatus(transitionData) {
         to_cell_id: finalCellId,
         performed_by,
         reason,
-        notes: notes || `${isFullTransition ? 'Full' : 'Partial'} quality transition from CUARENTENA to ${to_status} - ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to new cell` : ' - Same cell'}`
+        notes: notes || `${isFullTransition ? 'Full' : 'Partial'} quality transition from ${allocation.quality_status} to ${to_status} - ${cleanQuantityToMove} units, ${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg${new_cell_id ? ` - Moved to new cell` : ' - Same cell'}`
       }
     });
 
@@ -1229,14 +1333,17 @@ async function transitionQualityStatus(transitionData) {
           cell_id: finalCellId,
           last_modified_by: performed_by,
           last_modified_at: new Date(),
-          observations: `${allocation.observations || ''}\nFull quality transition: ${reason} - All ${cleanQuantityToMove} units moved to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`
+          observations: `${allocation.observations || ''}\nFull quality transition: ${reason} - All ${cleanQuantityToMove} units moved from ${allocation.quality_status} to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`
         }
       });
 
       // 6a. Update inventory status
       if (allocation.inventory.length > 0) {
         const newInventoryStatus = to_status === "APROBADO" ? "AVAILABLE" :
-                                  to_status === "RECHAZADOS" ? "DAMAGED" : "RETURNED";
+                                  to_status === "RECHAZADOS" ? "DAMAGED" :
+                                  to_status === "CONTRAMUESTRAS" ? "SAMPLING" :
+                                  to_status === "DEVOLUCIONES" ? "RETURNED" :
+                                  to_status === "CUARENTENA" ? "QUARANTINED" : "RETURNED";
 
         await tx.inventory.update({
           where: { inventory_id: allocation.inventory[0].inventory_id },
@@ -1280,7 +1387,10 @@ async function transitionQualityStatus(transitionData) {
 
       // 5b. Create NEW inventory record for the transitioned portion
       const newInventoryStatus = to_status === "APROBADO" ? "AVAILABLE" :
-                                to_status === "RECHAZADOS" ? "DAMAGED" : "RETURNED";
+                                to_status === "RECHAZADOS" ? "DAMAGED" :
+                                to_status === "CONTRAMUESTRAS" ? "SAMPLING" :
+                                to_status === "DEVOLUCIONES" ? "RETURNED" :
+                                to_status === "CUARENTENA" ? "QUARANTINED" : "RETURNED";
 
       newInventory = await tx.inventory.create({
         data: {
@@ -1312,7 +1422,7 @@ async function transitionQualityStatus(transitionData) {
           volume_m3: remainingVolume,
           last_modified_by: performed_by,
           last_modified_at: new Date(),
-          observations: `${allocation.observations || ''}\nPartial transition: ${cleanQuantityToMove} units moved to ${to_status}. Remaining ${remainingQuantity} units stay in CUARENTENA. Reason: ${reason}`
+          observations: `${allocation.observations || ''}\nPartial transition: ${cleanQuantityToMove} units moved to ${to_status}. Remaining ${remainingQuantity} units stay in ${allocation.quality_status}. Reason: ${reason}`
         }
       });
 
@@ -1374,7 +1484,7 @@ async function transitionQualityStatus(transitionData) {
         cell_id: finalCellId,
         product_status: allocation.product_status,
         status_code: allocation.status_code,
-        notes: `${isFullTransition ? 'Full' : 'Partial'} quality transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) ${isFullTransition ? 'moved' : 'split'} from CUARENTENA to ${to_status}. Reason: ${reason}.${isFullTransition ? '' : ` Remaining ${remainingQuantity} units stay in CUARENTENA.`}${new_cell_id && new_cell_id !== allocation.cell_id ? ` Cell: ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position} → New cell` : ' Same cell'}`,
+        notes: `${isFullTransition ? 'Full' : 'Partial'} quality transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) ${isFullTransition ? 'moved' : 'split'} from ${allocation.quality_status} to ${to_status}. Reason: ${reason}.${isFullTransition ? '' : ` Remaining ${remainingQuantity} units stay in ${allocation.quality_status}.`}${new_cell_id && new_cell_id !== allocation.cell_id ? ` Cell: ${allocation.cell.row}.${allocation.cell.bay}.${allocation.cell.position} → New cell` : ' Same cell'}`,
       },
     });
 
@@ -1384,21 +1494,21 @@ async function transitionQualityStatus(transitionData) {
       "QUALITY_STATUS_CHANGED",
       "QualityControlTransition",
       transition.transition_id,
-      `${isFullTransition ? 'Full' : 'Partial'} quality status transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) of ${allocation.entry_order_product.product.name} from CUARENTENA to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`,
-      { 
-        quality_status: "CUARENTENA",
-        quantity: allocation.inventory_quantity,
-        packages: allocation.package_quantity,
-        weight: parseFloat(allocation.weight_kg),
-        cell_id: allocation.cell_id
-      },
+      `${isFullTransition ? 'Full' : 'Partial'} quality status transition: ${cleanQuantityToMove} units (${cleanPackageQuantityToMove} packages, ${cleanWeightToMove} kg) of ${allocation.entry_order_product.product.name} from ${allocation.quality_status} to ${to_status}${new_cell_id ? ' with cell reassignment' : ''}`,
+              { 
+          quality_status: allocation.quality_status, // ✅ UPDATED: Use actual current status
+          quantity: allocation.inventory_quantity,
+          packages: allocation.package_quantity,
+          weight: parseFloat(allocation.weight_kg),
+          cell_id: allocation.cell_id
+        },
       { 
         quality_status: to_status,
         quantity: cleanQuantityToMove,
         packages: cleanPackageQuantityToMove,
         weight: cleanWeightToMove,
         cell_id: finalCellId,
-        remaining_in_quarantine: isFullTransition ? 0 : remainingQuantity
+                  remaining_in_original_status: isFullTransition ? 0 : remainingQuantity
       },
       {
         allocation_id,

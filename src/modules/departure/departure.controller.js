@@ -357,7 +357,6 @@ module.exports = {
   getDepartureOrderById,
   getDepartureInventorySummary,
   getCurrentDepartureOrderNo,
-  // ✅ NEW: FIFO Product-wise flow
   getFifoLocationsForProduct,
   getSuggestedFifoAllocation,
 
