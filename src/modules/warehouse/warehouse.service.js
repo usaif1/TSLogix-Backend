@@ -70,19 +70,100 @@ async function assignPallets(
 }
 
 /**
- * Fetch all cells, optionally filtering by warehouse
+ * Fetch all cells with client assignment status, optionally filtering by warehouse
  */
 async function getAllWarehouseCells(filter = {}) {
   const where = {};
   if (filter.warehouse_id) where.warehouse_id = filter.warehouse_id;
-  return await prisma.warehouseCell.findMany({
+  
+  const cells = await prisma.warehouseCell.findMany({
     where,
+    include: {
+      warehouse: {
+        select: {
+          warehouse_id: true,
+          name: true,
+          location: true
+        }
+      },
+      clientCellAssignments: {
+        where: { is_active: true },
+        include: {
+          client: {
+            select: {
+              client_id: true,
+              client_type: true,
+              company_name: true,
+              first_names: true,
+              last_name: true,
+              email: true
+            }
+          },
+          assignedBy: {
+            select: {
+              first_name: true,
+              last_name: true,
+              email: true
+            }
+          }
+        }
+      },
+      inventory: {
+        select: {
+          inventory_id: true,
+          current_quantity: true,
+          status: true,
+          product: {
+            select: {
+              product_code: true,
+              name: true
+            }
+          }
+        },
+        take: 5 // Limit to show recent inventory
+      },
+      _count: {
+        select: {
+          inventory: true,
+          clientCellAssignments: {
+            where: { is_active: true }
+          }
+        }
+      }
+    },
     orderBy: [
       { warehouse_id: "asc" },
       { row: "asc" },
       { bay: "asc" },
       { position: "asc" },
     ],
+  });
+
+  // Transform data to include client assignment status
+  return cells.map(cell => {
+    const activeAssignment = cell.clientCellAssignments[0] || null;
+    const clientInfo = activeAssignment ? {
+      client_id: activeAssignment.client.client_id,
+      client_name: activeAssignment.client.client_type === "COMMERCIAL" 
+        ? activeAssignment.client.company_name 
+        : `${activeAssignment.client.first_names} ${activeAssignment.client.last_name}`,
+      client_type: activeAssignment.client.client_type,
+      client_email: activeAssignment.client.email,
+      assigned_by: `${activeAssignment.assignedBy.first_name} ${activeAssignment.assignedBy.last_name}`,
+      assigned_at: activeAssignment.assigned_at,
+      priority: activeAssignment.priority,
+      notes: activeAssignment.notes
+    } : null;
+
+    return {
+      ...cell,
+      cell_location: `${cell.row}.${cell.bay}.${cell.position}`,
+      is_assigned_to_client: !!activeAssignment,
+      client_assignment: clientInfo,
+      has_inventory: cell._count.inventory > 0,
+      inventory_count: cell._count.inventory,
+      assignment_count: cell._count.clientCellAssignments
+    };
   });
 }
 

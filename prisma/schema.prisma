@@ -15,6 +15,29 @@ enum RoleName {
   ADMIN
 }
 
+// ✅ NEW: Client Type enum for different client categories
+enum ClientType {
+  COMMERCIAL  // Commercial clients (companies)
+  INDIVIDUAL  // Individual clients (persons)
+}
+
+// ✅ NEW: Company Type enum for commercial clients
+enum CompanyType {
+  PRIVATE   // Empresa Privada
+  PUBLIC    // Empresa Pública
+}
+
+// ✅ NEW: Establishment Type enum for commercial clients
+enum EstablishmentType {
+  SELECCIONAR             // Seleccionar
+  ALMACEN_ESPECIALIZADO   // Almacén Especializado
+  BOTICA                  // Botica
+  BOTIQUIN               // Botiquín
+  DROGUERIA              // Droguería
+  FARMACIA               // Farmacia
+  OTROS                  // Otros
+}
+
 // Packaging status enum based on your codes
 enum PackagingStatus {
   NORMAL           // Codes: 30-37
@@ -275,6 +298,9 @@ model User {
   
   // ✅ FIXED: Add missing audit relation
   audits                EntryOrderAudit[]    @relation("UserAudits")
+  
+  // ✅ NEW: Client cell assignment relations
+  clientCellAssignments ClientCellAssignment[] @relation("ClientCellAssigner")
 
   @@map("users")
 }
@@ -297,6 +323,7 @@ model ActiveState {
   Customer Customer[]
   Product  Product[]
   User     User[]
+  Client   Client[]   // ✅ NEW: Client relation
 
   @@map("active_states")
 }
@@ -421,6 +448,79 @@ model Customer {
 
   @@index([type_id], map: "idx_customer_type")
   @@map("customers")
+}
+
+// ✅ NEW: Enhanced Client model for both commercial and individual clients
+model Client {
+  client_id           String            @id @default(uuid()) @map("client_id")
+  client_type         ClientType        @map("client_type")
+  
+  // Common fields for both types
+  email               String?
+  address             String?
+  phone               String?
+  cell_phone          String?
+  active_state_id     String?
+  created_at          DateTime          @default(now())
+  updated_at          DateTime          @updatedAt
+  
+  // Commercial client fields (used when client_type = COMMERCIAL)
+  company_name        String?           // Company Name
+  company_type        CompanyType?      // Private/Public
+  establishment_type  EstablishmentType? @default(SELECCIONAR) // Type of establishment
+  ruc                 String?           // RUC (tax identification)
+  
+  // Individual client fields (used when client_type = INDIVIDUAL)
+  first_names         String?           // First Names
+  last_name           String?           // Last Name
+  mothers_last_name   String?           // Mother's Last Name
+  individual_id       String?           // ID (DNI, etc.)
+  date_of_birth       DateTime?         // Date of Birth
+  
+  // Relations
+  active_state        ActiveState?      @relation(fields: [active_state_id], references: [state_id])
+  
+  // Client-specific cell assignments
+  cellAssignments     ClientCellAssignment[]
+  
+  // Departure orders for this client
+  departureOrders     DepartureOrder[]  @relation("ClientDepartureOrders")
+
+  @@index([client_type], map: "idx_client_type")
+  @@index([company_type], map: "idx_client_company_type")
+  @@index([establishment_type], map: "idx_client_establishment_type")
+  @@index([active_state_id], map: "idx_client_active_state")
+  @@map("clients")
+}
+
+// ✅ NEW: Client-specific cell assignments model
+model ClientCellAssignment {
+  assignment_id   String       @id @default(uuid()) @map("assignment_id")
+  client_id       String       @map("client_id")
+  cell_id         String       @map("cell_id")
+  warehouse_id    String       @map("warehouse_id")
+  
+  // Assignment details
+  assigned_at     DateTime     @default(now())
+  assigned_by     String       // User who made the assignment
+  is_active       Boolean      @default(true)
+  priority        Int?         @default(1) // Priority for this client (1 = highest)
+  
+  // Notes and restrictions
+  notes           String?
+  max_capacity    Decimal?     @db.Decimal(10, 2) // Max capacity for this client
+  
+  // Relations
+  client          Client       @relation(fields: [client_id], references: [client_id])
+  cell            WarehouseCell @relation(fields: [cell_id], references: [id])
+  warehouse       Warehouse    @relation(fields: [warehouse_id], references: [warehouse_id])
+  assignedBy      User         @relation("ClientCellAssigner", fields: [assigned_by], references: [id])
+
+  @@unique([client_id, cell_id], name: "client_cell_unique")
+  @@index([client_id], map: "idx_client_assignments")
+  @@index([cell_id], map: "idx_cell_client_assignments")
+  @@index([warehouse_id], map: "idx_warehouse_client_assignments")
+  @@map("client_cell_assignments")
 }
 
 model Product {
@@ -628,7 +728,8 @@ model DepartureOrder {
   departure_order_no          String              @unique
   
   // Basic order info
-  customer_id                 String
+  customer_id                 String?  // ✅ Made optional to support both Customer and Client
+  client_id                   String?  // ✅ NEW: Support for new Client model
   document_type_id            String?
   registration_date           DateTime            @default(now())
   document_date               DateTime?
@@ -661,7 +762,8 @@ model DepartureOrder {
   exit_option_id              String?             // ✅ FIXED: Add missing field
   
   // Relations
-  customer                    Customer            @relation(fields: [customer_id], references: [customer_id])
+  customer                    Customer?           @relation(fields: [customer_id], references: [customer_id])
+  client                      Client?             @relation("ClientDepartureOrders", fields: [client_id], references: [client_id])
   documentType                DepartureDocumentType? @relation(fields: [document_type_id], references: [document_type_id])
   order                       Order               @relation(fields: [order_id], references: [order_id])
   creator                     User                @relation("DepartureOrderCreator", fields: [created_by], references: [id])
@@ -787,6 +889,9 @@ model WarehouseCell {
   // ✅ NEW: Quality control transition relations
   transitionsFrom           QualityControlTransition[] @relation("TransitionFromCell")
   transitionsTo             QualityControlTransition[] @relation("TransitionToCell")
+  
+  // ✅ NEW: Client cell assignment relations
+  clientCellAssignments     ClientCellAssignment[]
 
   @@unique([warehouse_id, row, bay, position], name: "idx_cell_unique")
   @@map("warehouse_cells")
@@ -805,6 +910,9 @@ model Warehouse {
   departureOrders    DepartureOrder[]
   cells              WarehouseCell[]  
   inventoryLogs      InventoryLog[]
+  
+  // ✅ NEW: Client cell assignment relations
+  clientCellAssignments ClientCellAssignment[]
 
   @@map("warehouses")
 }

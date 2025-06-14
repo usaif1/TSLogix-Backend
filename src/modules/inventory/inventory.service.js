@@ -1112,22 +1112,47 @@ async function transitionQualityStatus(transitionData) {
 
   // ✅ NEW: Helper function to validate transition compatibility
   const validateTransitionCompatibility = (from_status, to_status) => {
-    // Define invalid transitions (if any) - currently allowing all transitions
-    const invalidTransitions = [
-      // Example: "RECHAZADOS_TO_CUARENTENA" - if we wanted to prevent this
-    ];
+    // ✅ NEW: Define allowed transitions based on new business rules
+    const allowedTransitions = {
+      CUARENTENA: ["APROBADO", "RECHAZADOS", "DEVOLUCIONES", "CONTRAMUESTRAS"],
+      APROBADO: ["CUARENTENA", "RECHAZADOS", "DEVOLUCIONES", "CONTRAMUESTRAS"],
+      RECHAZADOS: [], // ✅ RECHAZADOS is a final state - no transitions allowed
+      DEVOLUCIONES: ["RECHAZADOS", "APROBADO"], // ✅ Can only go to RECHAZADOS or APROBADOS
+      CONTRAMUESTRAS: ["CUARENTENA", "APROBADO", "RECHAZADOS", "DEVOLUCIONES"] // ✅ Can go to all other states
+    };
     
-    const transitionKey = `${from_status}_TO_${to_status}`;
-    if (invalidTransitions.includes(transitionKey)) {
-      throw new Error(`Transition from ${from_status} to ${to_status} is not allowed by business rules.`);
+    // Check if the transition is allowed
+    const validTargets = allowedTransitions[from_status] || [];
+    
+    if (!validTargets.includes(to_status)) {
+      const statusNames = {
+        CUARENTENA: "Cuarentena",
+        APROBADO: "Aprobado", 
+        RECHAZADOS: "Rechazados",
+        DEVOLUCIONES: "Devoluciones",
+        CONTRAMUESTRAS: "Contramuestras"
+      };
+      
+      if (from_status === "RECHAZADOS") {
+        throw new Error(`Products in ${statusNames[from_status]} status cannot be transitioned to any other status. This is a final state.`);
+      }
+      
+      const allowedStatusNames = validTargets.map(status => statusNames[status]).join(", ");
+      throw new Error(`Transition from ${statusNames[from_status]} to ${statusNames[to_status]} is not allowed. Valid transitions from ${statusNames[from_status]} are: ${allowedStatusNames}`);
     }
     
     // Log transition for audit purposes  
     console.log(`✅ Validated transition: ${from_status} → ${to_status}`);
     
-    // ✅ NEW: Special logging for CONTRAMUESTRAS transitions
-    if (from_status === "CONTRAMUESTRAS" || to_status === "CONTRAMUESTRAS") {
-      console.log(`📋 CONTRAMUESTRAS transition: Moving ${from_status === "CONTRAMUESTRAS" ? "FROM" : "TO"} sample status`);
+    // ✅ NEW: Special logging for business rule transitions
+    if (from_status === "RECHAZADOS") {
+      console.log(`❌ BLOCKED: RECHAZADOS is a final state - no transitions allowed`);
+    } else if (from_status === "DEVOLUCIONES" && !["RECHAZADOS", "APROBADO"].includes(to_status)) {
+      console.log(`❌ BLOCKED: DEVOLUCIONES can only transition to RECHAZADOS or APROBADO`);
+    } else if (to_status === "CONTRAMUESTRAS") {
+      console.log(`📋 CONTRAMUESTRAS transition: Moving TO sample status from ${from_status}`);
+    } else if (from_status === "CONTRAMUESTRAS") {
+      console.log(`📋 CONTRAMUESTRAS transition: Moving FROM sample status to ${to_status}`);
     }
     
     return true;

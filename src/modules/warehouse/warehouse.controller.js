@@ -21,12 +21,53 @@ async function listWarehouseCells(req, res) {
   try {
     const filter = {};
     if (req.query.warehouse_id) filter.warehouse_id = req.query.warehouse_id;
-    const cells = await getAllWarehouseCells(filter);
-    return res.status(200).json({ message: "Cells fetched", cells });
+    
+    const allCells = await getAllWarehouseCells(filter);
+    
+    // Apply additional filters based on query parameters
+    let filteredCells = allCells;
+    
+    // Filter by assignment status
+    if (req.query.assigned_to_client !== undefined) {
+      const isAssigned = req.query.assigned_to_client === 'true';
+      filteredCells = filteredCells.filter(cell => cell.is_assigned_to_client === isAssigned);
+    }
+    
+    // Filter by cell status
+    if (req.query.status) {
+      filteredCells = filteredCells.filter(cell => cell.status === req.query.status);
+    }
+    
+    // Filter by cell role
+    if (req.query.cell_role) {
+      filteredCells = filteredCells.filter(cell => cell.cell_role === req.query.cell_role);
+    }
+    
+    // Get summary statistics
+    const summary = {
+      total_cells: allCells.length,
+      filtered_cells: filteredCells.length,
+      assigned_to_clients: allCells.filter(cell => cell.is_assigned_to_client).length,
+      unassigned_cells: allCells.filter(cell => !cell.is_assigned_to_client).length,
+      available_cells: allCells.filter(cell => cell.status === 'AVAILABLE').length,
+      occupied_cells: allCells.filter(cell => cell.status === 'OCCUPIED').length,
+      cells_with_inventory: allCells.filter(cell => cell.has_inventory).length
+    };
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Cells fetched successfully", 
+      data: filteredCells,
+      summary
+    });
   } catch (err) {
     return res
       .status(500)
-      .json({ message: "Error fetching cells", error: err.message });
+      .json({ 
+        success: false,
+        message: "Error fetching cells", 
+        error: err.message 
+      });
   }
 }
 

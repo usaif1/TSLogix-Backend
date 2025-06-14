@@ -40,6 +40,7 @@ const departureRoutes = require("@/modules/departure/departure.route");
 const auditRoutes = require("@/modules/audit/audit.route");
 const inventoryRoutes = require("@/modules/inventory/inventory.route");
 const warehouseRoutes = require("@/modules/warehouse/warehouse.route");
+const clientRoutes = require("@/modules/client/client.route"); // ✅ NEW: Client routes
 
 // Mount your module routes
 app.use("/auth", authRoutes);
@@ -53,6 +54,7 @@ app.use("/departure", authenticateToken, departureRoutes);
 app.use("/audit", authenticateToken, auditRoutes);
 app.use("/inventory", authenticateToken, inventoryRoutes);
 app.use("/warehouse", authenticateToken, warehouseRoutes);
+app.use("/clients", authenticateToken, clientRoutes); // ✅ NEW: Mount client routes
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);
 

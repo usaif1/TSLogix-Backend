@@ -17,6 +17,9 @@ const {
   ProductStatus,
   QualityControlStatus,
   SystemAction,
+  ClientType,
+  CompanyType,
+  EstablishmentType,
 } = require("@prisma/client");
 const { faker } = require("@faker-js/faker");
 const bcrypt = require("bcrypt");
@@ -40,6 +43,7 @@ const COUNT = {
   USERS: 20,
   SUPPLIERS: 15,
   CUSTOMERS: 20,
+  CLIENTS: 25, // ✅ NEW: Clients count
   PRODUCTS: 30,
   WAREHOUSES: 3,
   ENTRY_ORDERS: 25,
@@ -95,7 +99,6 @@ async function createBaseLookupTables() {
         { name: "Productos farmaceuticos" },
         { name: "Productos Sanitarios" },
         { name: "Otros" },
-        { name: "Pharmaceuticals" },
       ],
       skipDuplicates: true,
     });
@@ -407,6 +410,224 @@ async function createSuppliersAndCustomers() {
   }
 }
 
+// ✅ NEW: Function to create clients with both commercial and individual types
+async function createClients() {
+  try {
+    console.log("Creating clients (commercial and individual)...");
+    
+    const activeStates = await prisma.activeState.findMany();
+    const activeState = activeStates.find(s => s.name === "Active").state_id;
+    const inactiveState = activeStates.find(s => s.name === "Inactive").state_id;
+    
+    const clients = [];
+    
+    // Create commercial clients (60% of total)
+    const commercialCount = Math.floor(COUNT.CLIENTS * 0.6);
+    for (let i = 0; i < commercialCount; i++) {
+      clients.push({
+        client_type: ClientType.COMMERCIAL,
+        
+        // Common fields
+        email: faker.internet.email({ provider: "comercial.com" }),
+        address: faker.location.streetAddress() + ", " + faker.location.city(),
+        phone: faker.phone.number(),
+        cell_phone: faker.phone.number(),
+        active_state_id: faker.helpers.weightedArrayElement([
+          { weight: 85, value: activeState },
+          { weight: 15, value: inactiveState }
+        ]),
+        
+        // Commercial client fields (all required)
+        company_name: faker.company.name(),
+        company_type: faker.helpers.arrayElement([CompanyType.PRIVATE, CompanyType.PUBLIC]),
+        establishment_type: faker.helpers.arrayElement([
+          EstablishmentType.ALMACEN_ESPECIALIZADO,
+          EstablishmentType.BOTICA,
+          EstablishmentType.BOTIQUIN,
+          EstablishmentType.DROGUERIA,
+          EstablishmentType.FARMACIA,
+          EstablishmentType.OTROS
+        ]), // Removed SELECCIONAR as it's not a valid choice
+        ruc: `20${faker.string.numeric(9)}`,
+        
+        // Clear individual fields
+        first_names: null,
+        last_name: null,
+        mothers_last_name: null,
+        individual_id: null,
+        date_of_birth: null,
+      });
+    }
+    
+    // Create individual clients (40% of total)
+    const individualCount = COUNT.CLIENTS - commercialCount;
+    for (let i = 0; i < individualCount; i++) {
+      const firstName = faker.person.firstName();
+      const lastName = faker.person.lastName();
+      const mothersLastName = faker.person.lastName();
+      
+      clients.push({
+        client_type: ClientType.INDIVIDUAL,
+        
+        // Common fields
+        email: faker.internet.email({ firstName, lastName, provider: "cliente.com" }),
+        address: faker.location.streetAddress() + ", " + faker.location.city(),
+        phone: faker.phone.number(),
+        cell_phone: faker.phone.number(),
+        active_state_id: faker.helpers.weightedArrayElement([
+          { weight: 90, value: activeState },
+          { weight: 10, value: inactiveState }
+        ]),
+        
+        // Individual client fields
+        first_names: `${firstName} ${faker.person.middleName()}`,
+        last_name: lastName,
+        mothers_last_name: mothersLastName,
+        individual_id: faker.string.numeric(8), // DNI
+        date_of_birth: faker.date.birthdate({ min: 18, max: 80, mode: 'age' }),
+        
+        // Clear commercial fields
+        company_name: null,
+        company_type: null,
+        establishment_type: null,
+        ruc: null,
+      });
+    }
+    
+    // Create clients in batches to avoid memory issues
+    const batchSize = 10;
+    for (let i = 0; i < clients.length; i += batchSize) {
+      const batch = clients.slice(i, i + batchSize);
+      await prisma.client.createMany({ 
+        data: batch, 
+        skipDuplicates: true 
+      });
+    }
+    
+    console.log(`✅ Clients created: ${commercialCount} commercial, ${individualCount} individual`);
+    
+    return { commercialCount, individualCount };
+  } catch (error) {
+    console.error("❌ Error creating clients:", error);
+    throw error;
+  }
+}
+
+// ✅ UPDATED: Function to create client cell assignments for ALL clients (now mandatory)
+async function createClientCellAssignments() {
+  try {
+    console.log("Creating client cell assignments for ALL clients (mandatory)...");
+    
+    const clients = await prisma.client.findMany({
+      orderBy: { created_at: 'asc' }
+    });
+    
+    const availableCells = await prisma.warehouseCell.findMany({
+      where: {
+        status: "AVAILABLE",
+        cell_role: "STANDARD" // Only assign standard cells to clients
+      },
+      include: {
+        warehouse: true
+      },
+      orderBy: [
+        { warehouse_id: 'asc' },
+        { row: 'asc' },
+        { bay: 'asc' },
+        { position: 'asc' }
+      ]
+    });
+    
+    const warehouseUsers = await prisma.user.findMany({
+      where: { role: { name: "WAREHOUSE" } }
+    });
+    
+    if (clients.length === 0) {
+      console.log("⚠️ No clients to assign cells to");
+      return;
+    }
+    
+    if (availableCells.length === 0) {
+      console.log("⚠️ No available cells for client assignments");
+      return;
+    }
+    
+    if (warehouseUsers.length === 0) {
+      console.log("⚠️ No warehouse users to perform assignments");
+      return;
+    }
+    
+    console.log(`📊 Assigning cells to ${clients.length} clients from ${availableCells.length} available cells`);
+    
+    const assignments = [];
+    let cellIndex = 0;
+    
+    // ✅ Ensure EVERY client gets at least one cell
+    for (let i = 0; i < clients.length; i++) {
+      const client = clients[i];
+      const cellsForClient = faker.number.int({ min: 1, max: 3 }); // 1-3 cells per client
+      const assigner = faker.helpers.arrayElement(warehouseUsers);
+      
+      let assignedCells = 0;
+      for (let j = 0; j < cellsForClient && cellIndex < availableCells.length; j++) {
+        const cell = availableCells[cellIndex];
+        
+        assignments.push({
+          client_id: client.client_id,
+          cell_id: cell.id,
+          warehouse_id: cell.warehouse_id,
+          assigned_by: assigner.id,
+          priority: j + 1, // First cell has priority 1, second has priority 2, etc.
+          notes: `Assigned to ${client.client_type === "COMMERCIAL" ? client.company_name : `${client.first_names} ${client.last_name}`} - Priority ${j + 1}`,
+          max_capacity: faker.number.float({ min: 50, max: 100, fractionDigits: 2 }),
+        });
+        
+        cellIndex++;
+        assignedCells++;
+      }
+      
+      if (assignedCells === 0) {
+        console.log(`⚠️ Warning: Could not assign any cells to client ${client.client_id} - running out of available cells`);
+        break;
+      }
+    }
+    
+    // Create assignments in batches
+    const batchSize = 10;
+    for (let i = 0; i < assignments.length; i += batchSize) {
+      const batch = assignments.slice(i, i + batchSize);
+      await prisma.clientCellAssignment.createMany({
+        data: batch,
+        skipDuplicates: true
+      });
+    }
+    
+    console.log(`✅ Client cell assignments created: ${assignments.length} assignments for ${clients.length} clients`);
+    
+    // Verify every client has at least one assignment
+    const clientsWithoutCells = await prisma.client.findMany({
+      where: {
+        cellAssignments: {
+          none: {
+            is_active: true
+          }
+        }
+      }
+    });
+    
+    if (clientsWithoutCells.length > 0) {
+      console.log(`⚠️ Warning: ${clientsWithoutCells.length} clients still have no cell assignments`);
+    } else {
+      console.log(`✅ All ${clients.length} clients have cell assignments`);
+    }
+    
+    return assignments.length;
+  } catch (error) {
+    console.error("❌ Error creating client cell assignments:", error);
+    throw error;
+  }
+}
+
 async function createProducts() {
   try {
     console.log("Creating products...");
@@ -623,6 +844,8 @@ async function createEntryOrdersWithProducts() {
     const baseDate = new Date('2024-01-01'); // Start from this date
     
     // ✅ Create multiple entries of the same products at different dates (for FIFO testing)
+    let fifoOrderCounter = 1; // Global counter for unique FIFO order numbers
+    
     for (let fifoIndex = 0; fifoIndex < 3; fifoIndex++) {
       const entryDate = new Date(baseDate);
       entryDate.setDate(baseDate.getDate() + (fifoIndex * 10)); // 10 days apart
@@ -646,7 +869,7 @@ async function createEntryOrdersWithProducts() {
         const entryOrder = await prisma.entryOrder.create({
           data: {
             order_id: order.order_id,
-            entry_order_no: `FIFO-${fifoIndex + 1}-${product.product_code}`,
+            entry_order_no: `FIFO-${String(fifoOrderCounter).padStart(3, '0')}-${product.product_code.slice(-4)}`,
             origin_id: faker.helpers.arrayElement(origins).origin_id,
             document_type_id: faker.helpers.arrayElement(documentTypes).document_type_id,
             registration_date: entryDate,
@@ -674,6 +897,7 @@ async function createEntryOrdersWithProducts() {
         });
         
         entryOrders.push(entryOrder);
+        fifoOrderCounter++; // Increment counter for next unique order number
         
         // ✅ Create audit log for FIFO entry
         await createAuditLog(
@@ -727,6 +951,8 @@ async function createEntryOrdersWithProducts() {
     }
     
     // ✅ Create remaining random entry orders
+    let regularOrderCounter = 1000; // Start regular orders from 1000 to avoid conflicts
+    
     for (let i = 0; i < (COUNT.ENTRY_ORDERS - (fifoTestProducts.length * 3)); i++) {
       const customerUser = faker.helpers.arrayElement(customerUsers);
       const warehouse = faker.helpers.arrayElement(warehouses);
@@ -746,7 +972,7 @@ async function createEntryOrdersWithProducts() {
       const entryOrder = await prisma.entryOrder.create({
         data: {
           order_id: order.order_id,
-          entry_order_no: `ENTRY-${faker.string.numeric(5)}`,
+          entry_order_no: `ENTRY-${String(regularOrderCounter).padStart(5, '0')}`,
           origin_id: faker.helpers.arrayElement(origins).origin_id,
           document_type_id: faker.helpers.arrayElement(documentTypes).document_type_id,
           registration_date: new Date(),
@@ -774,6 +1000,7 @@ async function createEntryOrdersWithProducts() {
       });
       
       entryOrders.push(entryOrder);
+      regularOrderCounter++; // Increment counter for next unique order number
       
       // ✅ NEW: Create audit log for entry order creation
       await createAuditLog(
@@ -1303,6 +1530,8 @@ async function createDepartureOrdersWithProducts() {
     
     const productIds = Object.keys(inventoryByProduct);
     
+    let departureOrderCounter = 2000; // Start departure orders from 2000 to avoid conflicts
+    
     for (let i = 0; i < Math.min(COUNT.DEPARTURE_ORDERS, productIds.length); i++) {
       const customerUser = faker.helpers.arrayElement(customerUsers);
       const customer = faker.helpers.arrayElement(customers);
@@ -1323,7 +1552,7 @@ async function createDepartureOrdersWithProducts() {
       const departureOrder = await prisma.departureOrder.create({
         data: {
           order_id: order.order_id,
-          departure_order_no: `DEP-${faker.string.numeric(5)}`,
+          departure_order_no: `DEP-${String(departureOrderCounter).padStart(5, '0')}`,
           customer_id: customer.customer_id,
           document_type_id: faker.helpers.maybe(() => faker.helpers.arrayElement(departureDocTypes).document_type_id),
           registration_date: new Date(),
@@ -1350,6 +1579,8 @@ async function createDepartureOrdersWithProducts() {
           review_status: faker.helpers.arrayElement([ReviewStatus.PENDING, ReviewStatus.APPROVED]),
         },
               });
+      
+      departureOrderCounter++; // Increment counter for next unique order number
       
       // ✅ NEW: Create audit log for departure order creation
       await createAuditLog(
@@ -1427,8 +1658,10 @@ async function main() {
     await createBaseLookupTables();
     await createUsersAndOrganization();
     await createSuppliersAndCustomers(); 
+    await createClients(); // ✅ NEW: Create clients
     await createProducts();
     await createWarehousesAndCells();
+    await createClientCellAssignments(); // ✅ NEW: Assign cells to clients
     await createEntryOrdersWithProducts();
     await createInventoryAllocations();
     
@@ -1445,6 +1678,7 @@ async function main() {
     console.log("   • Only approved inventory available for departure orders");
     console.log("   • FIFO test data: 5 products × 3 entry dates for departure testing");
     console.log("   • Product-wise departure flow with FIFO allocation (oldest inventory first)");
+    console.log("   • ✅ MANDATORY: Every client has cell assignments (compulsory for new clients)");
     
     // Print some stats
     const stats = await Promise.all([
