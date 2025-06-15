@@ -5,9 +5,85 @@ const ProductService = require("./product.service");
  */
 async function createProduct(req, res) {
   try {
-    const product = await ProductService.createProduct(req.body);
+    const productData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+
+    // ✅ LOG: Product creation process started
+    await req.logEvent(
+      'PRODUCT_CREATION_STARTED',
+      'Product',
+      'NEW_PRODUCT',
+      `Started creating new product: ${productData.name}`,
+      null,
+      {
+        product_name: productData.name,
+        product_code: productData.product_code,
+        manufacturer: productData.manufacturer,
+        product_line_id: productData.product_line_id,
+        group_id: productData.group_id,
+        temperature_range_id: productData.temperature_range_id,
+        created_by: userId,
+        creator_role: userRole,
+        creation_timestamp: new Date().toISOString(),
+        has_description: !!productData.description,
+        has_specifications: !!productData.specifications
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'CREATION_START' }
+    );
+
+    const product = await ProductService.createProduct(productData);
+
+    // ✅ LOG: Successful product creation
+    await req.logEvent(
+      'PRODUCT_CREATED',
+      'Product',
+      product.product_id,
+      `Successfully created new product: ${product.name}`,
+      null,
+      {
+        product_id: product.product_id,
+        product_name: product.name,
+        product_code: product.product_code,
+        manufacturer: product.manufacturer,
+        product_line_id: product.product_line_id,
+        group_id: product.group_id,
+        temperature_range_id: product.temperature_range_id,
+        description: product.description,
+        specifications: product.specifications,
+        created_by: userId,
+        creator_role: userRole,
+        created_at: product.created_at,
+        business_impact: 'NEW_PRODUCT_AVAILABLE_FOR_ORDERS'
+      },
+      { 
+        operation_type: 'PRODUCT_MANAGEMENT', 
+        action_type: 'CREATION_SUCCESS',
+        business_impact: 'PRODUCT_CATALOG_EXPANDED',
+        next_steps: 'PRODUCT_AVAILABLE_FOR_ENTRY_ORDERS'
+      }
+    );
+
     res.status(201).json(product);
   } catch (error) {
+    console.error('Error creating product:', error);
+    
+    // ✅ LOG: Product creation failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'createProduct',
+      product_data: {
+        name: req.body.name,
+        product_code: req.body.product_code,
+        manufacturer: req.body.manufacturer,
+        product_line_id: req.body.product_line_id,
+        group_id: req.body.group_id
+      },
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_CREATION_FAILED'
+    });
+    
     res.status(400).json({ error: error.message });
   }
 }
@@ -17,15 +93,48 @@ async function createProduct(req, res) {
  */
 async function getAllProducts(req, res) {
   try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
     const filters = {
       product_line_id: req.query.product_line_id,
       group_id: req.query.group_id,
       name: req.query.name,
     };
 
+    // ✅ LOG: Product list access
+    await req.logEvent(
+      'PRODUCT_LIST_ACCESSED',
+      'Product',
+      'PRODUCT_LIST',
+      `User accessed product list`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString(),
+        filters_applied: filters,
+        has_filters: !!(filters.product_line_id || filters.group_id || filters.name)
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'LIST_ACCESS' }
+    );
+
     const products = await ProductService.getAllProducts(filters);
+    
     res.json(products);
   } catch (error) {
+    console.error('Error fetching products:', error);
+    
+    // ✅ LOG: Product list access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getAllProducts',
+      filters: req.query,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_LIST_ACCESS_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }
@@ -35,11 +144,61 @@ async function getAllProducts(req, res) {
  */
 async function getProductById(req, res) {
   try {
-    const product = await ProductService.getProductById(req.params.id);
-    product
-      ? res.json(product)
-      : res.status(404).json({ error: "Product not found" });
+    const { id } = req.params;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Product details access
+    await req.logEvent(
+      'PRODUCT_DETAILS_ACCESSED',
+      'Product',
+      id,
+      `User accessed product details for product ${id}`,
+      null,
+      {
+        product_id: id,
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'DETAILS_ACCESS' }
+    );
+
+    const product = await ProductService.getProductById(id);
+    
+    if (!product) {
+      // ✅ LOG: Product not found
+      await req.logEvent(
+        'PRODUCT_NOT_FOUND',
+        'Product',
+        id,
+        `Product ${id} not found during details access`,
+        null,
+        {
+          product_id: id,
+          accessed_by: userId,
+          accessor_role: userRole
+        },
+        { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'NOT_FOUND' }
+      );
+      
+      return res.status(404).json({ error: "Product not found" });
+    }
+    
+    res.json(product);
   } catch (error) {
+    console.error('Error fetching product:', error);
+    
+    // ✅ LOG: Product details access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getProductById',
+      product_id: req.params.id,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_DETAILS_ACCESS_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }
@@ -49,9 +208,80 @@ async function getProductById(req, res) {
  */
 async function updateProduct(req, res) {
   try {
-    const product = await ProductService.updateProduct(req.params.id, req.body);
+    const { id } = req.params;
+    const updateData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+
+    // ✅ LOG: Product update process started
+    await req.logEvent(
+      'PRODUCT_UPDATE_STARTED',
+      'Product',
+      id,
+      `Started updating product ${id}`,
+      null,
+      {
+        product_id: id,
+        update_fields: Object.keys(updateData),
+        updated_by: userId,
+        updater_role: userRole,
+        update_timestamp: new Date().toISOString(),
+        has_name_change: !!updateData.name,
+        has_code_change: !!updateData.product_code,
+        has_manufacturer_change: !!updateData.manufacturer,
+        has_category_change: !!(updateData.product_line_id || updateData.group_id),
+        has_temperature_change: !!updateData.temperature_range_id,
+        has_description_change: !!updateData.description,
+        has_specifications_change: !!updateData.specifications
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'UPDATE_START' }
+    );
+
+    const product = await ProductService.updateProduct(id, updateData);
+
+    // ✅ LOG: Successful product update
+    await req.logEvent(
+      'PRODUCT_UPDATED',
+      'Product',
+      id,
+      `Successfully updated product ${id}`,
+      null, // Old values would come from service if implemented
+      {
+        product_id: id,
+        updated_fields: Object.keys(updateData),
+        updated_by: userId,
+        updater_role: userRole,
+        updated_at: new Date().toISOString(),
+        business_impact: 'PRODUCT_INFORMATION_UPDATED'
+      },
+      { 
+        operation_type: 'PRODUCT_MANAGEMENT', 
+        action_type: 'UPDATE_SUCCESS',
+        business_impact: 'PRODUCT_CATALOG_MODIFIED',
+        changes_summary: {
+          fields_updated: Object.keys(updateData),
+          critical_info_changed: !!(updateData.name || updateData.product_code || updateData.manufacturer),
+          categorization_changed: !!(updateData.product_line_id || updateData.group_id),
+          storage_requirements_changed: !!updateData.temperature_range_id
+        }
+      }
+    );
+    
     res.json(product);
   } catch (error) {
+    console.error('Error updating product:', error);
+    
+    // ✅ LOG: Product update failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'updateProduct',
+      product_id: req.params.id,
+      update_data_keys: Object.keys(req.body || {}),
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_UPDATE_FAILED'
+    });
+    
     res.status(400).json({ error: error.message });
   }
 }
@@ -61,9 +291,64 @@ async function updateProduct(req, res) {
  */
 async function deleteProduct(req, res) {
   try {
-    await ProductService.deleteProduct(req.params.id);
+    const { id } = req.params;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+
+    // ✅ LOG: Product deletion process started
+    await req.logEvent(
+      'PRODUCT_DELETION_STARTED',
+      'Product',
+      id,
+      `Started deleting product ${id}`,
+      null,
+      {
+        product_id: id,
+        deleted_by: userId,
+        deleter_role: userRole,
+        deletion_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'DELETION_START' }
+    );
+
+    await ProductService.deleteProduct(id);
+
+    // ✅ LOG: Successful product deletion
+    await req.logEvent(
+      'PRODUCT_DELETED',
+      'Product',
+      id,
+      `Successfully deleted product ${id}`,
+      null,
+      {
+        product_id: id,
+        deleted_by: userId,
+        deleter_role: userRole,
+        deleted_at: new Date().toISOString(),
+        business_impact: 'PRODUCT_REMOVED_FROM_CATALOG'
+      },
+      { 
+        operation_type: 'PRODUCT_MANAGEMENT', 
+        action_type: 'DELETION_SUCCESS',
+        business_impact: 'PRODUCT_CATALOG_REDUCED',
+        next_steps: 'VERIFY_NO_ACTIVE_INVENTORY_REMAINS'
+      }
+    );
+    
     res.status(204).send();
   } catch (error) {
+    console.error('Error deleting product:', error);
+    
+    // ✅ LOG: Product deletion failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'deleteProduct',
+      product_id: req.params.id,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_DELETION_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }
@@ -73,9 +358,38 @@ async function deleteProduct(req, res) {
  */
 async function getProductLines(req, res) {
   try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Product lines access
+    await req.logEvent(
+      'PRODUCT_LINES_ACCESSED',
+      'ProductLine',
+      'PRODUCT_LINES_LIST',
+      `User accessed product lines list`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'REFERENCE_DATA_ACCESS' }
+    );
+
     const productLines = await ProductService.getProductLines();
     res.json(productLines);
   } catch (error) {
+    console.error('Error fetching product lines:', error);
+    
+    // ✅ LOG: Product lines access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getProductLines',
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_LINES_ACCESS_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }
@@ -85,9 +399,38 @@ async function getProductLines(req, res) {
  */
 async function getGroups(req, res) {
   try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Product groups access
+    await req.logEvent(
+      'PRODUCT_GROUPS_ACCESSED',
+      'ProductGroup',
+      'PRODUCT_GROUPS_LIST',
+      `User accessed product groups list`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'REFERENCE_DATA_ACCESS' }
+    );
+
     const groups = await ProductService.getGroups();
     res.json(groups);
   } catch (error) {
+    console.error('Error fetching product groups:', error);
+    
+    // ✅ LOG: Product groups access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getGroups',
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_GROUPS_ACCESS_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }
@@ -97,9 +440,38 @@ async function getGroups(req, res) {
  */
 async function getTemperatureRanges(req, res) {
   try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Temperature ranges access
+    await req.logEvent(
+      'TEMPERATURE_RANGES_ACCESSED',
+      'TemperatureRange',
+      'TEMPERATURE_RANGES_LIST',
+      `User accessed temperature ranges list`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'REFERENCE_DATA_ACCESS' }
+    );
+
     const ranges = await ProductService.getTemperatureRanges();
     res.json(ranges);
   } catch (error) {
+    console.error('Error fetching temperature ranges:', error);
+    
+    // ✅ LOG: Temperature ranges access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getTemperatureRanges',
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'TEMPERATURE_RANGES_ACCESS_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }
@@ -109,9 +481,38 @@ async function getTemperatureRanges(req, res) {
  */
 async function getFormFields(req, res) {
   try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Form fields access
+    await req.logEvent(
+      'PRODUCT_FORM_FIELDS_ACCESSED',
+      'ProductFormFields',
+      'FORM_FIELDS',
+      `User accessed product form fields`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'FORM_DATA_ACCESS' }
+    );
+
     const formFields = await ProductService.getFormFields();
     res.json(formFields);
   } catch (error) {
+    console.error('Error fetching form fields:', error);
+    
+    // ✅ LOG: Form fields access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getFormFields',
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_FORM_FIELDS_ACCESS_FAILED'
+    });
+    
     res.status(500).json({ error: error.message });
   }
 }

@@ -239,8 +239,10 @@ async function createBaseLookupTables() {
     await prisma.role.createMany({
       data: [
         { name: "ADMIN" },
-        { name: "WAREHOUSE" },
-        { name: "CUSTOMER" },
+        { name: "WAREHOUSE_INCHARGE" },
+        { name: "PHARMACIST" },
+        { name: "WAREHOUSE_ASSISTANT" },
+        { name: "CLIENT" },
       ],
       skipDuplicates: true,
     });
@@ -282,8 +284,10 @@ async function createUsersAndOrganization() {
     const activeStates = await prisma.activeState.findMany();
     const roles = await prisma.role.findMany();
     
-    const customerRole = roles.find(r => r.name === "CUSTOMER").role_id;
-    const warehouseRole = roles.find(r => r.name === "WAREHOUSE").role_id;
+    const clientRole = roles.find(r => r.name === "CLIENT").role_id;
+    const warehouseInchargeRole = roles.find(r => r.name === "WAREHOUSE_INCHARGE").role_id;
+    const pharmacistRole = roles.find(r => r.name === "PHARMACIST").role_id;
+    const warehouseAssistantRole = roles.find(r => r.name === "WAREHOUSE_ASSISTANT").role_id;
     const adminRole = roles.find(r => r.name === "ADMIN").role_id;
     const activeState = activeStates.find(s => s.name === "Active").state_id;
     const mainOrg = createdOrgs[0].organisation_id;
@@ -300,48 +304,77 @@ async function createUsersAndOrganization() {
         organisation_id: mainOrg,
         role_id: adminRole,
         active_state_id: activeState,
+        assigned_clients: [], // Admin has access to all
       },
-      // Customer users
+      // Warehouse Incharge
       {
-        user_id: "customer1",
-        email: "customer1@company.com",
-        password_hash: await bcrypt.hash("Customer123!", 10),
-        first_name: "Customer",
+        user_id: "wh_incharge1",
+        email: "wh.incharge1@tslogix.com",
+        password_hash: await bcrypt.hash("WhIncharge123!", 10),
+        first_name: "Warehouse",
+        last_name: "Incharge",
+        organisation_id: mainOrg,
+        role_id: warehouseInchargeRole,
+        active_state_id: activeState,
+        assigned_clients: [], // Has access to all clients
+      },
+      // Pharmacist
+      {
+        user_id: "pharmacist1",
+        email: "pharmacist1@tslogix.com",
+        password_hash: await bcrypt.hash("Pharmacist123!", 10),
+        first_name: "John",
+        last_name: "Pharmacist",
+        organisation_id: mainOrg,
+        role_id: pharmacistRole,
+        active_state_id: activeState,
+        assigned_clients: [], // Has access to all for quality control
+      },
+      // Warehouse Assistant (will be assigned specific clients)
+      {
+        user_id: "wh_assistant1",
+        email: "wh.assistant1@tslogix.com",
+        password_hash: await bcrypt.hash("WhAssistant123!", 10),
+        first_name: "Alice",
+        last_name: "Assistant",
+        organisation_id: mainOrg,
+        role_id: warehouseAssistantRole,
+        active_state_id: activeState,
+        assigned_clients: [], // Will be populated after clients are created
+      },
+      {
+        user_id: "wh_assistant2",
+        email: "wh.assistant2@tslogix.com",
+        password_hash: await bcrypt.hash("WhAssistant456!", 10),
+        first_name: "Bob",
+        last_name: "Assistant",
+        organisation_id: mainOrg,
+        role_id: warehouseAssistantRole,
+        active_state_id: activeState,
+        assigned_clients: [], // Will be populated after clients are created
+      },
+      // Client users
+      {
+        user_id: "client1",
+        email: "client1@company.com",
+        password_hash: await bcrypt.hash("Client123!", 10),
+        first_name: "Client",
         last_name: "One",
         organisation_id: createdOrgs[1].organisation_id,
-        role_id: customerRole,
+        role_id: clientRole,
         active_state_id: activeState,
+        assigned_clients: [], // Clients don't need assignments
       },
       {
-        user_id: "customer2",
-        email: "customer2@company.com",
-        password_hash: await bcrypt.hash("Customer456!", 10),
-        first_name: "Customer",
+        user_id: "client2",
+        email: "client2@company.com",
+        password_hash: await bcrypt.hash("Client456!", 10),
+        first_name: "Client",
         last_name: "Two",
-        organisation_id: createdOrgs[1].organisation_id,
-        role_id: customerRole,
+        organisation_id: createdOrgs[2].organisation_id,
+        role_id: clientRole,
         active_state_id: activeState,
-      },
-      // Warehouse users
-      {
-        user_id: "warehouse1",
-        email: "warehouse1@tslogix.com",
-        password_hash: await bcrypt.hash("Warehouse123!", 10),
-        first_name: "Warehouse",
-        last_name: "One",
-        organisation_id: mainOrg,
-        role_id: warehouseRole,
-        active_state_id: activeState,
-      },
-      {
-        user_id: "warehouse2",
-        email: "warehouse2@tslogix.com",
-        password_hash: await bcrypt.hash("Warehouse456!", 10),
-        first_name: "Warehouse",
-        last_name: "Two",
-        organisation_id: mainOrg,
-        role_id: warehouseRole,
-        active_state_id: activeState,
+        assigned_clients: [], // Clients don't need assignments
       },
     ];
     
@@ -513,6 +546,52 @@ async function createClients() {
   }
 }
 
+// ✅ NEW: Assign clients to warehouse assistants
+async function assignClientsToWarehouseAssistants() {
+  try {
+    console.log("Assigning clients to warehouse assistants...");
+    
+    // Get all clients
+    const clients = await prisma.client.findMany({
+      select: { client_id: true }
+    });
+    
+    // Get warehouse assistants
+    const warehouseAssistants = await prisma.user.findMany({
+      where: { role: { name: "WAREHOUSE_ASSISTANT" } }
+    });
+    
+    if (clients.length === 0 || warehouseAssistants.length === 0) {
+      console.log("⚠️ No clients or warehouse assistants to assign");
+      return;
+    }
+    
+    // Distribute clients among warehouse assistants
+    const clientsPerAssistant = Math.ceil(clients.length / warehouseAssistants.length);
+    
+    for (let i = 0; i < warehouseAssistants.length; i++) {
+      const assistant = warehouseAssistants[i];
+      const startIndex = i * clientsPerAssistant;
+      const endIndex = Math.min(startIndex + clientsPerAssistant, clients.length);
+      const assignedClientIds = clients.slice(startIndex, endIndex).map(c => c.client_id);
+      
+      await prisma.user.update({
+        where: { id: assistant.id },
+        data: {
+          assigned_clients: assignedClientIds
+        }
+      });
+      
+      console.log(`✅ Assigned ${assignedClientIds.length} clients to ${assistant.first_name} ${assistant.last_name}`);
+    }
+    
+    console.log("✅ Client assignments completed");
+  } catch (error) {
+    console.error("❌ Error assigning clients to warehouse assistants:", error);
+    throw error;
+  }
+}
+
 // ✅ UPDATED: Function to create client cell assignments for ALL clients (now mandatory)
 async function createClientCellAssignments() {
   try {
@@ -539,7 +618,7 @@ async function createClientCellAssignments() {
     });
     
     const warehouseUsers = await prisma.user.findMany({
-      where: { role: { name: "WAREHOUSE" } }
+      where: { role: { name: "WAREHOUSE_INCHARGE" } }
     });
     
     if (clients.length === 0) {
@@ -825,8 +904,8 @@ async function createEntryOrdersWithProducts() {
     console.log("🌱 Creating entry orders with products (FIFO scenarios)...");
     
     // Get required data
-    const customerUsers = await prisma.user.findMany({
-      where: { role: { name: "CUSTOMER" } },
+    const clientUsers = await prisma.user.findMany({
+      where: { role: { name: "CLIENT" } },
     });
     const adminUsers = await prisma.user.findMany({
       where: { role: { name: "ADMIN" } },
@@ -851,7 +930,7 @@ async function createEntryOrdersWithProducts() {
       entryDate.setDate(baseDate.getDate() + (fifoIndex * 10)); // 10 days apart
       
       for (const product of fifoTestProducts) {
-        const customerUser = faker.helpers.arrayElement(customerUsers);
+        const clientUser = faker.helpers.arrayElement(clientUsers);
         const warehouse = warehouses[0]; // Use same warehouse for FIFO testing
         
         // Create base order
@@ -859,8 +938,8 @@ async function createEntryOrdersWithProducts() {
           data: {
             order_type: "ENTRY",
             status: "PENDING",
-            organisation_id: customerUser.organisation_id,
-            created_by: customerUser.id,
+            organisation_id: clientUser.organisation_id,
+            created_by: clientUser.id,
             created_at: entryDate,
           },
         });
@@ -875,7 +954,7 @@ async function createEntryOrdersWithProducts() {
             registration_date: entryDate,
             document_date: entryDate,
             entry_date_time: entryDate, // ✅ Specific date for FIFO testing
-            created_by: customerUser.id,
+            created_by: clientUser.id,
             order_status: OrderStatusEntry.FINALIZACION,
             total_volume: parseFloat(faker.commerce.price({ min: 100, max: 500 })),
             total_weight: parseFloat(faker.commerce.price({ min: 500, max: 2000 })),
@@ -901,7 +980,7 @@ async function createEntryOrdersWithProducts() {
         
         // ✅ Create audit log for FIFO entry
         await createAuditLog(
-          customerUser.id,
+          clientUser.id,
           SystemAction.ENTRY_ORDER_CREATED,
           "EntryOrder",
           entryOrder.entry_order_id,
@@ -954,7 +1033,7 @@ async function createEntryOrdersWithProducts() {
     let regularOrderCounter = 1000; // Start regular orders from 1000 to avoid conflicts
     
     for (let i = 0; i < (COUNT.ENTRY_ORDERS - (fifoTestProducts.length * 3)); i++) {
-      const customerUser = faker.helpers.arrayElement(customerUsers);
+      const clientUser = faker.helpers.arrayElement(clientUsers);
       const warehouse = faker.helpers.arrayElement(warehouses);
       
       // Create base order
@@ -962,8 +1041,8 @@ async function createEntryOrdersWithProducts() {
         data: {
           order_type: "ENTRY",
           status: "PENDING",
-          organisation_id: customerUser.organisation_id,
-          created_by: customerUser.id,
+          organisation_id: clientUser.organisation_id,
+          created_by: clientUser.id,
           created_at: faker.date.recent({ days: 60 }),
         },
       });
@@ -978,7 +1057,7 @@ async function createEntryOrdersWithProducts() {
           registration_date: new Date(),
           document_date: faker.date.past({ years: 1 }),
           entry_date_time: faker.date.future({ days: 7 }),
-          created_by: customerUser.id,
+          created_by: clientUser.id,
           order_status: faker.helpers.arrayElement(Object.values(OrderStatusEntry)),
           total_volume: parseFloat(faker.commerce.price({ min: 100, max: 1000 })),
           total_weight: parseFloat(faker.commerce.price({ min: 500, max: 5000 })),
@@ -1004,7 +1083,7 @@ async function createEntryOrdersWithProducts() {
       
       // ✅ NEW: Create audit log for entry order creation
       await createAuditLog(
-        customerUser.id,
+        clientUser.id,
         SystemAction.ENTRY_ORDER_CREATED,
         "EntryOrder",
         entryOrder.entry_order_id,
@@ -1082,11 +1161,11 @@ async function createInventoryAllocations() {
       return;
     }
     
-    const warehouseUsers = await prisma.user.findMany({
-      where: { role: { name: "WAREHOUSE" } },
-    });
-    
-    const availableCells = await prisma.warehouseCell.findMany({
+      const warehouseUsers = await prisma.user.findMany({
+    where: { role: { name: "WAREHOUSE_INCHARGE" } },
+  });
+
+  const availableCells = await prisma.warehouseCell.findMany({
       where: { status: CellStatus.AVAILABLE },
       orderBy: [{ row: 'asc' }, { bay: 'asc' }, { position: 'asc' }],
     });
@@ -1236,11 +1315,11 @@ async function createQualityControlTransitions() {
       return;
     }
     
-    const warehouseUsers = await prisma.user.findMany({
-      where: { role: { name: "WAREHOUSE" } },
-    });
-    
-    // ✅ NEW: Prioritize FIFO test products for approval
+      const warehouseUsers = await prisma.user.findMany({
+    where: { role: { name: "WAREHOUSE_INCHARGE" } },
+  });
+
+  // ✅ NEW: Prioritize FIFO test products for approval
     const fifoTestAllocations = quarantineAllocations.filter(allocation => 
       allocation.entry_order_product.guide_number?.startsWith('FIFO-GN')
     );
@@ -1482,11 +1561,17 @@ async function createDepartureOrdersWithProducts() {
   try {
     console.log("🌱 Creating departure orders with products...");
     
-    const customerUsers = await prisma.user.findMany({
-      where: { role: { name: "CUSTOMER" } },
+    const clientUsers = await prisma.user.findMany({
+      where: { role: { name: "CLIENT" } },
     });
     const warehouseUsers = await prisma.user.findMany({
-      where: { role: { name: "WAREHOUSE" } },
+      where: { 
+        role: { 
+          name: { 
+            in: ["WAREHOUSE_INCHARGE", "WAREHOUSE_ASSISTANT", "PHARMACIST"] 
+          } 
+        } 
+      },
     });
     const customers = await prisma.customer.findMany();
     const labels = await prisma.label.findMany();
@@ -1533,7 +1618,7 @@ async function createDepartureOrdersWithProducts() {
     let departureOrderCounter = 2000; // Start departure orders from 2000 to avoid conflicts
     
     for (let i = 0; i < Math.min(COUNT.DEPARTURE_ORDERS, productIds.length); i++) {
-      const customerUser = faker.helpers.arrayElement(customerUsers);
+      const clientUser = faker.helpers.arrayElement(clientUsers);
       const customer = faker.helpers.arrayElement(customers);
       
       // Create base order
@@ -1543,8 +1628,8 @@ async function createDepartureOrdersWithProducts() {
           status: "PROCESSING",
           priority: faker.helpers.arrayElement(["HIGH", "NORMAL", "LOW"]),
           created_at: faker.date.recent({ days: 30 }),
-          organisation_id: customerUser.organisation_id,
-          created_by: customerUser.id,
+          organisation_id: clientUser.organisation_id,
+          created_by: clientUser.id,
         },
       });
       
@@ -1558,7 +1643,7 @@ async function createDepartureOrdersWithProducts() {
           registration_date: new Date(),
           document_date: faker.date.recent({ days: 7 }),
           departure_date_time: faker.date.future({ days: 5 }),
-          created_by: customerUser.id,
+          created_by: clientUser.id,
           order_status: faker.helpers.arrayElement(Object.values(OrderStatusDeparture)),
           destination_point: `${faker.location.city()}, ${faker.location.country()}`,
           transport_type: faker.helpers.arrayElement(["Truck", "Ship", "Air", "Rail"]),
@@ -1584,7 +1669,7 @@ async function createDepartureOrdersWithProducts() {
       
       // ✅ NEW: Create audit log for departure order creation
       await createAuditLog(
-        customerUser.id,
+        clientUser.id,
         SystemAction.DEPARTURE_ORDER_CREATED,
         "DepartureOrder",
         departureOrder.departure_order_id,
@@ -1659,6 +1744,7 @@ async function main() {
     await createUsersAndOrganization();
     await createSuppliersAndCustomers(); 
     await createClients(); // ✅ NEW: Create clients
+    await assignClientsToWarehouseAssistants(); // ✅ NEW: Assign clients to warehouse assistants
     await createProducts();
     await createWarehousesAndCells();
     await createClientCellAssignments(); // ✅ NEW: Assign cells to clients

@@ -1,6 +1,7 @@
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const eventLogger = require("../../utils/eventLogger");
 require("dotenv").config(); // Load environment variables
 
 const prisma = new PrismaClient();
@@ -52,6 +53,26 @@ async function registerUser(loginPayload) {
       },
     });
 
+    // Log user registration
+    await eventLogger.logEvent({
+      userId: newUser.id,
+      action: 'USER_CREATED',
+      entityType: 'User',
+      entityId: newUser.id,
+      description: `New user registered: ${newUser.email} with role ${roleName}`,
+      newValues: {
+        user_id: newUser.user_id,
+        email: newUser.email,
+        role: roleName,
+        organisation_id: newUser.organisation_id
+      },
+      metadata: {
+        operation_type: 'USER_REGISTRATION',
+        role: roleName,
+        organisation_id: newUser.organisation_id
+      }
+    });
+
     console.log("✅ New user created:", newUser);
     return newUser.user_id;
   } catch (error) {
@@ -63,7 +84,7 @@ async function registerUser(loginPayload) {
 /**
  * Logs in a user and returns a JWT token.
  */
-async function loginUser(userId, plainPassword) {
+async function loginUser(userId, plainPassword, ipAddress = null, userAgent = null, sessionId = null) {
   try {
     // ✅ Find user by `userId`
     const user = await prisma.user.findUnique({
@@ -72,6 +93,22 @@ async function loginUser(userId, plainPassword) {
     });
 
     if (!user) {
+      // Log failed login attempt
+      await eventLogger.logEvent({
+        userId: 'SYSTEM',
+        action: 'USER_LOGIN_FAILED',
+        entityType: 'User',
+        entityId: userId,
+        description: `Failed login attempt for user ID: ${userId} - User not found`,
+        metadata: {
+          operation_type: 'AUTHENTICATION',
+          failure_reason: 'USER_NOT_FOUND',
+          attempted_user_id: userId
+        },
+        ipAddress,
+        userAgent,
+        sessionId
+      });
       throw new Error("Invalid userID or password.");
     }
 
@@ -81,6 +118,23 @@ async function loginUser(userId, plainPassword) {
       user.password_hash
     );
     if (!isPasswordValid) {
+      // Log failed login attempt
+      await eventLogger.logEvent({
+        userId: user.id,
+        action: 'USER_LOGIN_FAILED',
+        entityType: 'User',
+        entityId: user.id,
+        description: `Failed login attempt for user: ${user.email} - Invalid password`,
+        metadata: {
+          operation_type: 'AUTHENTICATION',
+          failure_reason: 'INVALID_PASSWORD',
+          user_email: user.email,
+          role: user.role.name
+        },
+        ipAddress,
+        userAgent,
+        sessionId
+      });
       throw new Error("Invalid userID or password.");
     }
 
@@ -95,6 +149,30 @@ async function loginUser(userId, plainPassword) {
       },
       SECRET_KEY
     );
+
+    // Log successful login
+    await eventLogger.logEvent({
+      userId: user.id,
+      action: 'USER_LOGIN',
+      entityType: 'User',
+      entityId: user.id,
+      description: `User logged in successfully: ${user.email}`,
+      newValues: {
+        login_time: new Date().toISOString(),
+        role: user.role.name,
+        organisation_id: user.organisation_id
+      },
+      metadata: {
+        operation_type: 'AUTHENTICATION',
+        login_method: 'PASSWORD',
+        user_email: user.email,
+        role: user.role.name,
+        organisation_id: user.organisation_id
+      },
+      ipAddress,
+      userAgent,
+      sessionId
+    });
 
     return { token, role: user.role.name, organisation_id: user.organisation_id, id: user.id };
   } catch (error) {

@@ -1062,15 +1062,8 @@ async function updateEntryOrder(orderNo, updateData, userId) {
 
     // Check if user has permission to update this order
     if (existingOrder.created_by !== userId) {
-      // Only admin can update others' orders
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        include: { role: true },
-      });
-
-      if (user?.role?.name !== "ADMIN") {
-        throw new Error("You can only update your own entry orders");
-      }
+      // ✅ UPDATED: Since only CLIENTs can update entry orders, they can only update their own
+      throw new Error("You can only update your own entry orders");
     }
 
     // 3. ✅ FIXED: Prepare update data based on your actual schema

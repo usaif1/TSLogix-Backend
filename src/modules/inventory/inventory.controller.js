@@ -8,7 +8,7 @@ async function getApprovedEntryOrdersForInventory(req, res) {
     const organisationId = req.user?.organisation_id;
 
     // Only warehouse and admin can access
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
         message: "Access denied. Only warehouse staff can access inventory assignment." 
       });
@@ -38,7 +38,7 @@ async function getEntryOrderProductsForInventory(req, res) {
     const userRole = req.user?.role;
 
     // Only warehouse and admin can access
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
         message: "Access denied. Only warehouse staff can access inventory assignment." 
       });
@@ -81,61 +81,256 @@ async function assignProductToCell(req, res) {
     } = req.body;
 
     const userRole = req.user?.role;
+    const userId = req.user?.id;
 
-    // Only warehouse and admin can assign
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
-      return res.status(403).json({ 
-        message: "Access denied. Only warehouse staff can assign inventory." 
+    // ✅ UPDATED: Only warehouse staff can do inventory allocation (CLIENT users cannot)
+    if (!["WAREHOUSE_INCHARGE", "ADMIN", "PHARMACIST"].includes(userRole)) {
+      // ✅ LOG: Access denied for inventory allocation
+      await req.logEvent(
+        'ACCESS_DENIED',
+        'InventoryAllocation',
+        `${entry_order_product_id}-${cell_id}`,
+        `Access denied: ${userRole} user attempted to assign inventory to cell`,
+        null,
+        { 
+          attempted_role: userRole, 
+          required_roles: ['WAREHOUSE_INCHARGE', 'ADMIN', 'PHARMACIST'],
+          entry_order_product_id: entry_order_product_id,
+          cell_id: cell_id,
+          user_id: userId
+        },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'INVENTORY_ALLOCATION_DENIED' }
+      );
+      
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only WAREHOUSE_INCHARGE, ADMIN, and PHARMACIST users can assign inventory to cells.",
       });
     }
 
-    // Validate required fields
-    if (!entry_order_product_id || !cell_id || !inventory_quantity || !package_quantity || !presentation || !weight_kg || !warehouse_id || !product_status) {
+    // ✅ VALIDATION: Ensure all required fields are provided
+    const requiredFields = {
+      entry_order_product_id: "Entry Order Product ID",
+      cell_id: "Cell ID",
+      inventory_quantity: "Inventory Quantity",
+      package_quantity: "Package Quantity",
+      presentation: "Presentation",
+      weight_kg: "Weight (kg)",
+      warehouse_id: "Warehouse ID",
+    };
+
+    const missingFields = [];
+    for (const [field, displayName] of Object.entries(requiredFields)) {
+      if (req.body[field] === undefined || req.body[field] === null || req.body[field] === "") {
+        missingFields.push(displayName);
+      }
+    }
+
+    if (missingFields.length > 0) {
+      // ✅ LOG: Validation failure for missing fields
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'InventoryAllocation',
+        `${entry_order_product_id}-${cell_id}`,
+        `Inventory allocation validation failed: missing required fields`,
+        null,
+        { 
+          entry_order_product_id: entry_order_product_id,
+          cell_id: cell_id,
+          missing_fields: missingFields,
+          provided_fields: Object.keys(req.body),
+          user_id: userId,
+          user_role: userRole
+        },
+        { operation_type: 'VALIDATION', action_type: 'INVENTORY_ALLOCATION_VALIDATION' }
+      );
+      
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: entry_order_product_id, cell_id, inventory_quantity, package_quantity, presentation, weight_kg, warehouse_id, product_status",
+        message: `${missingFields[0]} is required and cannot be empty`,
       });
     }
+
+    // ✅ VALIDATION: Ensure numeric fields are positive
+    const numericFields = {
+      inventory_quantity: "Inventory Quantity",
+      package_quantity: "Package Quantity",
+      weight_kg: "Weight",
+    };
+
+    const invalidNumericFields = [];
+    for (const [field, displayName] of Object.entries(numericFields)) {
+      const value = parseFloat(req.body[field]);
+      if (isNaN(value) || value <= 0) {
+        invalidNumericFields.push({ field: displayName, value: req.body[field] });
+      }
+    }
+
+    if (invalidNumericFields.length > 0) {
+      // ✅ LOG: Numeric validation failure
+      await req.logEvent(
+        'QUANTITY_VALIDATION_FAILED',
+        'InventoryAllocation',
+        `${entry_order_product_id}-${cell_id}`,
+        `Inventory allocation quantity validation failed`,
+        null,
+        { 
+          entry_order_product_id: entry_order_product_id,
+          cell_id: cell_id,
+          invalid_fields: invalidNumericFields,
+          user_id: userId,
+          user_role: userRole
+        },
+        { operation_type: 'VALIDATION', action_type: 'INVENTORY_QUANTITY_VALIDATION' }
+      );
+      
+      return res.status(400).json({
+        success: false,
+        message: `${invalidNumericFields[0].field} must be a positive number`,
+      });
+    }
+
+    // ✅ LOG: Inventory allocation process started
+    await req.logEvent(
+      'INVENTORY_ALLOCATION_STARTED',
+      'InventoryAllocation',
+      `${entry_order_product_id}-${cell_id}`,
+      `Started inventory allocation process for entry order product ${entry_order_product_id} to cell ${cell_id}`,
+      null,
+      {
+        entry_order_product_id: entry_order_product_id,
+        cell_id: cell_id,
+        warehouse_id: warehouse_id,
+        allocated_by: userId,
+        allocator_role: userRole,
+        allocation_details: {
+          inventory_quantity: parseInt(inventory_quantity),
+          package_quantity: parseInt(package_quantity),
+          quantity_pallets: parseInt(quantity_pallets) || null,
+          presentation: presentation,
+          weight_kg: parseFloat(weight_kg),
+          volume_m3: volume_m3 ? parseFloat(volume_m3) : null,
+          product_status: product_status,
+          guide_number: guide_number,
+          observations: observations
+        },
+        has_uploaded_documents: !!uploaded_documents,
+        allocation_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'INVENTORY_MANAGEMENT', action_type: 'ALLOCATION_START' }
+    );
 
     const result = await inventoryService.assignProductToCell({
       entry_order_product_id,
       cell_id,
-      warehouse_id,
-      assigned_by: req.user.id,
-      inventory_quantity,
-      package_quantity,
-      quantity_pallets,
+      assigned_by: userId,
+      inventory_quantity: parseInt(inventory_quantity),
+      package_quantity: parseInt(package_quantity),
+      quantity_pallets: parseInt(quantity_pallets) || null,
       presentation,
-      weight_kg,
-      volume_m3,
+      weight_kg: parseFloat(weight_kg),
+      volume_m3: volume_m3 ? parseFloat(volume_m3) : null,
       guide_number,
       product_status,
       uploaded_documents,
       observations,
+      warehouse_id,
     });
 
-    return res.status(200).json({
+    // ✅ LOG: Successful inventory allocation
+    await req.logEvent(
+      'INVENTORY_ALLOCATED',
+      'InventoryAllocation',
+      result.allocation.allocation_id,
+      `Successfully allocated ${inventory_quantity} units of ${result.product.name} to cell ${result.cellReference} in quarantine status`,
+      null,
+      {
+        allocation_id: result.allocation.allocation_id,
+        inventory_id: result.inventory.inventory_id,
+        entry_order_product_id: entry_order_product_id,
+        cell_id: cell_id,
+        cell_reference: result.cellReference,
+        warehouse_id: warehouse_id,
+        allocated_by: userId,
+        allocator_role: userRole,
+        product_details: {
+          product_id: result.product.product_id,
+          product_code: result.product.product_code,
+          product_name: result.product.name,
+          manufacturer: result.product.manufacturer
+        },
+        allocation_quantities: {
+          inventory_quantity: parseInt(inventory_quantity),
+          package_quantity: parseInt(package_quantity),
+          quantity_pallets: parseInt(quantity_pallets) || null,
+          weight_kg: parseFloat(weight_kg),
+          volume_m3: volume_m3 ? parseFloat(volume_m3) : null
+        },
+        quality_status: "CUARENTENA",
+        product_status: product_status,
+        presentation: presentation,
+        guide_number: guide_number,
+        observations: observations,
+        has_uploaded_documents: !!uploaded_documents,
+        cell_status_updated: true,
+        inventory_log_created: true,
+        business_impact: "INVENTORY_IN_QUARANTINE_AWAITING_QC"
+      },
+      { 
+        operation_type: 'INVENTORY_MANAGEMENT', 
+        action_type: 'ALLOCATION_SUCCESS',
+        business_impact: 'INVENTORY_QUARANTINED',
+        next_steps: 'QUALITY_CONTROL_REVIEW_REQUIRED'
+      }
+    );
+
+    return res.status(201).json({
       success: true,
+      message: `Successfully assigned ${inventory_quantity} units of ${result.product.name} to cell ${result.cellReference} in quarantine status`,
       data: {
         allocation: result.allocation,
-        cellReference: result.cellReference,
+        inventory: result.inventory,
+        cell_reference: result.cellReference,
         product: result.product,
+        quality_status: "CUARENTENA",
+        next_step: "Quality control review required before inventory becomes available",
       },
-      message: `Successfully assigned ${inventory_quantity} units (${package_quantity} packages) of ${result.product.product_code} to cell ${result.cellReference}`,
     });
   } catch (err) {
-    console.error("assignProductToCell error:", err);
-    return res.status(500).json({ 
-      success: false, 
-      message: err.message 
+    console.error("Error in assignProductToCell:", err);
+    
+    // ✅ LOG: Inventory allocation failure
+    await req.logError(err, {
+      controller: 'inventory',
+      action: 'assignProductToCell',
+      entry_order_product_id: req.body.entry_order_product_id,
+      cell_id: req.body.cell_id,
+      warehouse_id: req.body.warehouse_id,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      allocation_data: {
+        inventory_quantity: req.body.inventory_quantity,
+        package_quantity: req.body.package_quantity,
+        weight_kg: req.body.weight_kg,
+        presentation: req.body.presentation
+      },
+      error_context: 'INVENTORY_ALLOCATION_FAILED'
+    });
+    
+    return res.status(500).json({
+      success: false,
+      message: err.message,
     });
   }
 }
 
-/** Get available cells for a specific warehouse */
+/** Get available cells for a specific warehouse (STRICT CLIENT FILTERING - entry_order_id required for warehouse staff) */
 async function getAvailableCellsForWarehouse(req, res) {
   try {
     const { warehouse_id } = req.params;
+    const { entry_order_id } = req.query; // ✅ REQUIRED for warehouse staff
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
     
     if (!warehouse_id) {
       return res.status(400).json({
@@ -144,14 +339,61 @@ async function getAvailableCellsForWarehouse(req, res) {
       });
     }
 
-    const cells = await inventoryService.getAvailableCells(warehouse_id);
+    // ✅ OPTION A: STRICT CLIENT FILTERING - Always require context
+    let cells;
+    let debugInfo = null;
+    let message = "";
     
-    return res.json({
+    if (userRole === "CLIENT") {
+      // For clients, only show cells assigned to them (existing logic)
+      const clientResult = await inventoryService.getClientAssignedCells(warehouse_id, userId);
+      
+      if (clientResult && typeof clientResult === 'object' && clientResult.cells) {
+        cells = clientResult.cells;
+        debugInfo = clientResult.debug_info;
+      } else {
+        cells = clientResult || [];
+      }
+      message = "Available cells assigned to you in warehouse";
+    } else {
+      // ✅ STRICT: Warehouse staff MUST provide entry_order_id
+      if (!entry_order_id) {
+        return res.status(400).json({
+          success: false,
+          message: "entry_order_id parameter is required for warehouse staff to ensure proper client-based filtering",
+          suggestion: "Add ?entry_order_id=<entry_order_id> to see cells assigned to the specific client",
+          user_role: userRole,
+          strict_filtering: true
+        });
+      }
+
+      // Apply client-based filtering using entry_order_id
+      cells = await inventoryService.getAvailableCells(warehouse_id, entry_order_id);
+      
+      // Check if filtering was applied by looking for client assignment info
+      const hasClientFiltering = cells.some(cell => cell.is_client_assigned);
+      if (hasClientFiltering) {
+        message = "Available cells assigned to the client who created this entry order";
+      } else {
+        message = "Available cells in warehouse (entry order created by non-CLIENT user)";
+      }
+    }
+    
+    const response = {
       success: true,
       count: cells.length,
       data: cells,
-      message: `Available cells in warehouse`,
-    });
+      message: message,
+      user_role: userRole,
+      entry_order_filtering: !!entry_order_id, // ✅ NEW: Indicate if entry order filtering was applied
+    };
+    
+    // Include debug info for CLIENT users
+    if (debugInfo) {
+      response.debug = debugInfo;
+    }
+    
+    return res.json(response);
   } catch (err) {
     console.error("Error fetching available cells:", err);
     return res.status(500).json({ 
@@ -227,7 +469,7 @@ async function getQuarantineInventory(req, res) {
     const { warehouse_id } = req.query;
 
     // Only warehouse and admin can access
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
         message: "Access denied. Only warehouse staff can access quality control." 
       });
@@ -262,7 +504,7 @@ async function getInventoryByQualityStatus(req, res) {
     const { quality_status, warehouse_id } = req.query;
 
     // Only warehouse and admin can access
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
         message: "Access denied. Only warehouse staff can access quality control." 
       });
@@ -344,9 +586,27 @@ async function transitionQualityStatus(req, res) {
     } = req.body;
 
     const userRole = req.user?.role;
+    const userId = req.user?.id;
 
     // Only warehouse and admin can perform quality transitions
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
+      // ✅ LOG: Access denied for quality transition
+      await req.logEvent(
+        'ACCESS_DENIED',
+        'QualityControlTransition',
+        allocation_id || 'UNKNOWN',
+        `Access denied: ${userRole} user attempted to perform quality transition`,
+        null,
+        { 
+          attempted_role: userRole, 
+          required_roles: ['WAREHOUSE_INCHARGE', 'ADMIN'],
+          allocation_id: allocation_id,
+          to_status: to_status,
+          user_id: userId
+        },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'QUALITY_TRANSITION_DENIED' }
+      );
+      
       return res.status(403).json({ 
         message: "Access denied. Only warehouse staff can perform quality transitions." 
       });
@@ -354,6 +614,30 @@ async function transitionQualityStatus(req, res) {
 
     // Validate required fields
     if (!allocation_id || !to_status || !quantity_to_move || !reason) {
+      // ✅ LOG: Validation failure for quality transition
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'QualityControlTransition',
+        allocation_id || 'UNKNOWN',
+        `Quality transition validation failed: missing required fields`,
+        null,
+        { 
+          allocation_id: allocation_id,
+          to_status: to_status,
+          quantity_to_move: quantity_to_move,
+          reason: reason,
+          missing_fields: {
+            allocation_id: !allocation_id,
+            to_status: !to_status,
+            quantity_to_move: !quantity_to_move,
+            reason: !reason
+          },
+          user_id: userId,
+          user_role: userRole
+        },
+        { operation_type: 'VALIDATION', action_type: 'QUALITY_TRANSITION_VALIDATION' }
+      );
+      
       return res.status(400).json({
         success: false,
         message: "Missing required fields: allocation_id, to_status, quantity_to_move, reason",
@@ -363,6 +647,23 @@ async function transitionQualityStatus(req, res) {
     // Validate transition status
     const validStatuses = ["APROBADO", "DEVOLUCIONES", "CONTRAMUESTRAS", "RECHAZADOS"];
     if (!validStatuses.includes(to_status)) {
+      // ✅ LOG: Invalid transition status
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'QualityControlTransition',
+        allocation_id,
+        `Invalid quality transition status provided: ${to_status}`,
+        null,
+        { 
+          allocation_id: allocation_id,
+          provided_status: to_status,
+          valid_statuses: validStatuses,
+          user_id: userId,
+          user_role: userRole
+        },
+        { operation_type: 'VALIDATION', action_type: 'QUALITY_STATUS_VALIDATION' }
+      );
+      
       return res.status(400).json({
         success: false,
         message: `Invalid to_status. Must be one of: ${validStatuses.join(", ")}`,
@@ -372,6 +673,24 @@ async function transitionQualityStatus(req, res) {
     // ✅ FIXED: Properly handle numeric fields to avoid NaN
     const parsedQuantity = parseInt(quantity_to_move);
     if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+      // ✅ LOG: Invalid quantity for transition
+      await req.logEvent(
+        'QUANTITY_VALIDATION_FAILED',
+        'QualityControlTransition',
+        allocation_id,
+        `Invalid quantity for quality transition: ${quantity_to_move}`,
+        null,
+        { 
+          allocation_id: allocation_id,
+          provided_quantity: quantity_to_move,
+          parsed_quantity: parsedQuantity,
+          to_status: to_status,
+          user_id: userId,
+          user_role: userRole
+        },
+        { operation_type: 'VALIDATION', action_type: 'QUALITY_QUANTITY_VALIDATION' }
+      );
+      
       return res.status(400).json({
         success: false,
         message: "quantity_to_move must be a positive number",
@@ -411,7 +730,88 @@ async function transitionQualityStatus(req, res) {
       }
     }
 
+    // ✅ LOG: Quality transition process started
+    await req.logEvent(
+      'QUALITY_TRANSITION_STARTED',
+      'QualityControlTransition',
+      allocation_id,
+      `Started quality transition for allocation ${allocation_id} from CUARENTENA to ${to_status}`,
+      null,
+      {
+        allocation_id: allocation_id,
+        from_status: 'CUARENTENA',
+        to_status: to_status,
+        quantity_to_move: parsedQuantity,
+        package_quantity_to_move: transitionData.package_quantity_to_move,
+        weight_to_move: transitionData.weight_to_move,
+        volume_to_move: transitionData.volume_to_move,
+        reason: reason,
+        notes: notes,
+        new_cell_id: new_cell_id,
+        performed_by: userId,
+        performer_role: userRole,
+        transition_timestamp: new Date().toISOString(),
+        business_impact: to_status === 'APROBADO' ? 'INVENTORY_APPROVED_FOR_DEPARTURE' : 
+                        to_status === 'DEVOLUCIONES' ? 'INVENTORY_MARKED_FOR_RETURN' :
+                        to_status === 'CONTRAMUESTRAS' ? 'INVENTORY_RESERVED_FOR_SAMPLING' :
+                        'INVENTORY_REJECTED'
+      },
+      { operation_type: 'QUALITY_CONTROL', action_type: 'TRANSITION_START' }
+    );
+
     const result = await inventoryService.transitionQualityStatus(transitionData);
+
+    // ✅ LOG: Successful quality transition
+    await req.logEvent(
+      'QUALITY_STATUS_CHANGED',
+      'QualityControlTransition',
+      result.transition.transition_id,
+      `Successfully transitioned ${parsedQuantity} units from CUARENTENA to ${to_status}`,
+      {
+        previous_quality_status: 'CUARENTENA',
+        previous_inventory_status: result.transition.previous_inventory_status,
+        previous_cell_id: result.transition.previous_cell_id
+      },
+      {
+        transition_id: result.transition.transition_id,
+        allocation_id: allocation_id,
+        inventory_id: result.transition.inventory_id,
+        from_status: 'CUARENTENA',
+        to_status: to_status,
+        quantity_moved: parsedQuantity,
+        package_quantity_moved: result.transition.package_quantity_moved,
+        weight_moved: result.transition.weight_moved,
+        volume_moved: result.transition.volume_moved,
+        reason: reason,
+        notes: notes,
+        performed_by: userId,
+        performer_role: userRole,
+        performed_at: result.transition.performed_at,
+        new_cell_id: new_cell_id,
+        cell_reference: result.cellReference,
+        product_details: result.transition.product_details,
+        entry_order_details: result.transition.entry_order_details,
+        business_impact: to_status === 'APROBADO' ? 'INVENTORY_AVAILABLE_FOR_DEPARTURE' : 
+                        to_status === 'DEVOLUCIONES' ? 'INVENTORY_FLAGGED_FOR_RETURN' :
+                        to_status === 'CONTRAMUESTRAS' ? 'INVENTORY_RESERVED_FOR_SAMPLING' :
+                        'INVENTORY_BLOCKED_REJECTED',
+        inventory_status_updated: true,
+        allocation_status_updated: true,
+        inventory_log_created: true
+      },
+      { 
+        operation_type: 'QUALITY_CONTROL', 
+        action_type: 'TRANSITION_SUCCESS',
+        business_impact: to_status === 'APROBADO' ? 'INVENTORY_DEPARTURE_ENABLED' : 
+                        to_status === 'DEVOLUCIONES' ? 'RETURN_PROCESS_INITIATED' :
+                        to_status === 'CONTRAMUESTRAS' ? 'SAMPLING_PROCESS_INITIATED' :
+                        'INVENTORY_WORKFLOW_BLOCKED',
+        next_steps: to_status === 'APROBADO' ? 'INVENTORY_AVAILABLE_FOR_DEPARTURE_ORDERS' : 
+                   to_status === 'DEVOLUCIONES' ? 'COORDINATE_RETURN_WITH_SUPPLIER' :
+                   to_status === 'CONTRAMUESTRAS' ? 'RESERVE_FOR_QUALITY_SAMPLING' :
+                   'INVESTIGATE_REJECTION_REASON'
+      }
+    );
 
     return res.status(200).json({
       success: true,
@@ -423,6 +823,20 @@ async function transitionQualityStatus(req, res) {
     });
   } catch (err) {
     console.error("transitionQualityStatus error:", err);
+    
+    // ✅ LOG: Quality transition failure
+    await req.logError(err, {
+      controller: 'inventory',
+      action: 'transitionQualityStatus',
+      allocation_id: req.body.allocation_id,
+      to_status: req.body.to_status,
+      quantity_to_move: req.body.quantity_to_move,
+      reason: req.body.reason,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'QUALITY_TRANSITION_FAILED'
+    });
+    
     return res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -471,7 +885,7 @@ async function getInventoryAuditTrail(req, res) {
     const userRole = req.user?.role;
 
     // Only admin and warehouse can view audit trails
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
         message: "Access denied. Only admin and warehouse staff can view audit trails." 
       });

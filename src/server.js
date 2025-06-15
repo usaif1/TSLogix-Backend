@@ -27,6 +27,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // middleware
 const authenticateToken = require("@/middlewares/authMiddleware");
+const { eventLoggerMiddleware, errorLoggerMiddleware } = require("@/middlewares/eventLoggerMiddleware");
+
+// Apply event logging middleware globally
+app.use(eventLoggerMiddleware);
 
 // routes
 const authRoutes = require("@/modules/auth/auth.route");
@@ -40,7 +44,8 @@ const departureRoutes = require("@/modules/departure/departure.route");
 const auditRoutes = require("@/modules/audit/audit.route");
 const inventoryRoutes = require("@/modules/inventory/inventory.route");
 const warehouseRoutes = require("@/modules/warehouse/warehouse.route");
-const clientRoutes = require("@/modules/client/client.route"); // ✅ NEW: Client routes
+const clientRoutes = require("@/modules/client/client.route");
+const eventLogRoutes = require("@/modules/eventlog/eventlog.route");
 
 // Mount your module routes
 app.use("/auth", authRoutes);
@@ -55,8 +60,12 @@ app.use("/audit", authenticateToken, auditRoutes);
 app.use("/inventory", authenticateToken, inventoryRoutes);
 app.use("/warehouse", authenticateToken, warehouseRoutes);
 app.use("/clients", authenticateToken, clientRoutes); // ✅ NEW: Mount client routes
+app.use("/eventlogs", authenticateToken, eventLogRoutes); // ✅ NEW: Mount event log routes
 // const indexRouter = require("@/routes");
 // app.use("/", indexRouter);
+
+// Apply error logging middleware
+app.use(errorLoggerMiddleware);
 
 app.get("/", (req, res) => {
   res.send("Hello world");

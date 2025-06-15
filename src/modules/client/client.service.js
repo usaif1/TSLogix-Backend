@@ -1,4 +1,5 @@
 const { PrismaClient } = require("@prisma/client");
+const eventLogger = require("../../utils/eventLogger");
 const prisma = new PrismaClient();
 
 /**
@@ -201,6 +202,28 @@ async function createClient(clientData, cellAssignmentData = {}) {
         data: cleanedData
       });
 
+      // Log client creation
+      await eventLogger.logEvent({
+        userId: cellAssignmentData.assigned_by,
+        action: 'CLIENT_CREATED',
+        entityType: 'Client',
+        entityId: newClient.client_id,
+        description: `Created ${newClient.client_type.toLowerCase()} client: ${newClient.client_type === "COMMERCIAL" ? newClient.company_name : `${newClient.first_names} ${newClient.last_name}`}`,
+        newValues: {
+          client_type: newClient.client_type,
+          email: newClient.email,
+          company_name: newClient.company_name,
+          first_names: newClient.first_names,
+          last_name: newClient.last_name
+        },
+        metadata: {
+          operation_type: 'CLIENT_CREATION',
+          client_type: newClient.client_type,
+          has_cell_assignment: true,
+          cell_count: cellAssignmentData.cell_ids.length
+        }
+      });
+
       // Prepare bulk cell assignment data
       const finalNotes = cellAssignmentData.notes || `Cell assigned during client creation for ${newClient.client_type === "COMMERCIAL" ? newClient.company_name : `${newClient.first_names} ${newClient.last_name}`}`;
       
@@ -219,6 +242,30 @@ async function createClient(clientData, cellAssignmentData = {}) {
         data: assignmentData,
         skipDuplicates: false
       });
+
+      // Log cell assignments
+      for (const assignment of assignmentData) {
+        await eventLogger.logEvent({
+          userId: cellAssignmentData.assigned_by,
+          action: 'CLIENT_CELL_ASSIGNED',
+          entityType: 'ClientCellAssignment',
+          entityId: assignment.cell_id,
+          description: `Assigned cell ${assignment.cell_id} to client ${newClient.client_id} with priority ${assignment.priority}`,
+          newValues: {
+            client_id: assignment.client_id,
+            cell_id: assignment.cell_id,
+            warehouse_id: assignment.warehouse_id,
+            priority: assignment.priority,
+            max_capacity: assignment.max_capacity
+          },
+          metadata: {
+            operation_type: 'CELL_ASSIGNMENT',
+            assignment_type: 'CLIENT',
+            client_type: newClient.client_type,
+            warehouse_id: assignment.warehouse_id
+          }
+        });
+      }
 
       // Return client with assignments (fetch after creation)
       return await tx.client.findUnique({

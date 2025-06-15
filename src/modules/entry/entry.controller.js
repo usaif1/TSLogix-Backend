@@ -7,6 +7,25 @@ async function createEntryOrder(req, res) {
   // ✅ FIXED: Get organisation_id from JWT token instead of request body
   const userOrgId = req.user?.organisation_id;
   const userId = req.user?.id;
+  const userRole = req.user?.role;
+
+  // ✅ NEW: Restrict entry order creation to CLIENT users only
+  if (userRole !== "CLIENT") {
+    // ✅ LOG: Access denied attempt
+    await req.logEvent(
+      'ACCESS_DENIED',
+      'EntryOrder',
+      'CREATE_ATTEMPT',
+      `Access denied: ${userRole} user attempted to create entry order`,
+      null,
+      { attempted_role: userRole, required_role: 'CLIENT' },
+      { operation_type: 'ACCESS_CONTROL', action_type: 'CREATE_DENIED' }
+    );
+    
+    return res.status(403).json({
+      message: "Access denied. Only CLIENT users can create entry orders.",
+    });
+  }
 
   // ✅ DEBUG: Log what we're getting from JWT
   console.log('=== ENTRY ORDER CREATION DEBUG ===');
@@ -22,6 +41,18 @@ async function createEntryOrder(req, res) {
 
   if (!userOrgId || !userId) {
     console.log('❌ Missing user data from JWT');
+    
+    // ✅ LOG: Authorization failure
+    await req.logError(
+      new Error('Missing user data from JWT token'),
+      { 
+        controller: 'entry', 
+        action: 'createEntryOrder',
+        jwt_data: req.user,
+        missing_fields: { userOrgId: !userOrgId, userId: !userId }
+      }
+    );
+    
     return res.status(403).json({
       message: "Authorization required. User organization not found.",
     });
@@ -34,6 +65,28 @@ async function createEntryOrder(req, res) {
     !Array.isArray(entryData.products) ||
     entryData.products.length === 0
   ) {
+    // ✅ LOG: Validation failure
+    await req.logEvent(
+      'VALIDATION_FAILED',
+      'EntryOrder',
+      entryData.entry_order_no || 'UNKNOWN',
+      `Entry order creation validation failed`,
+      null,
+      { 
+        validation_errors: {
+          missing_order_no: !entryData.entry_order_no,
+          missing_products: !entryData.products,
+          invalid_products_array: !Array.isArray(entryData.products),
+          empty_products: entryData.products?.length === 0
+        },
+        provided_data: {
+          entry_order_no: entryData.entry_order_no,
+          products_count: entryData.products?.length || 0
+        }
+      },
+      { operation_type: 'VALIDATION', action_type: 'CREATE_VALIDATION' }
+    );
+    
     return res.status(400).json({
       message: "Missing required fields. Entry order must include at least one product.",
     });
@@ -61,6 +114,27 @@ async function createEntryOrder(req, res) {
       !product.package_quantity ||
       !product.weight_kg
     ) {
+      // ✅ LOG: Product validation failure
+      await req.logEvent(
+        'PRODUCT_VALIDATION_FAILED',
+        'EntryOrderProduct',
+        `${entryData.entry_order_no}-PRODUCT-${i + 1}`,
+        `Product ${i + 1} validation failed in entry order ${entryData.entry_order_no}`,
+        null,
+        { 
+          product_index: i + 1,
+          product_data: product,
+          missing_fields: {
+            product_id: !product.product_id,
+            product_code: !product.product_code,
+            inventory_quantity: !product.inventory_quantity,
+            package_quantity: !product.package_quantity,
+            weight_kg: !product.weight_kg
+          }
+        },
+        { operation_type: 'VALIDATION', action_type: 'PRODUCT_VALIDATION' }
+      );
+      
       return res.status(400).json({
         message: `Product ${i + 1}: Missing required fields (product_id, product_code, inventory_quantity, package_quantity, weight_kg)`,
       });
@@ -72,6 +146,30 @@ async function createEntryOrder(req, res) {
       product.package_quantity <= 0 ||
       product.weight_kg <= 0
     ) {
+      // ✅ LOG: Quantity validation failure
+      await req.logEvent(
+        'QUANTITY_VALIDATION_FAILED',
+        'EntryOrderProduct',
+        `${entryData.entry_order_no}-PRODUCT-${i + 1}`,
+        `Product ${i + 1} quantity validation failed in entry order ${entryData.entry_order_no}`,
+        null,
+        { 
+          product_index: i + 1,
+          product_code: product.product_code,
+          quantities: {
+            inventory_quantity: product.inventory_quantity,
+            package_quantity: product.package_quantity,
+            weight_kg: product.weight_kg
+          },
+          validation_errors: {
+            inventory_quantity_invalid: product.inventory_quantity <= 0,
+            package_quantity_invalid: product.package_quantity <= 0,
+            weight_kg_invalid: product.weight_kg <= 0
+          }
+        },
+        { operation_type: 'VALIDATION', action_type: 'QUANTITY_VALIDATION' }
+      );
+      
       return res.status(400).json({
         message: `Product ${i + 1}: Quantities and weight must be positive numbers`,
       });
@@ -82,6 +180,23 @@ async function createEntryOrder(req, res) {
       const mfgDate = new Date(product.manufacturing_date);
       const expDate = new Date(product.expiration_date);
       if (expDate <= mfgDate) {
+        // ✅ LOG: Date validation failure
+        await req.logEvent(
+          'DATE_VALIDATION_FAILED',
+          'EntryOrderProduct',
+          `${entryData.entry_order_no}-PRODUCT-${i + 1}`,
+          `Product ${i + 1} date validation failed in entry order ${entryData.entry_order_no}`,
+          null,
+          { 
+            product_index: i + 1,
+            product_code: product.product_code,
+            manufacturing_date: product.manufacturing_date,
+            expiration_date: product.expiration_date,
+            validation_error: 'Expiration date must be after manufacturing date'
+          },
+          { operation_type: 'VALIDATION', action_type: 'DATE_VALIDATION' }
+        );
+        
         return res.status(400).json({
           message: `Product ${i + 1}: Expiration date must be after manufacturing date`,
         });
@@ -90,7 +205,82 @@ async function createEntryOrder(req, res) {
   }
 
   try {
+    // ✅ LOG: Entry order creation attempt
+    await req.logEvent(
+      'ENTRY_ORDER_CREATION_STARTED',
+      'EntryOrder',
+      entryData.entry_order_no,
+      `Started creating entry order ${entryData.entry_order_no} with ${entryData.products.length} products`,
+      null,
+      {
+        entry_order_no: entryData.entry_order_no,
+        organisation_id: entryData.organisation_id,
+        created_by: entryData.created_by,
+        products_count: entryData.products.length,
+        total_inventory_quantity: entryData.products.reduce((sum, p) => sum + (p.inventory_quantity || 0), 0),
+        total_package_quantity: entryData.products.reduce((sum, p) => sum + (p.package_quantity || 0), 0),
+        total_weight: entryData.products.reduce((sum, p) => sum + (p.weight_kg || 0), 0),
+        product_codes: entryData.products.map(p => p.product_code),
+        warehouse_id: entryData.warehouse_id,
+        supplier_id: entryData.supplier_id,
+        origin_id: entryData.origin_id,
+        document_type_id: entryData.document_type_id,
+        entry_date_time: entryData.entry_date_time,
+        expected_arrival_date: entryData.expected_arrival_date
+      },
+      { operation_type: 'ENTRY_ORDER_MANAGEMENT', action_type: 'CREATE_START' }
+    );
+
     const result = await entryService.createEntryOrder(entryData);
+    
+    // ✅ LOG: Successful entry order creation
+    await req.logEvent(
+      'ENTRY_ORDER_CREATED',
+      'EntryOrder',
+      result.entryOrder.entry_order_id,
+      `Successfully created entry order ${result.entryOrder.entry_order_no} with ${result.products.length} products`,
+      null,
+      {
+        entry_order_id: result.entryOrder.entry_order_id,
+        entry_order_no: result.entryOrder.entry_order_no,
+        organisation_id: result.entryOrder.organisation_id,
+        created_by: result.entryOrder.created_by,
+        warehouse_id: result.entryOrder.warehouse_id,
+        supplier_id: result.entryOrder.supplier_id,
+        origin_id: result.entryOrder.origin_id,
+        document_type_id: result.entryOrder.document_type_id,
+        order_status: result.entryOrder.order_status,
+        review_status: result.entryOrder.review_status,
+        total_volume: result.entryOrder.total_volume,
+        total_weight: result.entryOrder.total_weight,
+        cif_value: result.entryOrder.cif_value,
+        total_pallets: result.entryOrder.total_pallets,
+        entry_date_time: result.entryOrder.entry_date_time,
+        expected_arrival_date: result.entryOrder.expected_arrival_date,
+        products_created: result.products.map(p => ({
+          entry_order_product_id: p.entry_order_product_id,
+          product_code: p.product_code,
+          product_id: p.product_id,
+          lot_series: p.lot_series,
+          inventory_quantity: p.inventory_quantity,
+          package_quantity: p.package_quantity,
+          weight_kg: p.weight_kg,
+          volume_m3: p.volume_m3,
+          manufacturing_date: p.manufacturing_date,
+          expiration_date: p.expiration_date,
+          presentation: p.presentation,
+          temperature_range: p.temperature_range,
+          health_registration: p.health_registration
+        }))
+      },
+      { 
+        operation_type: 'ENTRY_ORDER_MANAGEMENT', 
+        action_type: 'CREATE_SUCCESS',
+        business_impact: 'NEW_INVENTORY_EXPECTED',
+        next_steps: 'AWAITING_ADMIN_REVIEW'
+      }
+    );
+
     return res.status(201).json({
       message: "Entry order created successfully",
       entryOrder: result.entryOrder,
@@ -98,6 +288,18 @@ async function createEntryOrder(req, res) {
     });
   } catch (error) {
     console.error("Error creating entry order:", error);
+    
+    // ✅ LOG: Entry order creation failure
+    await req.logError(error, {
+      controller: 'entry',
+      action: 'createEntryOrder',
+      entry_order_no: entryData.entry_order_no,
+      organisation_id: entryData.organisation_id,
+      created_by: entryData.created_by,
+      products_count: entryData.products?.length,
+      error_context: 'ENTRY_ORDER_CREATION_FAILED'
+    });
+    
     return res.status(500).json({
       message: "Error creating entry order",
       error: error.message,
@@ -229,7 +431,7 @@ async function getApprovedEntryOrders(req, res) {
     }
 
     // Only warehouse and admin can access approved orders for allocation
-    if (userRole !== "WAREHOUSE" && userRole !== "ADMIN") {
+    if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
         message: "Access denied. Only warehouse staff can view approved orders." 
       });
@@ -261,17 +463,66 @@ async function reviewEntryOrder(req, res) {
     const reviewerId = req.user?.id;
     const userRole = req.user?.role;
 
-    if (!userRole || (userRole !== "ADMIN" && userRole !== "WAREHOUSE")) {
+    if (!userRole || (userRole !== "ADMIN" && userRole !== "WAREHOUSE_INCHARGE")) {
+      // ✅ LOG: Access denied for review
+      await req.logEvent(
+        'ACCESS_DENIED',
+        'EntryOrder',
+        orderNo,
+        `Access denied: ${userRole} user attempted to review entry order ${orderNo}`,
+        null,
+        { 
+          attempted_role: userRole, 
+          required_roles: ['ADMIN', 'WAREHOUSE_INCHARGE'],
+          order_no: orderNo
+        },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'REVIEW_DENIED' }
+      );
+      
       return res.status(403).json({ 
-        message: "Access denied. Only administrators can review orders."
+        message: "Access denied. Only administrators and warehouse incharge can review orders."
       });
     }
 
     if (!review_status || !["APPROVED", "REJECTED", "NEEDS_REVISION"].includes(review_status)) {
+      // ✅ LOG: Invalid review status
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'EntryOrder',
+        orderNo,
+        `Invalid review status provided for entry order ${orderNo}`,
+        null,
+        { 
+          provided_status: review_status,
+          valid_statuses: ['APPROVED', 'REJECTED', 'NEEDS_REVISION'],
+          order_no: orderNo,
+          reviewer_id: reviewerId
+        },
+        { operation_type: 'VALIDATION', action_type: 'REVIEW_STATUS_VALIDATION' }
+      );
+      
       return res.status(400).json({
         message: "Invalid review status. Must be APPROVED, REJECTED, or NEEDS_REVISION",
       });
     }
+
+    // ✅ LOG: Review process started
+    await req.logEvent(
+      'ENTRY_ORDER_REVIEW_STARTED',
+      'EntryOrder',
+      orderNo,
+      `Started reviewing entry order ${orderNo} with status ${review_status}`,
+      null,
+      {
+        order_no: orderNo,
+        review_status: review_status,
+        review_comments: review_comments,
+        reviewer_id: reviewerId,
+        reviewer_role: userRole,
+        review_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'ENTRY_ORDER_MANAGEMENT', action_type: 'REVIEW_START' }
+    );
 
     const result = await entryService.reviewEntryOrder(orderNo, {
       review_status,
@@ -281,10 +532,65 @@ async function reviewEntryOrder(req, res) {
     });
 
     if (!result) {
+      // ✅ LOG: Entry order not found during review
+      await req.logEvent(
+        'ENTRY_ORDER_NOT_FOUND',
+        'EntryOrder',
+        orderNo,
+        `Entry order ${orderNo} not found during review attempt`,
+        null,
+        { 
+          order_no: orderNo,
+          reviewer_id: reviewerId,
+          attempted_status: review_status
+        },
+        { operation_type: 'ENTRY_ORDER_MANAGEMENT', action_type: 'REVIEW_NOT_FOUND' }
+      );
+      
       return res.status(404).json({ 
         message: "Entry order not found" 
       });
     }
+
+    // ✅ LOG: Successful review completion
+    await req.logEvent(
+      'ENTRY_ORDER_REVIEWED',
+      'EntryOrder',
+      result.entry_order_id,
+      `Entry order ${orderNo} ${review_status.toLowerCase()} by ${userRole}`,
+      {
+        previous_review_status: result.previous_review_status,
+        previous_reviewed_by: result.previous_reviewed_by,
+        previous_reviewed_at: result.previous_reviewed_at
+      },
+      {
+        entry_order_id: result.entry_order_id,
+        entry_order_no: result.entry_order_no,
+        review_status: review_status,
+        review_comments: review_comments,
+        reviewed_by: reviewerId,
+        reviewed_at: result.reviewed_at,
+        reviewer_role: userRole,
+        organisation_id: result.organisation_id,
+        created_by: result.created_by,
+        total_products: result.products?.length || 0,
+        total_weight: result.total_weight,
+        total_pallets: result.total_pallets,
+        warehouse_id: result.warehouse_id,
+        supplier_id: result.supplier_id,
+        entry_date_time: result.entry_date_time,
+        business_impact: review_status === 'APPROVED' ? 'READY_FOR_INVENTORY_ALLOCATION' : 
+                        review_status === 'REJECTED' ? 'ORDER_BLOCKED' : 'REQUIRES_CLIENT_REVISION'
+      },
+      { 
+        operation_type: 'ENTRY_ORDER_MANAGEMENT', 
+        action_type: 'REVIEW_COMPLETED',
+        business_impact: review_status === 'APPROVED' ? 'INVENTORY_ALLOCATION_ENABLED' : 
+                        review_status === 'REJECTED' ? 'ORDER_WORKFLOW_STOPPED' : 'CLIENT_ACTION_REQUIRED',
+        next_steps: review_status === 'APPROVED' ? 'WAREHOUSE_CAN_ALLOCATE_INVENTORY' : 
+                   review_status === 'REJECTED' ? 'ORDER_WORKFLOW_ENDED' : 'CLIENT_MUST_REVISE_ORDER'
+      }
+    );
 
     return res.status(200).json({
       success: true,
@@ -293,6 +599,18 @@ async function reviewEntryOrder(req, res) {
     });
   } catch (error) {
     console.error("Error reviewing entry order:", error);
+    
+    // ✅ LOG: Review process error
+    await req.logError(error, {
+      controller: 'entry',
+      action: 'reviewEntryOrder',
+      order_no: req.params.orderNo,
+      review_status: req.body.review_status,
+      reviewer_id: req.user?.id,
+      reviewer_role: req.user?.role,
+      error_context: 'ENTRY_ORDER_REVIEW_FAILED'
+    });
+    
     return res.status(500).json({
       success: false,
       message: "Error reviewing entry order",
@@ -339,7 +657,6 @@ async function getEntryOrdersByStatus(req, res) {
   }
 }
 
-
 async function updateEntryOrder(req, res) {
   try {
     const { orderNo } = req.params;
@@ -348,14 +665,64 @@ async function updateEntryOrder(req, res) {
     const userRole = req.user?.role;
 
     if (!userId) {
+      // ✅ LOG: Authentication failure
+      await req.logEvent(
+        'AUTHENTICATION_FAILED',
+        'EntryOrder',
+        orderNo,
+        `Authentication required for updating entry order ${orderNo}`,
+        null,
+        { order_no: orderNo, attempted_action: 'UPDATE' },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'AUTH_REQUIRED' }
+      );
+      
       return res.status(401).json({
         success: false,
         message: "Authentication required",
       });
     }
 
+    // ✅ NEW: Restrict entry order updates to CLIENT users only
+    if (userRole !== "CLIENT") {
+      // ✅ LOG: Access denied for update
+      await req.logEvent(
+        'ACCESS_DENIED',
+        'EntryOrder',
+        orderNo,
+        `Access denied: ${userRole} user attempted to update entry order ${orderNo}`,
+        null,
+        { 
+          attempted_role: userRole, 
+          required_role: 'CLIENT',
+          order_no: orderNo,
+          user_id: userId
+        },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'UPDATE_DENIED' }
+      );
+      
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only CLIENT users can update entry orders.",
+      });
+    }
+
     // Validate request data
     if (!updateData || Object.keys(updateData).length === 0) {
+      // ✅ LOG: Empty update data
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'EntryOrder',
+        orderNo,
+        `Empty update data provided for entry order ${orderNo}`,
+        null,
+        { 
+          order_no: orderNo,
+          user_id: userId,
+          update_data_keys: Object.keys(updateData || {})
+        },
+        { operation_type: 'VALIDATION', action_type: 'EMPTY_UPDATE_DATA' }
+      );
+      
       return res.status(400).json({
         success: false,
         message: "No update data provided",
@@ -364,11 +731,49 @@ async function updateEntryOrder(req, res) {
 
     // Validate that entry_order_no is not being changed
     if (updateData.entry_order_no && updateData.entry_order_no !== orderNo) {
+      // ✅ LOG: Attempt to change order number
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'EntryOrder',
+        orderNo,
+        `Attempt to change entry order number from ${orderNo} to ${updateData.entry_order_no}`,
+        null,
+        { 
+          original_order_no: orderNo,
+          attempted_new_order_no: updateData.entry_order_no,
+          user_id: userId
+        },
+        { operation_type: 'VALIDATION', action_type: 'ORDER_NUMBER_CHANGE_DENIED' }
+      );
+      
       return res.status(400).json({
         success: false,
         message: "Entry order number cannot be changed",
       });
     }
+
+    // ✅ LOG: Update process started
+    await req.logEvent(
+      'ENTRY_ORDER_UPDATE_STARTED',
+      'EntryOrder',
+      orderNo,
+      `Started updating entry order ${orderNo}`,
+      null,
+      {
+        order_no: orderNo,
+        user_id: userId,
+        user_role: userRole,
+        update_fields: Object.keys(updateData),
+        products_being_updated: updateData.products ? updateData.products.length : 0,
+        update_timestamp: new Date().toISOString(),
+        has_product_changes: !!updateData.products,
+        has_order_details_changes: !!(updateData.total_volume || updateData.total_weight || updateData.cif_value || updateData.total_pallets),
+        has_date_changes: !!(updateData.entry_date_time || updateData.expected_arrival_date),
+        has_document_changes: !!updateData.uploaded_documents,
+        has_observation_changes: !!updateData.observation
+      },
+      { operation_type: 'ENTRY_ORDER_MANAGEMENT', action_type: 'UPDATE_START' }
+    );
 
     // Validate product data if provided
     if (updateData.products && Array.isArray(updateData.products)) {
@@ -380,6 +785,30 @@ async function updateEntryOrder(req, res) {
           if (!product.product_id || !product.product_code || 
               !product.inventory_quantity || !product.package_quantity || 
               !product.weight_kg) {
+            
+            // ✅ LOG: Product validation failure during update
+            await req.logEvent(
+              'PRODUCT_VALIDATION_FAILED',
+              'EntryOrderProduct',
+              `${orderNo}-UPDATE-PRODUCT-${i + 1}`,
+              `Product ${i + 1} validation failed during entry order ${orderNo} update`,
+              null,
+              { 
+                order_no: orderNo,
+                product_index: i + 1,
+                product_data: product,
+                missing_fields: {
+                  product_id: !product.product_id,
+                  product_code: !product.product_code,
+                  inventory_quantity: !product.inventory_quantity,
+                  package_quantity: !product.package_quantity,
+                  weight_kg: !product.weight_kg
+                },
+                user_id: userId
+              },
+              { operation_type: 'VALIDATION', action_type: 'UPDATE_PRODUCT_VALIDATION' }
+            );
+            
             return res.status(400).json({
               success: false,
               message: `Product ${i + 1}: Missing required fields (product_id, product_code, inventory_quantity, package_quantity, weight_kg)`,
@@ -389,6 +818,23 @@ async function updateEntryOrder(req, res) {
 
         // Validate quantities are positive numbers
         if (product.inventory_quantity !== undefined && product.inventory_quantity <= 0) {
+          // ✅ LOG: Quantity validation failure
+          await req.logEvent(
+            'QUANTITY_VALIDATION_FAILED',
+            'EntryOrderProduct',
+            `${orderNo}-UPDATE-PRODUCT-${i + 1}`,
+            `Product ${i + 1} inventory quantity validation failed during entry order ${orderNo} update`,
+            null,
+            { 
+              order_no: orderNo,
+              product_index: i + 1,
+              product_code: product.product_code,
+              invalid_inventory_quantity: product.inventory_quantity,
+              user_id: userId
+            },
+            { operation_type: 'VALIDATION', action_type: 'UPDATE_QUANTITY_VALIDATION' }
+          );
+          
           return res.status(400).json({
             success: false,
             message: `Product ${i + 1}: Inventory quantity must be positive`,
@@ -396,6 +842,23 @@ async function updateEntryOrder(req, res) {
         }
 
         if (product.package_quantity !== undefined && product.package_quantity <= 0) {
+          // ✅ LOG: Package quantity validation failure
+          await req.logEvent(
+            'QUANTITY_VALIDATION_FAILED',
+            'EntryOrderProduct',
+            `${orderNo}-UPDATE-PRODUCT-${i + 1}`,
+            `Product ${i + 1} package quantity validation failed during entry order ${orderNo} update`,
+            null,
+            { 
+              order_no: orderNo,
+              product_index: i + 1,
+              product_code: product.product_code,
+              invalid_package_quantity: product.package_quantity,
+              user_id: userId
+            },
+            { operation_type: 'VALIDATION', action_type: 'UPDATE_QUANTITY_VALIDATION' }
+          );
+          
           return res.status(400).json({
             success: false,
             message: `Product ${i + 1}: Package quantity must be positive`,
@@ -403,6 +866,23 @@ async function updateEntryOrder(req, res) {
         }
 
         if (product.weight_kg !== undefined && product.weight_kg <= 0) {
+          // ✅ LOG: Weight validation failure
+          await req.logEvent(
+            'QUANTITY_VALIDATION_FAILED',
+            'EntryOrderProduct',
+            `${orderNo}-UPDATE-PRODUCT-${i + 1}`,
+            `Product ${i + 1} weight validation failed during entry order ${orderNo} update`,
+            null,
+            { 
+              order_no: orderNo,
+              product_index: i + 1,
+              product_code: product.product_code,
+              invalid_weight_kg: product.weight_kg,
+              user_id: userId
+            },
+            { operation_type: 'VALIDATION', action_type: 'UPDATE_WEIGHT_VALIDATION' }
+          );
+          
           return res.status(400).json({
             success: false,
             message: `Product ${i + 1}: Weight must be positive`,
@@ -414,6 +894,25 @@ async function updateEntryOrder(req, res) {
           const mfgDate = new Date(product.manufacturing_date);
           const expDate = new Date(product.expiration_date);
           if (expDate <= mfgDate) {
+            // ✅ LOG: Date validation failure during update
+            await req.logEvent(
+              'DATE_VALIDATION_FAILED',
+              'EntryOrderProduct',
+              `${orderNo}-UPDATE-PRODUCT-${i + 1}`,
+              `Product ${i + 1} date validation failed during entry order ${orderNo} update`,
+              null,
+              { 
+                order_no: orderNo,
+                product_index: i + 1,
+                product_code: product.product_code,
+                manufacturing_date: product.manufacturing_date,
+                expiration_date: product.expiration_date,
+                validation_error: 'Expiration date must be after manufacturing date',
+                user_id: userId
+              },
+              { operation_type: 'VALIDATION', action_type: 'UPDATE_DATE_VALIDATION' }
+            );
+            
             return res.status(400).json({
               success: false,
               message: `Product ${i + 1}: Expiration date must be after manufacturing date`,
@@ -425,6 +924,28 @@ async function updateEntryOrder(req, res) {
 
     const result = await entryService.updateEntryOrder(orderNo, updateData, userId);
 
+    // ✅ LOG: Successful entry order update
+    await req.logEvent(
+      'ENTRY_ORDER_UPDATED',
+      'EntryOrder',
+      result.entry_order_id,
+      `Successfully updated entry order ${orderNo}`,
+      result.oldValues,
+      result.newValues,
+      { 
+        operation_type: 'ENTRY_ORDER_MANAGEMENT', 
+        action_type: 'UPDATE_SUCCESS',
+        business_impact: 'ORDER_MODIFIED_REQUIRES_RE_REVIEW',
+        next_steps: 'AWAITING_ADMIN_RE_REVIEW',
+        changes_summary: {
+          fields_updated: Object.keys(updateData),
+          products_updated: updateData.products ? updateData.products.length : 0,
+          status_reset_to_pending: true,
+          requires_new_review: true
+        }
+      }
+    );
+
     return res.status(200).json({
       success: true,
       data: result,
@@ -432,6 +953,17 @@ async function updateEntryOrder(req, res) {
     });
   } catch (error) {
     console.error("Error updating entry order:", error);
+    
+    // ✅ LOG: Update process error
+    await req.logError(error, {
+      controller: 'entry',
+      action: 'updateEntryOrder',
+      order_no: req.params.orderNo,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      update_data_keys: Object.keys(req.body || {}),
+      error_context: 'ENTRY_ORDER_UPDATE_FAILED'
+    });
     
     // Handle specific business rule errors
     if (error.message.includes("NEEDS_REVISION") || 

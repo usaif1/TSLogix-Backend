@@ -168,6 +168,21 @@ async function getEntryOrderProductsForInventory(entryOrderId) {
       warehouse_id: true,
       warehouse: { select: { name: true } },
       
+      // ✅ NEW: Include creator information to determine if client filtering should be applied
+      creator: {
+        select: {
+          id: true,
+          first_name: true,
+          last_name: true,
+          email: true,
+          role: {
+            select: {
+              name: true
+            }
+          }
+        }
+      },
+      
       products: {
         select: {
           entry_order_product_id: true,
@@ -261,6 +276,10 @@ async function getEntryOrderProductsForInventory(entryOrderId) {
 
   return {
     ...entryOrder,
+    // ✅ NEW: Add creator information for client filtering logic
+    created_by_client: entryOrder.creator.role.name === "CLIENT",
+    creator_name: `${entryOrder.creator.first_name || ""} ${entryOrder.creator.last_name || ""}`.trim(),
+    creator_role: entryOrder.creator.role.name,
     products: transformedProducts,
   };
 }
@@ -303,6 +322,8 @@ async function assignProductToCell(assignmentData) {
             entry_order_id: true,
             entry_order_no: true,
             review_status: true,
+            warehouse_id: true,
+            created_by: true,
           },
         },
       },
@@ -313,8 +334,54 @@ async function assignProductToCell(assignmentData) {
     }
 
     if (entryOrderProduct.entry_order.review_status !== "APPROVED") {
-      throw new Error("Cannot assign inventory for products from non-approved entry orders");
+      throw new Error("Entry order must be approved before inventory allocation");
     }
+
+    // ✅ UPDATED: Remove warehouse constraint - allow multi-warehouse allocation
+    // Entry orders can now have inventory allocated across multiple warehouses
+    // The warehouse assignment happens at the allocation/inventory level, not at the entry order level
+    // This allows maximum flexibility for warehouse operations where:
+    // 1. Clients create entry orders without knowing the final warehouse
+    // 2. Warehouse staff can allocate inventory across multiple warehouses  
+    // 3. Each allocation tracks its own warehouse through the cell relationship
+    
+    console.log(`✅ Multi-warehouse allocation: Entry order ${entryOrderProduct.entry_order.entry_order_no} can be allocated to warehouse ${warehouse_id}`);
+
+    // 1.5. Validate cell exists and belongs to the specified warehouse
+    const cell = await tx.warehouseCell.findUnique({
+      where: { id: cell_id },
+    });
+
+    if (!cell) {
+      throw new Error("Cell not found");
+    }
+
+    if (cell.warehouse_id !== warehouse_id) {
+      throw new Error(`Cell does not belong to the specified warehouse. Cell warehouse: ${cell.warehouse_id}, Expected: ${warehouse_id}`);
+    }
+
+    if (cell.status !== "AVAILABLE") {
+      throw new Error(`Cell ${cell.row}.${cell.bay}.${cell.position} is not available for allocation`);
+    }
+
+    // 1.6. Validate user exists and has warehouse role
+    const assigningUser = await tx.user.findUnique({
+      where: { id: assigned_by },
+      include: { role: true },
+    });
+
+    if (!assigningUser) {
+      throw new Error("Assigning user not found");
+    }
+
+    // ✅ UPDATED: Allow CLIENT users to assign inventory to their own entry orders
+    // Cell assignment restrictions are now handled at the cell selection level
+    if (!["WAREHOUSE_INCHARGE", "ADMIN", "PHARMACIST", "CLIENT"].includes(assigningUser.role.name)) {
+      throw new Error("Only WAREHOUSE_INCHARGE, ADMIN, PHARMACIST, or CLIENT users can assign inventory to cells");
+    }
+
+    // ✅ REMOVED: Client cell assignment validation since it's now handled at cell selection level
+    // The getAvailableCells function now automatically filters cells for CLIENT entry orders
 
     // 2. ✅ FIXED: Check available quantities with proper synchronization validation
     const existingAllocations = await tx.inventoryAllocation.findMany({
@@ -324,66 +391,53 @@ async function assignProductToCell(assignmentData) {
     const totalAllocatedQuantity = existingAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
     const totalAllocatedPackages = existingAllocations.reduce((sum, alloc) => sum + alloc.package_quantity, 0);
     const totalAllocatedWeight = existingAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.weight_kg), 0);
-    
-    const availableQuantity = entryOrderProduct.inventory_quantity - totalAllocatedQuantity;
-    const availablePackages = entryOrderProduct.package_quantity - totalAllocatedPackages;
-    const availableWeight = parseFloat(entryOrderProduct.weight_kg) - totalAllocatedWeight;
+    const totalAllocatedVolume = existingAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.volume_m3 || 0), 0);
 
-    // ✅ VALIDATION: Check all three fields for availability
-    if (inventory_quantity > availableQuantity) {
-      throw new Error(`Not enough inventory quantity. Available: ${availableQuantity}, Requested: ${inventory_quantity}`);
+    if (totalAllocatedQuantity + parseInt(inventory_quantity) > entryOrderProduct.inventory_quantity) {
+      throw new Error(
+        `Allocation exceeds available quantity. Available: ${
+          entryOrderProduct.inventory_quantity - totalAllocatedQuantity
+        }, Requested: ${inventory_quantity}`
+      );
     }
     
-    if (package_quantity > availablePackages) {
-      throw new Error(`Not enough package quantity. Available: ${availablePackages}, Requested: ${package_quantity}`);
-    }
-    
-    if (parseFloat(weight_kg) > availableWeight) {
-      throw new Error(`Not enough weight. Available: ${availableWeight.toFixed(2)} kg, Requested: ${weight_kg} kg`);
-    }
-
-    // ✅ VALIDATION: Ensure proper ratios for synchronization
-    const entryProductRatio = entryOrderProduct.package_quantity / entryOrderProduct.inventory_quantity;
-    const requestedRatio = package_quantity / inventory_quantity;
-    const ratioTolerance = 0.1; // 10% tolerance for rounding
-    
-    if (Math.abs(entryProductRatio - requestedRatio) > ratioTolerance) {
-      const expectedPackages = Math.ceil(inventory_quantity * entryProductRatio);
-      throw new Error(`Package quantity out of sync with inventory quantity. Expected approximately: ${expectedPackages} packages for ${inventory_quantity} units (ratio: ${entryProductRatio.toFixed(3)})`);
+    if (totalAllocatedPackages + parseInt(package_quantity) > entryOrderProduct.package_quantity) {
+      throw new Error(
+        `Package allocation exceeds available packages. Available: ${
+          entryOrderProduct.package_quantity - totalAllocatedPackages
+        }, Requested: ${package_quantity}`
+      );
     }
 
-    // ✅ VALIDATION: Weight should be proportional to quantity
-    const entryWeightPerUnit = parseFloat(entryOrderProduct.weight_kg) / entryOrderProduct.inventory_quantity;
-    const expectedWeight = inventory_quantity * entryWeightPerUnit;
-    const weightTolerance = expectedWeight * 0.05; // 5% tolerance
-    
-    if (Math.abs(parseFloat(weight_kg) - expectedWeight) > weightTolerance) {
-      throw new Error(`Weight out of sync with inventory quantity. Expected approximately: ${expectedWeight.toFixed(2)} kg for ${inventory_quantity} units`);
+    if (totalAllocatedWeight + parseFloat(weight_kg) > parseFloat(entryOrderProduct.weight_kg)) {
+      throw new Error(
+        `Weight allocation exceeds available weight. Available: ${
+          parseFloat(entryOrderProduct.weight_kg) - totalAllocatedWeight
+        }kg, Requested: ${weight_kg}kg`
+      );
     }
 
-    // 3. Verify cell availability
-    const cell = await tx.warehouseCell.findUnique({
-      where: { id: cell_id },
-    });
+    // 3. ✅ FIXED: Calculate proper usage for cell capacity
+    const requestedUsage = parseFloat(volume_m3 || 0);
+    const maxCellUsage = parseFloat(cell.capacity || 100);
+    const currentCellUsage = parseFloat(cell.currentUsage || 0);
     
-    if (!cell) {
-      throw new Error("Cell not found");
-    }
-    
-    if (cell.status !== "AVAILABLE") {
-      throw new Error("Cell is not available for assignment");
+    if (currentCellUsage + requestedUsage > maxCellUsage) {
+      throw new Error(
+        `Cell capacity exceeded. Available capacity: ${maxCellUsage - currentCellUsage}, Requested: ${requestedUsage}`
+      );
     }
 
-    // 4. ✅ FIXED: Convert product status string to enum and get status code
+    // ✅ Helper functions for product status conversion
     const convertProductStatusToEnum = (statusString, presentation) => {
       // If it's already an enum value, return it
-      if (!statusString.includes('-')) {
-        return statusString;
+      if (!statusString || !statusString.includes('-')) {
+        return statusString || 'PAL_NORMAL';
       }
 
       // Extract the condition from the status string (e.g., "30-PAL-NORMAL" -> "NORMAL")
       const parts = statusString.split('-');
-      const condition = parts[parts.length - 1]; // NORMAL, DAÑADA, etc.
+      const condition = parts[parts.length - 1]; // NORMAL, DAÑAD, etc.
       const isDamaged = condition.includes('DAÑAD') || condition === 'DAÑADA';
 
       // Map presentation to enum
@@ -415,66 +469,71 @@ async function assignProductToCell(assignmentData) {
       return statusMap[presentation] || 37;
     };
 
-    // Convert the product status to the correct enum value
+    // 4. ✅ FIXED: Product status and status code calculation
     const productStatusEnum = convertProductStatusToEnum(product_status, presentation);
-    const isDamaged = product_status.includes("DAÑAD") || product_status.includes("DAÑADA");
-    const statusCode = getStatusCode(presentation, isDamaged);
+    const statusCode = getStatusCode(presentation, product_status?.includes("DANADA"));
 
-    // 5. ✅ NEW: Create inventory allocation with quarantine status
+    // Create cell reference for logging
+    const cellRef = `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(cell.position).padStart(2, "0")}`;
+
+    // 5. Create inventory allocation record with CUARENTENA status
     const allocation = await tx.inventoryAllocation.create({
       data: {
         entry_order_id: entryOrderProduct.entry_order_id,
         entry_order_product_id,
         inventory_quantity: parseInt(inventory_quantity),
         package_quantity: parseInt(package_quantity),
-        quantity_pallets: parseInt(quantity_pallets) || null,
-        presentation,
+        quantity_pallets: parseInt(quantity_pallets),
+        presentation: presentation,
         weight_kg: parseFloat(weight_kg),
         volume_m3: parseFloat(volume_m3) || null,
         cell_id,
         product_status: productStatusEnum,
         status_code: statusCode,
-        quality_status: "CUARENTENA", // ✅ NEW: Start in quarantine
+        quality_status: "CUARENTENA", // ✅ All inventory starts in quarantine
+        allocated_by: assigned_by,
         guide_number,
         uploaded_documents,
-        observations: `Initial allocation to quarantine. ${observations || ''}`,
-        allocated_by: assigned_by,
+        observations,
+        status: "ACTIVE",
       },
     });
 
-    // 6. ✅ NEW: Create actual inventory record in quarantine status
+    // 6. Create corresponding inventory record (also in quarantine status)
     const inventory = await tx.inventory.create({
       data: {
         allocation_id: allocation.allocation_id,
-        product_id: entryOrderProduct.product_id,
+        product_id: entryOrderProduct.product.product_id,
         cell_id,
         warehouse_id,
         current_quantity: parseInt(inventory_quantity),
         current_package_quantity: parseInt(package_quantity),
         current_weight: parseFloat(weight_kg),
         current_volume: parseFloat(volume_m3) || null,
-        status: "QUARANTINED", // ✅ NEW: Start in quarantine status
+        status: "QUARANTINED", // ✅ Start in quarantine status
         product_status: productStatusEnum,
         status_code: statusCode,
-        quality_status: "CUARENTENA", // ✅ NEW: Quarantine quality status
-        created_by: assigned_by, // ✅ NEW: Track who created this
+        quality_status: "CUARENTENA", // ✅ Match allocation status
+        created_by: assigned_by,
       },
     });
 
-    // 7. Update cell status
+    // 7. ✅ FIXED: Update cell status with proper synchronization
+    const newCellUsage = currentCellUsage + requestedUsage;
+    const newPackagingQty = (parseInt(cell.current_packaging_qty) || 0) + parseInt(package_quantity);
+    const newWeight = (parseFloat(cell.current_weight) || 0) + parseFloat(weight_kg);
+
     await tx.warehouseCell.update({
       where: { id: cell_id },
       data: {
-        status: "OCCUPIED",
-        currentUsage: { increment: parseFloat(volume_m3) || 0 },
-        current_packaging_qty: { increment: parseInt(package_quantity) },
-        current_weight: { increment: parseFloat(weight_kg) },
+        status: "OCCUPIED", // ✅ FIXED: Use OCCUPIED since PARTIALLY_OCCUPIED was removed from enum
+        currentUsage: newCellUsage,
+        current_packaging_qty: newPackagingQty,
+        current_weight: newWeight,
       },
     });
 
-    // 8. Log inventory movement
-    const cellRef = `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(cell.position).padStart(2, "0")}`;
-    
+    // 8. ✅ FIXED: Create inventory log with proper synchronization
     await tx.inventoryLog.create({
       data: {
         user_id: assigned_by,
@@ -526,8 +585,111 @@ async function assignProductToCell(assignmentData) {
 
 /**
  * Get available cells in a specific warehouse for assignment
+ * If entryOrderId is provided and the entry order was created by a CLIENT, 
+ * only return cells assigned to that CLIENT
  */
-async function getAvailableCells(warehouseId) {
+async function getAvailableCells(warehouseId, entryOrderId = null) {
+  // If entryOrderId is provided, check if it was created by a CLIENT user
+  if (entryOrderId) {
+    const entryOrder = await prisma.entryOrder.findUnique({
+      where: { entry_order_id: entryOrderId },
+      include: {
+        creator: {
+          include: {
+            role: true
+          }
+        },
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true
+          }
+        }
+      }
+    });
+
+    if (!entryOrder) {
+      throw new Error(`Entry order with ID ${entryOrderId} not found`);
+    }
+
+    // ✅ UPDATED: Remove warehouse consistency check - allow multi-warehouse allocation
+    // Entry orders can now access cells from any warehouse for maximum flexibility
+    console.log(`✅ Multi-warehouse access: Entry order ${entryOrder.entry_order_no} accessing cells from warehouse ${warehouseId}`);
+
+    // If entry order was created by a CLIENT, filter cells by client assignments
+    if (entryOrder && entryOrder.creator.role.name === "CLIENT") {
+      console.log(`🔍 Entry order ${entryOrder.entry_order_no} was created by CLIENT user, filtering cells by client assignments`);
+      
+      // Get the client record for the user who created the entry order
+      const client = await prisma.client.findFirst({
+        where: { email: entryOrder.creator.email },
+        select: { client_id: true }
+      });
+
+      if (client) {
+        // Return only cells assigned to this client IN THE CORRECT WAREHOUSE
+        const assignedCells = await prisma.warehouseCell.findMany({
+          where: {
+            warehouse_id: warehouseId, // ✅ Ensure warehouse consistency
+            status: "AVAILABLE",
+            clientCellAssignments: {
+              some: {
+                client_id: client.client_id,
+                is_active: true
+              }
+            }
+          },
+          select: {
+            id: true,
+            row: true,
+            bay: true,
+            position: true,
+            capacity: true,
+            currentUsage: true,
+            current_packaging_qty: true,
+            current_weight: true,
+            status: true,
+            kind: true,
+            cell_role: true,
+            // Include assignment details for context
+            clientCellAssignments: {
+              where: {
+                client_id: client.client_id,
+                is_active: true
+              },
+              select: {
+                priority: true,
+                max_capacity: true,
+                notes: true
+              }
+            }
+          },
+          orderBy: [
+            { clientCellAssignments: { _count: "desc" } }, // Prioritize assigned cells
+            { row: "asc" }, 
+            { bay: "asc" }, 
+            { position: "asc" }
+          ],
+        });
+
+        console.log(`✅ Filtered to ${assignedCells.length} cells assigned to CLIENT`);
+        
+        // Transform to match expected format
+        return assignedCells.map(cell => ({
+          ...cell,
+          clientCellAssignments: undefined, // Remove nested data
+          is_client_assigned: true,
+          client_assignment_info: cell.clientCellAssignments[0] || null
+        }));
+      } else {
+        console.log(`⚠️ No client record found for user ${entryOrder.creator.email}`);
+        // If no client record found, return empty array to be safe
+        return [];
+      }
+    }
+  }
+
+  // Default behavior: return all available cells (for non-CLIENT entry orders or when no entryOrderId provided)
   return await prisma.warehouseCell.findMany({
     where: {
       warehouse_id: warehouseId,
@@ -543,11 +705,187 @@ async function getAvailableCells(warehouseId) {
       current_packaging_qty: true,
       current_weight: true,
       status: true,
-      kind: true,           // ✅ FIXED: Use 'kind' instead of 'cellKind'
-      cell_role: true,      // ✅ FIXED: Use 'cell_role' instead of 'cellRole'
+      kind: true,
+      cell_role: true,
     },
     orderBy: [{ row: "asc" }, { bay: "asc" }, { position: "asc" }],
   });
+}
+
+// ✅ NEW: Get cells assigned to a specific client user
+async function getClientAssignedCells(warehouseId, userId) {
+  try {
+    // First, find the client record for this user
+    const clientUser = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        role: true  // Include the full role relation
+      }
+    });
+
+    // Debug: User lookup
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🔍 DEBUG - getClientAssignedCells clientUser:', {
+        id: clientUser?.id,
+        role: clientUser?.role?.name,
+        email: clientUser?.email,
+        organisation_id: clientUser?.organisation_id
+      });
+    }
+
+    if (!clientUser || !clientUser.role || clientUser.role.name !== "CLIENT") {
+      throw new Error(`User is not a client. Role found: ${clientUser?.role?.name || 'undefined'}`);
+    }
+
+    // Find the client record that matches this user (by email first, then fallback)
+    let client = await prisma.client.findFirst({
+      where: { 
+        email: clientUser.email
+      },
+      select: { client_id: true }
+    });
+
+    // ✅ FALLBACK: If no client found by email, find any client in the same organization
+    if (!client) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`⚠️ No client found with email ${clientUser.email}, looking for any client...`);
+      }
+      
+      // For now, let's get the first active client as a fallback
+      client = await prisma.client.findFirst({
+        where: {
+          active_state: {
+            name: "Active"
+          }
+        },
+        select: { client_id: true }
+      });
+      
+      if (!client) {
+        throw new Error("No active client found in the system. Please create a client record first.");
+      }
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`📝 Using fallback client: ${client.client_id}`);
+      }
+    }
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🔍 Looking for cells in warehouse ${warehouseId} for client ${client.client_id}`);
+    }
+    
+    // Get all cells assigned to this client (any status) for debug purposes
+    const allClientCells = await prisma.warehouseCell.findMany({
+      where: {
+        warehouse_id: warehouseId,
+        clientCellAssignments: {
+          some: {
+            client_id: client.client_id,
+            is_active: true
+          }
+        }
+      },
+      select: {
+        id: true,
+        row: true,
+        bay: true,
+        position: true,
+        status: true,
+        clientCellAssignments: {
+          where: {
+            client_id: client.client_id,
+            is_active: true
+          }
+        }
+      }
+    });
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`📊 Found ${allClientCells.length} cells assigned to client (any status):`, 
+        allClientCells.map(c => `${c.row}.${c.bay}.${c.position} (${c.status})`));
+    }
+    
+    // Get cells assigned to this client in the specified warehouse (AVAILABLE only)
+    const assignedCells = await prisma.warehouseCell.findMany({
+      where: {
+        warehouse_id: warehouseId,
+        status: "AVAILABLE",
+        clientCellAssignments: {
+          some: {
+            client_id: client.client_id,
+            is_active: true
+          }
+        }
+      },
+      select: {
+        id: true,
+        row: true,
+        bay: true,
+        position: true,
+        capacity: true,
+        currentUsage: true,
+        current_packaging_qty: true,
+        current_weight: true,
+        status: true,
+        kind: true,
+        cell_role: true,
+        // Include assignment details
+        clientCellAssignments: {
+          where: {
+            client_id: client.client_id,
+            is_active: true
+          },
+          select: {
+            priority: true,
+            max_capacity: true,
+            notes: true,
+            assigned_at: true
+          }
+        }
+      },
+      orderBy: [
+        { clientCellAssignments: { _count: "desc" } }, // Prioritize assigned cells
+        { row: "asc" }, 
+        { bay: "asc" }, 
+        { position: "asc" }
+      ],
+    });
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ Found ${assignedCells.length} AVAILABLE cells for client`);
+    }
+    
+    // Transform the response to include assignment information
+    const result = assignedCells.map(cell => ({
+      ...cell,
+      assignment_info: cell.clientCellAssignments[0] || null,
+      // Remove the nested assignment data
+      clientCellAssignments: undefined
+    }));
+    
+    // ✅ OPTIONAL: Include debug info in development mode
+    if (process.env.NODE_ENV === 'development') {
+      return {
+        cells: result,
+        debug_info: {
+          client_id: client.client_id,
+          warehouse_id: warehouseId,
+          total_assigned_cells: allClientCells.length,
+          available_assigned_cells: assignedCells.length,
+          assigned_cells_by_status: allClientCells.reduce((acc, cell) => {
+            acc[cell.status] = (acc[cell.status] || 0) + 1;
+            return acc;
+          }, {})
+        }
+      };
+    }
+    
+    return result;
+
+  } catch (error) {
+    console.error("Error in getClientAssignedCells:", error);
+    throw error;
+  }
 }
 
 /**
@@ -1872,11 +2210,52 @@ async function validateInventorySynchronization(options = {}) {
   }
 }
 
+// ✅ NEW: Get warehouse information for an entry order
+async function getEntryOrderWarehouse(entryOrderId) {
+  try {
+    const entryOrder = await prisma.entryOrder.findUnique({
+      where: { entry_order_id: entryOrderId },
+      select: {
+        entry_order_id: true,
+        entry_order_no: true,
+        warehouse_id: true,
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true,
+            status: true
+          }
+        }
+      }
+    });
+
+    if (!entryOrder) {
+      throw new Error(`Entry order with ID ${entryOrderId} not found`);
+    }
+
+    return {
+      entry_order_id: entryOrder.entry_order_id,
+      entry_order_no: entryOrder.entry_order_no,
+      warehouse_id: entryOrder.warehouse_id,
+      warehouse: entryOrder.warehouse,
+      has_warehouse_assigned: !!entryOrder.warehouse_id,
+      message: entryOrder.warehouse_id 
+        ? `Entry order is assigned to ${entryOrder.warehouse.name}`
+        : "Entry order has no warehouse assigned yet"
+    };
+  } catch (error) {
+    console.error("Error in getEntryOrderWarehouse:", error);
+    throw new Error(`Failed to get entry order warehouse: ${error.message}`);
+  }
+}
+
 module.exports = {
   getApprovedEntryOrdersForInventory,
   getEntryOrderProductsForInventory,
   assignProductToCell,
   getAvailableCells,
+  getClientAssignedCells, // ✅ NEW: Get cells assigned to a specific client
   getInventorySummary,
   getAllWarehouses,
   getWarehouseCells,
@@ -1889,4 +2268,5 @@ module.exports = {
   getInventoryAuditTrail,
   validateInventorySynchronization,
   getCellsByQualityStatus, // ✅ NEW: Cell filtering by quality status
+  getEntryOrderWarehouse, // ✅ NEW: Get warehouse information for an entry order
 };

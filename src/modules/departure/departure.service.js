@@ -127,7 +127,7 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
     // ✅ ROLE-BASED ACCESS CONTROL
     // WAREHOUSE and ADMIN users can see all departure orders
     // Other users (like CUSTOMER) only see orders from their organization
-    if (userRole && (userRole === 'WAREHOUSE' || userRole === 'ADMIN')) {
+    if (userRole && (userRole === 'WAREHOUSE_INCHARGE' || userRole === 'ADMIN')) {
       // ✅ NEW LOGIC: ADMIN and WAREHOUSE users ALWAYS see all orders
       // They ignore any organizationId filter - they get full system visibility
       // No organization filtering for ADMIN/WAREHOUSE users
@@ -753,7 +753,9 @@ async function getDepartureInventorySummary(warehouseId = null) {
 // ✅ UPDATED: Get available cells for a specific entry order product from approved allocations
 async function getAvailableCellsForProduct(
   entryOrderProductId,
-  warehouseId = null
+  warehouseId = null,
+  userRole = null,
+  userId = null
 ) {
   try {
     const whereClause = {
@@ -766,6 +768,51 @@ async function getAvailableCellsForProduct(
       whereClause.cell = {
         warehouse_id: String(warehouseId)
       };
+    }
+
+    // ✅ NEW: If user is a CLIENT, only show inventory in cells assigned to them
+    if (userRole === "CLIENT" && userId) {
+      // Get the client record for this user
+      const clientUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true }
+      });
+
+      if (clientUser) {
+        // Find the corresponding client record
+        const client = await prisma.client.findFirst({
+          where: { email: clientUser.email },
+          select: { client_id: true }
+        });
+
+        if (client) {
+          // Get cell IDs assigned to this client
+          const clientCellAssignments = await prisma.clientCellAssignment.findMany({
+            where: {
+              client_id: client.client_id,
+              is_active: true,
+              ...(warehouseId ? { warehouse_id: warehouseId } : {})
+            },
+            select: { cell_id: true }
+          });
+
+          const assignedCellIds = clientCellAssignments.map(assignment => assignment.cell_id);
+          
+          if (assignedCellIds.length === 0) {
+            // Client has no assigned cells, return empty array
+            return [];
+          }
+
+          // Filter by assigned cells
+          whereClause.cell_id = { in: assignedCellIds };
+        } else {
+          // User doesn't have a corresponding client record, return empty
+          return [];
+        }
+      } else {
+        // User not found, return empty
+        return [];
+      }
     }
 
     const allocations = await prisma.inventoryAllocation.findMany({
@@ -839,7 +886,7 @@ async function getAvailableCellsForProduct(
     });
 
     // ✅ Filter allocations that have available inventory and return detailed info
-    return allocations
+    const result = allocations
       .filter(allocation => {
         const inventory = allocation.inventory[0];
         return inventory && 
@@ -887,6 +934,8 @@ async function getAvailableCellsForProduct(
           fifo_rank: allocation.entry_order_product.entry_order.entry_date_time,
         };
       });
+
+    return result;
   } catch (error) {
     console.error("Error in getAvailableCellsForProduct:", error);
     throw new Error(`Failed to fetch available cells: ${error.message}`);

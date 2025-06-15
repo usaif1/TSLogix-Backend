@@ -4,6 +4,8 @@ const clientService = require("./client.service");
 async function createClient(req, res) {
   try {
     const clientData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
     
     // Validate ALL required fields
     const validationErrors = [];
@@ -79,8 +81,64 @@ async function createClient(req, res) {
       ...pureClientData
     } = clientData;
     
+    // ✅ LOG: Client creation process started
+    await req.logEvent(
+      'CLIENT_CREATION_STARTED',
+      'Client',
+      'NEW_CLIENT',
+      `Started creating new client: ${clientData.name}`,
+      null,
+      {
+        client_name: clientData.name,
+        client_email: clientData.email,
+        client_phone: clientData.phone,
+        client_address: clientData.address,
+        client_city: clientData.city,
+        client_country: clientData.country,
+        contact_person: clientData.contact_person,
+        created_by: userId,
+        creator_role: userRole,
+        creation_timestamp: new Date().toISOString(),
+        has_tax_id: !!clientData.tax_id,
+        has_registration_number: !!clientData.registration_number
+      },
+      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'CREATION_START' }
+    );
+
     const newClient = await clientService.createClient(pureClientData, cellAssignmentData);
     
+    // ✅ LOG: Successful client creation
+    await req.logEvent(
+      'CLIENT_CREATED',
+      'Client',
+      newClient.client_id,
+      `Successfully created new client: ${newClient.name}`,
+      null,
+      {
+        client_id: newClient.client_id,
+        client_name: newClient.name,
+        client_email: newClient.email,
+        client_phone: newClient.phone,
+        client_address: newClient.address,
+        client_city: newClient.city,
+        client_country: newClient.country,
+        contact_person: newClient.contact_person,
+        tax_id: newClient.tax_id,
+        registration_number: newClient.registration_number,
+        status: newClient.status,
+        created_by: userId,
+        creator_role: userRole,
+        created_at: newClient.created_at,
+        business_impact: 'NEW_CLIENT_AVAILABLE_FOR_ORDERS'
+      },
+      { 
+        operation_type: 'CLIENT_MANAGEMENT', 
+        action_type: 'CREATION_SUCCESS',
+        business_impact: 'CLIENT_ONBOARDED',
+        next_steps: 'CLIENT_CAN_CREATE_DEPARTURE_ORDERS'
+      }
+    );
+
     res.status(201).json({
       success: true,
       message: "Client created and cells assigned successfully",
@@ -88,10 +146,27 @@ async function createClient(req, res) {
     });
   } catch (error) {
     console.error("Error in createClient controller:", error);
-    res.status(400).json({
+    
+    // ✅ LOG: Client creation failure
+    await req.logError(error, {
+      controller: 'client',
+      action: 'createClient',
+      client_data: {
+        name: req.body.name,
+        email: req.body.email,
+        phone: req.body.phone,
+        city: req.body.city,
+        country: req.body.country
+      },
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CLIENT_CREATION_FAILED'
+    });
+    
+    res.status(500).json({
       success: false,
-      message: error.message,
-      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      message: "Error creating client",
+      error: error.message,
     });
   }
 }
@@ -107,6 +182,25 @@ async function getAllClients(req, res) {
       search: req.query.search
     };
 
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Client list access
+    await req.logEvent(
+      'CLIENT_LIST_ACCESSED',
+      'Client',
+      'CLIENT_LIST',
+      `User accessed client list`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString(),
+        query_params: req.query
+      },
+      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'LIST_ACCESS' }
+    );
+
     const clients = await clientService.getAllClients(filters);
     
     res.status(200).json({
@@ -117,10 +211,20 @@ async function getAllClients(req, res) {
     });
   } catch (error) {
     console.error("Error in getAllClients controller:", error);
+    
+    // ✅ LOG: Client list access failure
+    await req.logError(error, {
+      controller: 'client',
+      action: 'getAllClients',
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CLIENT_LIST_ACCESS_FAILED'
+    });
+    
     res.status(500).json({
       success: false,
-      message: error.message,
-      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      message: "Error fetching clients",
+      error: error.message,
     });
   }
 }
@@ -129,7 +233,48 @@ async function getAllClients(req, res) {
 async function getClientById(req, res) {
   try {
     const { client_id } = req.params;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Client details access
+    await req.logEvent(
+      'CLIENT_DETAILS_ACCESSED',
+      'Client',
+      client_id,
+      `User accessed client details for client ${client_id}`,
+      null,
+      {
+        client_id: client_id,
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'DETAILS_ACCESS' }
+    );
+
     const client = await clientService.getClientById(client_id);
+    
+    if (!client) {
+      // ✅ LOG: Client not found
+      await req.logEvent(
+        'CLIENT_NOT_FOUND',
+        'Client',
+        client_id,
+        `Client ${client_id} not found during details access`,
+        null,
+        {
+          client_id: client_id,
+          accessed_by: userId,
+          accessor_role: userRole
+        },
+        { operation_type: 'CLIENT_MANAGEMENT', action_type: 'NOT_FOUND' }
+      );
+      
+      return res.status(404).json({
+        success: false,
+        message: "Client not found"
+      });
+    }
     
     res.status(200).json({
       success: true,
@@ -138,11 +283,22 @@ async function getClientById(req, res) {
     });
   } catch (error) {
     console.error("Error in getClientById controller:", error);
+    
+    // ✅ LOG: Client details access failure
+    await req.logError(error, {
+      controller: 'client',
+      action: 'getClientById',
+      client_id: req.params.client_id,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CLIENT_DETAILS_ACCESS_FAILED'
+    });
+    
     const statusCode = error.message === "Client not found" ? 404 : 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message,
-      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      message: "Error fetching client",
+      error: error.message,
     });
   }
 }
@@ -152,21 +308,94 @@ async function updateClient(req, res) {
   try {
     const { client_id } = req.params;
     const updateData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
     
+    // ✅ LOG: Client update process started
+    await req.logEvent(
+      'CLIENT_UPDATE_STARTED',
+      'Client',
+      client_id,
+      `Started updating client ${client_id}`,
+      null,
+      {
+        client_id: client_id,
+        update_fields: Object.keys(updateData),
+        updated_by: userId,
+        updater_role: userRole,
+        update_timestamp: new Date().toISOString(),
+        has_name_change: !!updateData.name,
+        has_contact_change: !!(updateData.email || updateData.phone),
+        has_address_change: !!(updateData.address || updateData.city || updateData.country),
+        has_status_change: !!updateData.status
+      },
+      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'UPDATE_START' }
+    );
+
     const updatedClient = await clientService.updateClient(client_id, updateData);
     
-    res.status(200).json({
-      success: true,
-      message: "Client updated successfully",
-      data: updatedClient,
-    });
+    if (!updatedClient.success) {
+      // ✅ LOG: Client update failure (not found)
+      await req.logEvent(
+        'CLIENT_UPDATE_FAILED',
+        'Client',
+        client_id,
+        `Client ${client_id} not found during update attempt`,
+        null,
+        {
+          client_id: client_id,
+          update_fields: Object.keys(updateData),
+          updated_by: userId,
+          updater_role: userRole,
+          failure_reason: 'CLIENT_NOT_FOUND'
+        },
+        { operation_type: 'CLIENT_MANAGEMENT', action_type: 'UPDATE_NOT_FOUND' }
+      );
+      
+      return res.status(404).json(updatedClient);
+    }
+
+    // ✅ LOG: Successful client update
+    await req.logEvent(
+      'CLIENT_UPDATED',
+      'Client',
+      client_id,
+      `Successfully updated client ${client_id}`,
+      updatedClient.oldValues,
+      updatedClient.newValues,
+      { 
+        operation_type: 'CLIENT_MANAGEMENT', 
+        action_type: 'UPDATE_SUCCESS',
+        business_impact: updateData.status ? 'CLIENT_STATUS_CHANGED' : 'CLIENT_INFORMATION_UPDATED',
+        changes_summary: {
+          fields_updated: Object.keys(updateData),
+          status_changed: !!updateData.status,
+          contact_info_changed: !!(updateData.email || updateData.phone),
+          address_changed: !!(updateData.address || updateData.city || updateData.country)
+        }
+      }
+    );
+    
+    res.status(200).json(updatedClient);
   } catch (error) {
     console.error("Error in updateClient controller:", error);
+    
+    // ✅ LOG: Client update failure
+    await req.logError(error, {
+      controller: 'client',
+      action: 'updateClient',
+      client_id: req.params.client_id,
+      update_data_keys: Object.keys(req.body || {}),
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CLIENT_UPDATE_FAILED'
+    });
+    
     const statusCode = error.message === "Client not found" ? 404 : 400;
     res.status(statusCode).json({
       success: false,
-      message: error.message,
-      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      message: "Error updating client",
+      error: error.message,
     });
   }
 }
