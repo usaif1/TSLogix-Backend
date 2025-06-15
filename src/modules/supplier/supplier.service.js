@@ -10,12 +10,19 @@ async function createSupplier(supplierData) {
   try {
     const newSupplier = await prisma.supplier.create({
       data: {
-        name: supplierData.name,
-        address: supplierData.address,
-        city: supplierData.city,
-        phone: supplierData.phone,
-        email: supplierData.email,
-        ruc: supplierData.ruc,
+        company_name: supplierData.company_name,
+        category: supplierData.category || null,
+        tax_id: supplierData.tax_id || null,
+        registered_address: supplierData.registered_address || null,
+        city: supplierData.city || null,
+        contact_no: supplierData.contact_no || null,
+        contact_person: supplierData.contact_person || null,
+        notes: supplierData.notes || null,
+        name: supplierData.name || supplierData.company_name,
+        address: supplierData.address || supplierData.registered_address,
+        phone: supplierData.phone || supplierData.contact_no,
+        email: supplierData.email || null,
+        ruc: supplierData.ruc || supplierData.tax_id,
         ...(supplierData.country_id && {
           country: {
             connect: { country_id: supplierData.country_id }
@@ -39,13 +46,46 @@ async function createSupplier(supplierData) {
  */
 async function getAllSuppliers(search) {
   try {
-    // Build filter condition if search term is provided
     const filter = search
       ? {
-          name: {
-            contains: search,
-            mode: "insensitive",
-          },
+          OR: [
+            {
+              company_name: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              category: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              contact_person: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              tax_id: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              name: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              ruc: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+          ],
         }
       : {};
 
@@ -58,11 +98,23 @@ async function getAllSuppliers(search) {
             name: true,
           },
         },
-        EntryOrder: {
+        entryOrderProducts: {
           select: {
-            entry_order_id: true,
-            entry_order_no: true,
+            entry_order_product_id: true,
+            entry_order: {
+              select: {
+                entry_order_id: true,
+                entry_order_no: true,
+                registration_date: true,
+              }
+            }
           },
+          take: 5,
+          orderBy: {
+            entry_order: {
+              registration_date: 'desc'
+            }
+          }
         },
       },
       orderBy: {
@@ -87,20 +139,33 @@ async function getSupplierById(supplierId) {
       where: { supplier_id: supplierId },
       include: {
         country: true,
-        EntryOrder: {
+        entryOrderProducts: {
           select: {
-            entry_order_id: true,
-            entry_order_no: true,
-            registration_date: true,
-            order: {
+            entry_order_product_id: true,
+            product_code: true,
+            serial_number: true,
+            lot_series: true,
+            entry_order: {
               select: {
-                created_at: true,
-                organisation: {
+                entry_order_id: true,
+                entry_order_no: true,
+                registration_date: true,
+                order: {
                   select: {
-                    name: true
+                    created_at: true,
+                    organisation: {
+                      select: {
+                        name: true
+                      }
+                    }
                   }
                 }
               }
+            }
+          },
+          orderBy: {
+            entry_order: {
+              registration_date: 'desc'
             }
           }
         }
@@ -129,13 +194,19 @@ async function updateSupplier(supplierId, supplierData) {
     const updatedSupplier = await prisma.supplier.update({
       where: { supplier_id: supplierId },
       data: {
-        name: supplierData.name,
-        address: supplierData.address,
-        city: supplierData.city,
-        phone: supplierData.phone,
-        email: supplierData.email,
-        ruc: supplierData.ruc,
-        // Connect to country if provided
+        ...(supplierData.company_name !== undefined && { company_name: supplierData.company_name }),
+        ...(supplierData.category !== undefined && { category: supplierData.category }),
+        ...(supplierData.tax_id !== undefined && { tax_id: supplierData.tax_id }),
+        ...(supplierData.registered_address !== undefined && { registered_address: supplierData.registered_address }),
+        ...(supplierData.city !== undefined && { city: supplierData.city }),
+        ...(supplierData.contact_no !== undefined && { contact_no: supplierData.contact_no }),
+        ...(supplierData.contact_person !== undefined && { contact_person: supplierData.contact_person }),
+        ...(supplierData.notes !== undefined && { notes: supplierData.notes }),
+        ...(supplierData.name !== undefined && { name: supplierData.name }),
+        ...(supplierData.address !== undefined && { address: supplierData.address }),
+        ...(supplierData.phone !== undefined && { phone: supplierData.phone }),
+        ...(supplierData.email !== undefined && { email: supplierData.email }),
+        ...(supplierData.ruc !== undefined && { ruc: supplierData.ruc }),
         ...(supplierData.country_id && {
           country: {
             connect: { country_id: supplierData.country_id }
@@ -160,18 +231,17 @@ async function updateSupplier(supplierId, supplierData) {
  */
 async function deleteSupplier(supplierId) {
   try {
-    // Check if supplier has related entry orders
     const supplierWithEntryOrders = await prisma.supplier.findUnique({
       where: { supplier_id: supplierId },
       include: {
-        EntryOrder: {
-          select: { entry_order_id: true }
+        entryOrderProducts: {
+          select: { entry_order_product_id: true }
         }
       }
     });
     
-    if (supplierWithEntryOrders?.EntryOrder?.length > 0) {
-      throw new Error("Cannot delete supplier with related entry orders");
+    if (supplierWithEntryOrders?.entryOrderProducts?.length > 0) {
+      throw new Error("Cannot delete supplier with related entry order products");
     }
     
     const deletedSupplier = await prisma.supplier.delete({
@@ -186,18 +256,49 @@ async function deleteSupplier(supplierId) {
 }
 
 const getCountry = async () => {
-  return prisma.country.findMany();
+  return prisma.country.findMany({
+    orderBy: { name: 'asc' }
+  });
 };
 
+const getSupplierCategories = async () => {
+  try {
+    const categories = await prisma.supplier.findMany({
+      where: {
+        category: {
+          not: null
+        }
+      },
+      select: {
+        category: true
+      },
+      distinct: ['category'],
+      orderBy: {
+        category: 'asc'
+      }
+    });
+    
+    return categories.map(item => item.category).filter(Boolean);
+  } catch (error) {
+    console.error("Error fetching supplier categories:", error);
+    return [];
+  }
+};
 
 const getFormFields = async () => {
   try {
-    const [country] = await Promise.all([
+    const [
+      countries,
+      supplierCategories
+    ] = await Promise.all([
       getCountry(),
+      getSupplierCategories(),
     ]);
 
     return {
-      country,
+      countries,
+      supplierCategories,
+      country: countries,
     };
   } catch (error) {
     throw new Error("Failed to fetch form fields");
@@ -211,4 +312,5 @@ module.exports = {
   updateSupplier,
   deleteSupplier,
   getFormFields,
+  getSupplierCategories,
 };

@@ -440,6 +440,11 @@ model User {
   
   // ✅ NEW: Client cell assignment relations
   clientCellAssignments ClientCellAssignment[] @relation("ClientCellAssigner")
+  
+  // ✅ NEW: Client creation and ownership relations
+  createdClients        Client[]             @relation("ClientCreator")
+  clientUserAccount     Client?              @relation("ClientUser")
+  productAssignments    ClientProductAssignment[] @relation("ProductAssigner")
 
   @@map("users")
 }
@@ -540,6 +545,53 @@ model GroupName {
   @@map("group_names")
 }
 
+// ✅ NEW: Product Category model
+model ProductCategory {
+  category_id     String              @id @default(uuid()) @map("category_id")
+  name            String              @unique
+  description     String?
+  created_at      DateTime            @default(now())
+  
+  // Relations
+  products        Product[]
+  subcategories1  ProductSubCategory1[]
+  
+  @@map("product_categories")
+}
+
+// ✅ NEW: Product Sub Category 1 model
+model ProductSubCategory1 {
+  subcategory1_id String              @id @default(uuid()) @map("subcategory1_id")
+  name            String
+  description     String?
+  category_id     String
+  created_at      DateTime            @default(now())
+  
+  // Relations
+  category        ProductCategory     @relation(fields: [category_id], references: [category_id])
+  products        Product[]
+  subcategories2  ProductSubCategory2[]
+  
+  @@unique([category_id, name], name: "category_subcategory1_unique")
+  @@map("product_subcategories1")
+}
+
+// ✅ NEW: Product Sub Category 2 model
+model ProductSubCategory2 {
+  subcategory2_id String              @id @default(uuid()) @map("subcategory2_id")
+  name            String
+  description     String?
+  subcategory1_id String
+  created_at      DateTime            @default(now())
+  
+  // Relations
+  subcategory1    ProductSubCategory1 @relation(fields: [subcategory1_id], references: [subcategory1_id])
+  products        Product[]
+  
+  @@unique([subcategory1_id, name], name: "subcategory1_subcategory2_unique")
+  @@map("product_subcategories2")
+}
+
 model Country {
   country_id String     @id @default(uuid()) @map("country_id")
   name       String     @unique
@@ -559,17 +611,30 @@ model TemperatureRange {
 }
 
 model Supplier {
-  created_at   DateTime     @default(now())
-  supplier_id String       @id @default(uuid()) @map("supplier_id")
-  name        String
-  address     String?
-  city        String?
-  country_id  String?
-  email       String?
-  phone       String?
-  ruc         String?
-  country     Country?     @relation(fields: [country_id], references: [country_id])
-  entryOrderProducts EntryOrderProduct[]
+  created_at          DateTime     @default(now())
+  supplier_id         String       @id @default(uuid()) @map("supplier_id")
+  
+  // ✅ NEW: Updated supplier fields based on requirements
+  category            String?      // Categoria
+  company_name        String       // Nombre del Proveedor (required)
+  tax_id              String?      // RUC (Tax ID)
+  registered_address  String?      // Dirección Fiscal
+  city                String?      // Ciudad
+  country_id          String?      // Pais (relation to Country)
+  contact_no          String?      // Numero de Contacto
+  contact_person      String?      // Persona de Contacto
+  notes               String?      // Comentario
+  
+  // ✅ DEPRECATED: Keep old fields for backward compatibility (will be removed in future migration)
+  name                String?      // Will be replaced by company_name
+  address             String?      // Will be replaced by registered_address
+  email               String?      // Moved to contact info
+  phone               String?      // Will be replaced by contact_no
+  ruc                 String?      // Will be replaced by tax_id
+  
+  // Relations
+  country             Country?     @relation(fields: [country_id], references: [country_id])
+  entryOrderProducts  EntryOrderProduct[]
 
   @@map("suppliers")
 }
@@ -603,6 +668,12 @@ model Client {
   created_at          DateTime          @default(now())
   updated_at          DateTime          @updatedAt
   
+  // ✅ NEW: Client ownership and user credentials
+  created_by          String            // Warehouse incharge who created this client
+  client_user_id      String            @unique // Auto-generated user account for this client (required, unique)
+  auto_username       String            @unique // Auto-generated username (backend only, required, unique)
+  auto_password_hash  String            // Auto-generated password hash (backend only, required)
+  
   // Commercial client fields (used when client_type = COMMERCIAL)
   company_name        String?           // Company Name
   company_type        CompanyType?      // Private/Public
@@ -618,6 +689,11 @@ model Client {
   
   // Relations
   active_state        ActiveState?      @relation(fields: [active_state_id], references: [state_id])
+  creator             User              @relation("ClientCreator", fields: [created_by], references: [id])
+  clientUser          User              @relation("ClientUser", fields: [client_user_id], references: [id])
+  
+  // ✅ NEW: Client product assignments (each client has their own products)
+  productAssignments  ClientProductAssignment[]
   
   // Client-specific cell assignments
   cellAssignments     ClientCellAssignment[]
@@ -629,6 +705,7 @@ model Client {
   @@index([company_type], map: "idx_client_company_type")
   @@index([establishment_type], map: "idx_client_establishment_type")
   @@index([active_state_id], map: "idx_client_active_state")
+  @@index([created_by], map: "idx_client_created_by") // ✅ NEW: Index for creator lookup
   @@map("clients")
 }
 
@@ -650,7 +727,7 @@ model ClientCellAssignment {
   max_capacity    Decimal?     @db.Decimal(10, 2) // Max capacity for this client
   
   // Relations
-  client          Client       @relation(fields: [client_id], references: [client_id])
+  client          Client       @relation(fields: [client_id], references: [client_id], onDelete: Cascade)
   cell            WarehouseCell @relation(fields: [cell_id], references: [id])
   warehouse       Warehouse    @relation(fields: [warehouse_id], references: [warehouse_id])
   assignedBy      User         @relation("ClientCellAssigner", fields: [assigned_by], references: [id])
@@ -662,32 +739,87 @@ model ClientCellAssignment {
   @@map("client_cell_assignments")
 }
 
+// ✅ NEW: Client-specific product assignments (each client has their own product catalog)
+model ClientProductAssignment {
+  assignment_id     String       @id @default(uuid()) @map("assignment_id")
+  client_id         String       @map("client_id")
+  product_id        String       @map("product_id")
+  
+  // Assignment details
+  assigned_at       DateTime     @default(now())
+  assigned_by       String       // Warehouse incharge who assigned this product
+  is_active         Boolean      @default(true)
+  
+  // Product-specific settings for this client
+  client_product_code String?    // Custom product code for this client
+  client_price        Decimal?   @db.Decimal(10, 2) // Client-specific pricing
+  notes               String?    // Notes about this product assignment
+  
+  // Restrictions and limits
+  max_order_quantity  Int?       // Maximum quantity this client can order
+  min_order_quantity  Int?       // Minimum quantity this client must order
+  
+  // Relations
+  client              Client     @relation(fields: [client_id], references: [client_id], onDelete: Cascade)
+  product             Product    @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+  assignedBy          User       @relation("ProductAssigner", fields: [assigned_by], references: [id])
+
+  @@unique([client_id, product_id], name: "client_product_unique")
+  @@index([client_id], map: "idx_client_product_assignments")
+  @@index([product_id], map: "idx_product_client_assignments")
+  @@index([assigned_by], map: "idx_product_assigner")
+  @@index([is_active], map: "idx_client_product_active")
+  @@map("client_product_assignments")
+}
+
 model Product {
   product_id           String           @id @default(uuid()) @map("product_id")
-  product_code         String           @unique
+  product_code         String           @unique // Codigo del Producto
   created_at           DateTime         @default(now())
-  name                 String
-  product_line_id      String
-  group_id             String
+  name                 String           // Nombre del Producto
+  
+  // ✅ NEW: Updated product fields based on requirements
+  category_id          String?          // Categoria (relation to ProductCategory)
+  subcategory1_id      String?          // Sub-Categoria1 (relation to ProductSubCategory1)
+  subcategory2_id      String?          // Sub category 2 (relation to ProductSubCategory2)
+  manufacturer         String?          // Proveedor (Manufacturer/Supplier)
+  temperature_range_id String?          // Temperatura (relation to TemperatureRange)
+  humidity             String?          // Humedad
+  observations         String?          // Observaciones
+  uploaded_documents   Json?            // Subir Documentos (Document Upload)
+  
+  // ✅ DEPRECATED: Keep old fields for backward compatibility (will be removed in future migration)
+  product_line_id      String?          // Will be replaced by category system
+  group_id             String?          // Will be replaced by category system
   active_state_id      String?
-  humidity             String?
-  manufacturer         String?
-  storage_conditions   String?
-  temperature_range_id String?
+  storage_conditions   String?          // Will be replaced by observations
   unit_weight          Decimal?         @db.Decimal(10, 2) 
   unit_volume          Decimal?         @db.Decimal(10, 2) 
   
+  // Relations
+  category             ProductCategory?     @relation(fields: [category_id], references: [category_id])
+  subcategory1         ProductSubCategory1? @relation(fields: [subcategory1_id], references: [subcategory1_id])
+  subcategory2         ProductSubCategory2? @relation(fields: [subcategory2_id], references: [subcategory2_id])
+  temperature_range    TemperatureRange?    @relation(fields: [temperature_range_id], references: [temperature_range_id])
+  
+  // ✅ DEPRECATED: Old relations (for backward compatibility)
   active_state         ActiveState?     @relation(fields: [active_state_id], references: [state_id])
-  group                GroupName        @relation(fields: [group_id], references: [group_id])
-  product_line         ProductLine      @relation(fields: [product_line_id], references: [product_line_id])
-  temperature_range    TemperatureRange? @relation(fields: [temperature_range_id], references: [temperature_range_id])
+  group                GroupName?       @relation(fields: [group_id], references: [group_id])
+  product_line         ProductLine?     @relation(fields: [product_line_id], references: [product_line_id])
   
   // Relations
   inventory            Inventory[]      @relation(name: "ProductInventory")     
   inventoryLogs        InventoryLog[]   @relation(name: "ProductInventoryLogs")
   entryOrderProducts   EntryOrderProduct[]
   departureOrderProducts DepartureOrderProduct[]
+  
+  // ✅ NEW: Client product assignments (which clients can access this product)
+  clientAssignments    ClientProductAssignment[]
 
+  @@index([category_id], map: "idx_product_category")
+  @@index([subcategory1_id], map: "idx_product_subcategory1")
+  @@index([subcategory2_id], map: "idx_product_subcategory2")
+  @@index([manufacturer], map: "idx_product_manufacturer")
   @@map("products")
 }
 

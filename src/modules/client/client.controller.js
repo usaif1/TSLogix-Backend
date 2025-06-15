@@ -104,7 +104,7 @@ async function createClient(req, res) {
       },
       { operation_type: 'CLIENT_MANAGEMENT', action_type: 'CREATION_START' }
     );
-
+    
     const newClient = await clientService.createClient(pureClientData, cellAssignmentData);
     
     // ✅ LOG: Successful client creation
@@ -138,7 +138,7 @@ async function createClient(req, res) {
         next_steps: 'CLIENT_CAN_CREATE_DEPARTURE_ORDERS'
       }
     );
-
+    
     res.status(201).json({
       success: true,
       message: "Client created and cells assigned successfully",
@@ -331,7 +331,7 @@ async function updateClient(req, res) {
       },
       { operation_type: 'CLIENT_MANAGEMENT', action_type: 'UPDATE_START' }
     );
-
+    
     const updatedClient = await clientService.updateClient(client_id, updateData);
     
     if (!updatedClient.success) {

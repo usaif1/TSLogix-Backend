@@ -1,6 +1,48 @@
 const { PrismaClient } = require("@prisma/client");
 const eventLogger = require("../../utils/eventLogger");
+const bcrypt = require("bcrypt");
 const prisma = new PrismaClient();
+
+// ✅ NEW: Helper function to generate unique username
+function generateUniqueUsername(clientType, companyName, firstName, lastName) {
+  const prefix = "client_";
+  let baseName = "";
+  
+  if (clientType === "COMMERCIAL" && companyName) {
+    // Use first word of company name
+    baseName = companyName.split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
+  } else if (clientType === "INDIVIDUAL" && firstName && lastName) {
+    // Use first name + last name initial
+    baseName = (firstName.toLowerCase() + lastName.charAt(0).toLowerCase()).replace(/[^a-z0-9]/g, "");
+  } else {
+    baseName = "user";
+  }
+  
+  // Add random suffix to ensure uniqueness
+  const randomSuffix = Math.random().toString(36).substring(2, 10);
+  return prefix + baseName.substring(0, 8) + "_" + randomSuffix;
+}
+
+// ✅ NEW: Helper function to generate secure password
+function generateSecurePassword() {
+  const length = 12;
+  const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+  let password = "";
+  
+  // Ensure at least one of each type
+  password += "ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(Math.floor(Math.random() * 26)); // Uppercase
+  password += "abcdefghijklmnopqrstuvwxyz".charAt(Math.floor(Math.random() * 26)); // Lowercase
+  password += "0123456789".charAt(Math.floor(Math.random() * 10)); // Number
+  password += "!@#$%^&*".charAt(Math.floor(Math.random() * 8)); // Special char
+  
+  // Fill the rest randomly
+  for (let i = 4; i < length; i++) {
+    password += charset.charAt(Math.floor(Math.random() * charset.length));
+  }
+  
+  // Shuffle the password
+  return password.split('').sort(() => Math.random() - 0.5).join('');
+}
 
 /**
  * Create a new client (Commercial or Individual) with REQUIRED cell assignment
@@ -195,9 +237,38 @@ async function createClient(clientData, cellAssignmentData = {}) {
       cleanedData.date_of_birth = new Date(cleanedData.date_of_birth);
     }
 
-    // Use transaction to ensure both client creation and cell assignment succeed together
+    // ✅ NEW: Generate auto-credentials for the client
+    const autoUsername = generateUniqueUsername(
+      cleanedData.client_type,
+      cleanedData.company_name,
+      cleanedData.first_names,
+      cleanedData.last_name
+    );
+    const autoPassword = generateSecurePassword();
+    const autoPasswordHash = await bcrypt.hash(autoPassword, 10);
+
+    // Use transaction to ensure both client creation, user creation, and cell assignment succeed together
     const result = await prisma.$transaction(async (tx) => {
-      // Create the client
+      // ✅ NEW: First create the user account for the client
+      const clientUser = await tx.user.create({
+        data: {
+          user_id: autoUsername,  // ✅ FIXED: Use correct field name from schema
+          email: cleanedData.email,
+          password_hash: autoPasswordHash,  // ✅ FIXED: Use correct field name from schema
+          role: { connect: { name: "CLIENT" } },
+          organisation: { connect: { organisation_id: cellAssignmentData.organisation_id || "cf052739-c060-458c-abd1-63fb0aaef5d4" } }, // Default org for now
+          first_name: cleanedData.first_names || cleanedData.company_name?.split(" ")[0] || "Client",
+          last_name: cleanedData.last_name || cleanedData.company_name?.split(" ").slice(1).join(" ") || "User"
+          // ✅ REMOVED: created_at and updated_at (handled automatically by Prisma)
+        }
+      });
+
+      // Create the client with auto-generated credentials
+      cleanedData.created_by = cellAssignmentData.assigned_by;
+      cleanedData.client_user_id = clientUser.id;
+      cleanedData.auto_username = autoUsername;
+      cleanedData.auto_password_hash = autoPasswordHash;
+      
       const newClient = await tx.client.create({
         data: cleanedData
       });
@@ -268,7 +339,7 @@ async function createClient(clientData, cellAssignmentData = {}) {
       }
 
       // Return client with assignments (fetch after creation)
-      return await tx.client.findUnique({
+      const clientWithAssignments = await tx.client.findUnique({
         where: { client_id: newClient.client_id },
         include: {
           active_state: true,
@@ -288,6 +359,16 @@ async function createClient(clientData, cellAssignmentData = {}) {
           }
         }
       });
+
+      // ✅ NEW: Add auto-generated credentials to response (for backend logging only)
+      return {
+        ...clientWithAssignments,
+        _autoCredentials: {
+          username: autoUsername,
+          password: autoPassword, // Plain text password for backend logging only
+          note: "These credentials are auto-generated and should be securely communicated to the client"
+        }
+      };
     }, {
       timeout: 15000 // Increase timeout to 15 seconds for client creation
     });

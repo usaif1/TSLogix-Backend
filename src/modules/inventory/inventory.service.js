@@ -144,7 +144,8 @@ async function getApprovedEntryOrdersForInventory(organisationId = null) {
         
         return {
           ...product,
-          supplier_name: product.supplier?.name,
+          // ✅ NEW: Support both old and new supplier fields
+          supplier_name: product.supplier?.company_name || product.supplier?.name,
           allocated_quantity: allocatedQuantity,
           remaining_quantity: product.inventory_quantity - allocatedQuantity,
         };
@@ -264,7 +265,8 @@ async function getEntryOrderProductsForInventory(entryOrderId) {
 
     return {
       ...product,
-      supplier_name: product.supplier?.name,
+      // ✅ NEW: Support both old and new supplier fields
+      supplier_name: product.supplier?.company_name || product.supplier?.name,
       allocated_quantity: allocatedQuantity,
       remaining_quantity: product.inventory_quantity - allocatedQuantity,
       allocated_weight: allocatedWeight,

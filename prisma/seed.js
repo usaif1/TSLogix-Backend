@@ -443,21 +443,39 @@ async function createSuppliersAndCustomers() {
   }
 }
 
-// ✅ NEW: Function to create clients with both commercial and individual types
+// ✅ NEW: Function to create clients with warehouse incharge ownership and auto-generated credentials
 async function createClients() {
   try {
-    console.log("Creating clients (commercial and individual)...");
+    console.log("Creating clients with warehouse incharge ownership and auto-generated credentials...");
     
     const activeStates = await prisma.activeState.findMany();
     const activeState = activeStates.find(s => s.name === "Active").state_id;
     const inactiveState = activeStates.find(s => s.name === "Inactive").state_id;
     
-    const clients = [];
+    // Get warehouse incharge users (they will create the clients)
+    const warehouseIncharges = await prisma.user.findMany({
+      where: { role: { name: "WAREHOUSE_INCHARGE" } }
+    });
+    
+    if (warehouseIncharges.length === 0) {
+      console.log("⚠️ No warehouse incharge users found to create clients");
+      return { commercialCount: 0, individualCount: 0 };
+    }
+    
+    const createdClients = [];
     
     // Create commercial clients (60% of total)
     const commercialCount = Math.floor(COUNT.CLIENTS * 0.6);
     for (let i = 0; i < commercialCount; i++) {
-      clients.push({
+      const creator = faker.helpers.arrayElement(warehouseIncharges);
+      const companyName = faker.company.name();
+      
+      // Auto-generate username and password
+      const autoUsername = `client_${faker.string.alphanumeric(8).toLowerCase()}`;
+      const autoPassword = `${faker.string.alphanumeric(6)}${faker.number.int({ min: 100, max: 999 })}`;
+      const autoPasswordHash = await bcrypt.hash(autoPassword, 10);
+      
+      const clientData = {
         client_type: ClientType.COMMERCIAL,
         
         // Common fields
@@ -470,8 +488,13 @@ async function createClients() {
           { weight: 15, value: inactiveState }
         ]),
         
+        // ✅ NEW: Client ownership and auto-generated credentials
+        created_by: creator.id,
+        auto_username: autoUsername,
+        auto_password_hash: autoPasswordHash, // Store hashed password
+        
         // Commercial client fields (all required)
-        company_name: faker.company.name(),
+        company_name: companyName,
         company_type: faker.helpers.arrayElement([CompanyType.PRIVATE, CompanyType.PUBLIC]),
         establishment_type: faker.helpers.arrayElement([
           EstablishmentType.ALMACEN_ESPECIALIZADO,
@@ -480,7 +503,7 @@ async function createClients() {
           EstablishmentType.DROGUERIA,
           EstablishmentType.FARMACIA,
           EstablishmentType.OTROS
-        ]), // Removed SELECCIONAR as it's not a valid choice
+        ]),
         ruc: `20${faker.string.numeric(9)}`,
         
         // Clear individual fields
@@ -489,17 +512,49 @@ async function createClients() {
         mothers_last_name: null,
         individual_id: null,
         date_of_birth: null,
+      };
+      
+      // Create client
+      const client = await prisma.client.create({ data: clientData });
+      
+      // Create user account for client
+      const clientUser = await prisma.user.create({
+        data: {
+          user_id: autoUsername,
+          email: client.email || `${autoUsername}@client.local`,
+          password_hash: autoPasswordHash,
+          first_name: companyName.split(' ')[0],
+          last_name: "Client",
+          organisation_id: creator.organisation_id,
+          role_id: (await prisma.role.findFirst({ where: { name: "CLIENT" } })).role_id,
+          active_state_id: activeState,
+          assigned_clients: [], // Clients don't need client assignments
+        }
       });
+      
+      // Link client to user account
+      await prisma.client.update({
+        where: { client_id: client.client_id },
+        data: { client_user_id: clientUser.id }
+      });
+      
+      createdClients.push({ ...client, plainPassword: autoPassword });
     }
     
     // Create individual clients (40% of total)
     const individualCount = COUNT.CLIENTS - commercialCount;
     for (let i = 0; i < individualCount; i++) {
+      const creator = faker.helpers.arrayElement(warehouseIncharges);
       const firstName = faker.person.firstName();
       const lastName = faker.person.lastName();
       const mothersLastName = faker.person.lastName();
       
-      clients.push({
+      // Auto-generate username and password
+      const autoUsername = `client_${faker.string.alphanumeric(8).toLowerCase()}`;
+      const autoPassword = `${faker.string.alphanumeric(6)}${faker.number.int({ min: 100, max: 999 })}`;
+      const autoPasswordHash = await bcrypt.hash(autoPassword, 10);
+      
+      const clientData = {
         client_type: ClientType.INDIVIDUAL,
         
         // Common fields
@@ -511,6 +566,11 @@ async function createClients() {
           { weight: 90, value: activeState },
           { weight: 10, value: inactiveState }
         ]),
+        
+        // ✅ NEW: Client ownership and auto-generated credentials
+        created_by: creator.id,
+        auto_username: autoUsername,
+        auto_password_hash: autoPasswordHash, // Store hashed password
         
         // Individual client fields
         first_names: `${firstName} ${faker.person.middleName()}`,
@@ -524,22 +584,52 @@ async function createClients() {
         company_type: null,
         establishment_type: null,
         ruc: null,
+      };
+      
+      // Create client
+      const client = await prisma.client.create({ data: clientData });
+      
+      // Create user account for client
+      const clientUser = await prisma.user.create({
+        data: {
+          user_id: autoUsername,
+          email: client.email || `${autoUsername}@client.local`,
+          password_hash: autoPasswordHash,
+          first_name: firstName,
+          last_name: lastName,
+          middle_name: mothersLastName,
+          organisation_id: creator.organisation_id,
+          role_id: (await prisma.role.findFirst({ where: { name: "CLIENT" } })).role_id,
+          active_state_id: activeState,
+          assigned_clients: [], // Clients don't need client assignments
+        }
       });
+      
+      // Link client to user account
+      await prisma.client.update({
+        where: { client_id: client.client_id },
+        data: { client_user_id: clientUser.id }
+      });
+      
+      createdClients.push({ ...client, plainPassword: autoPassword });
     }
     
-    // Create clients in batches to avoid memory issues
-    const batchSize = 10;
-    for (let i = 0; i < clients.length; i += batchSize) {
-      const batch = clients.slice(i, i + batchSize);
-      await prisma.client.createMany({ 
-        data: batch, 
-        skipDuplicates: true 
-      });
-    }
+    console.log(`✅ Clients created with auto-generated credentials: ${commercialCount} commercial, ${individualCount} individual`);
+    console.log(`✅ Auto-generated usernames and passwords are stored in backend only (not exposed to frontend)`);
     
-    console.log(`✅ Clients created: ${commercialCount} commercial, ${individualCount} individual`);
+    // ✅ Store auto-generated credentials for logging (admin access only)
+    const credentialsSummary = createdClients.map(client => ({
+      client_id: client.client_id,
+      client_name: client.company_name || `${client.first_names} ${client.last_name}`,
+      username: client.auto_username,
+      password: client.plainPassword, // Only in seed log, not stored in DB
+      created_by: client.created_by
+    }));
     
-    return { commercialCount, individualCount };
+    console.log('\n📝 CLIENT CREDENTIALS SUMMARY (Backend Only - DO NOT EXPOSE TO FRONTEND):');
+    console.table(credentialsSummary);
+    
+    return { commercialCount, individualCount, createdClients: credentialsSummary };
   } catch (error) {
     console.error("❌ Error creating clients:", error);
     throw error;
@@ -588,6 +678,89 @@ async function assignClientsToWarehouseAssistants() {
     console.log("✅ Client assignments completed");
   } catch (error) {
     console.error("❌ Error assigning clients to warehouse assistants:", error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Function to assign products to clients (each client gets their own product catalog)
+async function createClientProductAssignments() {
+  try {
+    console.log("Creating client-specific product assignments...");
+    
+    const clients = await prisma.client.findMany({
+      include: { creator: true }
+    });
+    
+    const products = await prisma.product.findMany();
+    
+    if (clients.length === 0 || products.length === 0) {
+      console.log("⚠️ No clients or products found for assignments");
+      return;
+    }
+    
+    const assignments = [];
+    
+    for (const client of clients) {
+      // Each client gets a random subset of products (30-70% of all products)
+      const productCount = faker.number.int({ 
+        min: Math.floor(products.length * 0.3), 
+        max: Math.floor(products.length * 0.7) 
+      });
+      
+      const assignedProducts = faker.helpers.arrayElements(products, productCount);
+      
+      for (const product of assignedProducts) {
+        assignments.push({
+          client_id: client.client_id,
+          product_id: product.product_id,
+          assigned_by: client.created_by, // Warehouse incharge who created the client
+          client_product_code: `C${faker.string.numeric(3)}-${product.product_code}`, // Custom code for client
+          client_price: faker.helpers.maybe(() => 
+            parseFloat(faker.commerce.price({ min: 10, max: 500 })), 
+            { probability: 0.7 }
+          ),
+          notes: faker.helpers.maybe(() => 
+            `Special pricing for ${client.company_name || client.first_names}`,
+            { probability: 0.3 }
+          ),
+          max_order_quantity: faker.helpers.maybe(() => 
+            faker.number.int({ min: 100, max: 1000 }),
+            { probability: 0.5 }
+          ),
+          min_order_quantity: faker.helpers.maybe(() => 
+            faker.number.int({ min: 1, max: 10 }),
+            { probability: 0.3 }
+          ),
+        });
+      }
+    }
+    
+    // Create assignments in batches
+    const batchSize = 50;
+    for (let i = 0; i < assignments.length; i += batchSize) {
+      const batch = assignments.slice(i, i + batchSize);
+      await prisma.clientProductAssignment.createMany({
+        data: batch,
+        skipDuplicates: true
+      });
+    }
+    
+    console.log(`✅ Client product assignments created: ${assignments.length} assignments`);
+    
+    // Create summary by client
+    const clientSummary = {};
+    assignments.forEach(assignment => {
+      if (!clientSummary[assignment.client_id]) {
+        clientSummary[assignment.client_id] = 0;
+      }
+      clientSummary[assignment.client_id]++;
+    });
+    
+    console.log(`✅ Products assigned per client (range: ${Math.min(...Object.values(clientSummary))} - ${Math.max(...Object.values(clientSummary))} products)`);
+    
+    return assignments.length;
+  } catch (error) {
+    console.error("❌ Error creating client product assignments:", error);
     throw error;
   }
 }
@@ -721,6 +894,11 @@ async function createProducts() {
       products.push({
         product_code: `PRD-${faker.string.alphanumeric(8).toUpperCase()}`,
         name: faker.commerce.productName(),
+        // ✅ NEW: Use new category system (with fallback to old system)
+        category_id: faker.helpers.maybe(() => faker.helpers.arrayElement(productLines).product_line_id, { probability: 0.7 }),
+        subcategory1_id: faker.helpers.maybe(() => faker.helpers.arrayElement(groupNames).group_id, { probability: 0.5 }),
+        
+        // ✅ DEPRECATED: Keep old fields for backward compatibility
         product_line_id: faker.helpers.arrayElement(productLines).product_line_id,
         group_id: faker.helpers.arrayElement(groupNames).group_id,
         temperature_range_id: faker.helpers.maybe(
@@ -730,6 +908,23 @@ async function createProducts() {
         active_state_id: faker.helpers.arrayElement(activeStates).state_id,
         humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
         manufacturer: faker.company.name(),
+        // ✅ NEW: Enhanced product fields
+        observations: faker.helpers.arrayElement([
+          "Store in a cool, dry place",
+          "Refrigerate after opening",
+          "Keep away from direct sunlight",
+          "Store in original packaging",
+          "Keep container tightly closed",
+          "Handle with care - fragile contents",
+          "Temperature sensitive - monitor closely",
+        ]),
+        uploaded_documents: faker.helpers.maybe(() => ({
+          certificates: [`cert_${faker.string.alphanumeric(8)}.pdf`],
+          specifications: [`spec_${faker.string.alphanumeric(8)}.pdf`],
+          msds: [`msds_${faker.string.alphanumeric(8)}.pdf`]
+        }), { probability: 0.3 }),
+        
+        // ✅ DEPRECATED: Keep old field for backward compatibility
         storage_conditions: faker.helpers.arrayElement([
           "Store in a cool, dry place",
           "Refrigerate after opening",
@@ -1161,11 +1356,11 @@ async function createInventoryAllocations() {
       return;
     }
     
-      const warehouseUsers = await prisma.user.findMany({
+    const warehouseUsers = await prisma.user.findMany({
     where: { role: { name: "WAREHOUSE_INCHARGE" } },
-  });
-
-  const availableCells = await prisma.warehouseCell.findMany({
+    });
+    
+    const availableCells = await prisma.warehouseCell.findMany({
       where: { status: CellStatus.AVAILABLE },
       orderBy: [{ row: 'asc' }, { bay: 'asc' }, { position: 'asc' }],
     });
@@ -1315,11 +1510,11 @@ async function createQualityControlTransitions() {
       return;
     }
     
-      const warehouseUsers = await prisma.user.findMany({
+    const warehouseUsers = await prisma.user.findMany({
     where: { role: { name: "WAREHOUSE_INCHARGE" } },
-  });
-
-  // ✅ NEW: Prioritize FIFO test products for approval
+    });
+    
+    // ✅ NEW: Prioritize FIFO test products for approval
     const fifoTestAllocations = quarantineAllocations.filter(allocation => 
       allocation.entry_order_product.guide_number?.startsWith('FIFO-GN')
     );
@@ -1743,9 +1938,10 @@ async function main() {
     await createBaseLookupTables();
     await createUsersAndOrganization();
     await createSuppliersAndCustomers(); 
-    await createClients(); // ✅ NEW: Create clients
+    await createClients(); // ✅ NEW: Create clients with warehouse incharge ownership
     await assignClientsToWarehouseAssistants(); // ✅ NEW: Assign clients to warehouse assistants
     await createProducts();
+    await createClientProductAssignments(); // ✅ NEW: Assign products to clients (client-specific catalogs)
     await createWarehousesAndCells();
     await createClientCellAssignments(); // ✅ NEW: Assign cells to clients
     await createEntryOrdersWithProducts();
@@ -1756,8 +1952,13 @@ async function main() {
     
     await createDepartureOrdersWithProducts();
     
-    console.log("🎉 Database seeded successfully with quarantine flow, FIFO departures, and full user traceability!");
+    console.log("🎉 Database seeded successfully with client-specific product catalogs and auto-generated credentials!");
     console.log("\n📊 Seed Summary:");
+    console.log("   • ✅ CLIENT ISOLATION: Each client has their own product catalog");
+    console.log("   • ✅ WAREHOUSE INCHARGE OWNERSHIP: Clients are created and owned by warehouse incharge users");
+    console.log("   • ✅ AUTO-GENERATED CREDENTIALS: Username/password auto-created for each client (backend only)");
+    console.log("   • ✅ CLIENT-PRODUCT MAPPING: Products are assigned to specific clients only");
+    console.log("   • ✅ ROLE-BASED ACCESS: Clients can only see their assigned products");
     console.log("   • Products start in CUARENTENA (Quarantine)");
     console.log("   • Quality control transitions to APROBADO (Approved), DEVOLUCIONES (Returns), etc.");
     console.log("   • Complete audit trail with user tracking");
@@ -1768,6 +1969,9 @@ async function main() {
     
     // Print some stats
     const stats = await Promise.all([
+      prisma.client.count(),
+      prisma.clientProductAssignment.count(),
+      prisma.user.count({ where: { role: { name: "CLIENT" } } }),
       prisma.inventoryAllocation.count(),
       prisma.qualityControlTransition.count(),
       prisma.systemAuditLog.count(),
@@ -1776,11 +1980,14 @@ async function main() {
     ]);
     
     console.log(`\n📈 Database Stats:`);
-    console.log(`   • Inventory Allocations: ${stats[0]}`);
-    console.log(`   • Quality Transitions: ${stats[1]}`);
-    console.log(`   • Audit Log Entries: ${stats[2]}`);
-    console.log(`   • Approved Inventory: ${stats[3]}`);
-    console.log(`   • Quarantine Inventory: ${stats[4]}`);
+    console.log(`   • Total Clients: ${stats[0]}`);
+    console.log(`   • Client-Product Assignments: ${stats[1]}`);
+    console.log(`   • Client User Accounts: ${stats[2]}`);
+    console.log(`   • Inventory Allocations: ${stats[3]}`);
+    console.log(`   • Quality Transitions: ${stats[4]}`);
+    console.log(`   • Audit Log Entries: ${stats[5]}`);
+    console.log(`   • Approved Inventory: ${stats[6]}`);
+    console.log(`   • Quarantine Inventory: ${stats[7]}`);
     
   } catch (error) {
     console.error("❌ Error seeding database:", error);

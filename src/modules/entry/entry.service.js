@@ -227,8 +227,25 @@ async function getAllEntryOrders(
           // Supplier relation
           supplier: {
             select: {
-              name: true,
               supplier_id: true,
+              // ✅ NEW: Support new supplier fields
+              company_name: true,
+              category: true,
+              tax_id: true,
+              registered_address: true,
+              contact_no: true,
+              contact_person: true,
+              notes: true,
+              
+              // ✅ DEPRECATED: Keep old fields for backward compatibility
+              name: true,
+              address: true,
+              city: true,
+              phone: true,
+              email: true,
+              ruc: true,
+              
+              country: { select: { name: true } },
             },
           },
         },
@@ -725,11 +742,23 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
           supplier: {
             select: {
               supplier_id: true,
+              // ✅ NEW: Support new supplier fields
+              company_name: true,
+              category: true,
+              tax_id: true,
+              registered_address: true,
+              contact_no: true,
+              contact_person: true,
+              notes: true,
+              
+              // ✅ DEPRECATED: Keep old fields for backward compatibility
               name: true,
               address: true,
               city: true,
               phone: true,
               email: true,
+              ruc: true,
+              
               country: { select: { name: true } },
             },
           },
@@ -810,8 +839,12 @@ async function getEntryOrderByNo(orderNo, organisationId = null) {
     return {
       ...product,
       inventoryAllocations: allocations,
-      supplier_name: product.supplier?.name,
+      // ✅ NEW: Support both old and new supplier fields
+      supplier_name: product.supplier?.company_name || product.supplier?.name,
       supplier_country: product.supplier?.country?.name,
+      supplier_contact: product.supplier?.contact_person,
+      supplier_phone: product.supplier?.contact_no || product.supplier?.phone,
+      supplier_address: product.supplier?.registered_address || product.supplier?.address,
     };
   });
 
@@ -1063,7 +1096,7 @@ async function updateEntryOrder(orderNo, updateData, userId) {
     // Check if user has permission to update this order
     if (existingOrder.created_by !== userId) {
       // ✅ UPDATED: Since only CLIENTs can update entry orders, they can only update their own
-      throw new Error("You can only update your own entry orders");
+        throw new Error("You can only update your own entry orders");
     }
 
     // 3. ✅ FIXED: Prepare update data based on your actual schema
@@ -1246,7 +1279,15 @@ async function updateEntryOrder(orderNo, updateData, userId) {
         products: {
           include: {
             product: { select: { product_code: true, name: true } },
-            supplier: { select: { name: true } },
+            supplier: { 
+          select: { 
+            // ✅ NEW: Support new supplier fields
+            company_name: true,
+            contact_person: true,
+            // ✅ DEPRECATED: Keep old field for backward compatibility
+            name: true 
+          } 
+        },
           },
         },
         origin: { select: { name: true, type: true } },

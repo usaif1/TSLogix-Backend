@@ -331,7 +331,8 @@ async function getProductsWithInventory(warehouseId = null) {
       acc[key].total_weight += parseFloat(inventory.current_weight || 0);
       acc[key].total_volume += parseFloat(inventory.current_volume || 0);
       acc[key].entry_orders.add(allocation.entry_order_product.entry_order.entry_order_no);
-      acc[key].suppliers.add(allocation.entry_order_product.supplier?.name || 'N/A');
+      // ✅ NEW: Support both old and new supplier fields
+      acc[key].suppliers.add(allocation.entry_order_product.supplier?.company_name || allocation.entry_order_product.supplier?.name || 'N/A');
       acc[key].warehouses.add(allocation.cell.warehouse.name);
 
       // ✅ Add location with FIFO data (already sorted by entry_date_time)
@@ -346,7 +347,8 @@ async function getProductsWithInventory(warehouseId = null) {
         warehouse_id: allocation.cell.warehouse.warehouse_id,
         entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
         entry_date_time: allocation.entry_order_product.entry_order.entry_date_time, // ✅ FIFO key
-        supplier_name: allocation.entry_order_product.supplier?.name,
+        // ✅ NEW: Support both old and new supplier fields
+        supplier_name: allocation.entry_order_product.supplier?.company_name || allocation.entry_order_product.supplier?.name,
         presentation: allocation.presentation,
         available_quantity: inventory.current_quantity,
         available_packages: inventory.current_package_quantity,

@@ -9,11 +9,19 @@ async function createSupplier(req, res) {
   try {
     const supplierData = req.body;
     
-    // Validate required fields
-    if (!supplierData.name) {
+    // ✅ NEW: Validate required company_name field
+    if (!supplierData.company_name) {
       return res.status(400).json({
         success: false,
-        message: "Supplier name is required"
+        message: "Company name is required"
+      });
+    }
+    
+    // ✅ DEPRECATED: Keep backward compatibility check for old 'name' field
+    if (!supplierData.name && !supplierData.company_name) {
+      return res.status(400).json({
+        success: false,
+        message: "Supplier name or company name is required"
       });
     }
     
@@ -105,11 +113,12 @@ async function updateSupplier(req, res) {
     const { id } = req.params;
     const supplierData = req.body;
     
-    // Validate required fields
-    if (!supplierData.name) {
+    // ✅ NEW: Validate company_name if provided (not required for updates)
+    // ✅ DEPRECATED: Keep backward compatibility check for old 'name' field
+    if (!supplierData.company_name && !supplierData.name) {
       return res.status(400).json({
         success: false,
-        message: "Supplier name is required"
+        message: "Company name or supplier name is required"
       });
     }
     
@@ -166,10 +175,10 @@ async function deleteSupplier(req, res) {
       });
     }
     
-    if (error.message.includes("Cannot delete supplier with related entry orders")) {
+    if (error.message.includes("Cannot delete supplier with related entry order products")) {
       return res.status(400).json({
         success: false,
-        message: "Cannot delete supplier with related entry orders",
+        message: "Cannot delete supplier with related entry order products",
         error: error.message
       });
     }
@@ -182,9 +191,8 @@ async function deleteSupplier(req, res) {
   }
 }
 
-
 /**
- * Get form fields: productLines, groups, and temperatureRanges
+ * Get form fields: countries and supplier categories
  */
 async function getFormFields(req, res) {
   try {
@@ -195,6 +203,26 @@ async function getFormFields(req, res) {
   }
 }
 
+// ✅ NEW: Get supplier categories
+async function getSupplierCategories(req, res) {
+  try {
+    const categories = await supplierService.getSupplierCategories();
+    
+    return res.status(200).json({
+      success: true,
+      message: "Supplier categories retrieved successfully",
+      data: categories
+    });
+  } catch (error) {
+    console.error("Error in getSupplierCategories controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve supplier categories",
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   createSupplier,
   getAllSuppliers,
@@ -202,4 +230,7 @@ module.exports = {
   updateSupplier,
   deleteSupplier,
   getFormFields,
+  
+  // ✅ NEW: Category system controller
+  getSupplierCategories,
 };

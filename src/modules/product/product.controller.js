@@ -20,9 +20,19 @@ async function createProduct(req, res) {
         product_name: productData.name,
         product_code: productData.product_code,
         manufacturer: productData.manufacturer,
+        
+        // ✅ NEW: Log new category fields
+        category_id: productData.category_id,
+        subcategory1_id: productData.subcategory1_id,
+        subcategory2_id: productData.subcategory2_id,
+        observations: productData.observations,
+        has_uploaded_documents: !!productData.uploaded_documents,
+        
+        // ✅ DEPRECATED: Keep old fields for backward compatibility
         product_line_id: productData.product_line_id,
         group_id: productData.group_id,
         temperature_range_id: productData.temperature_range_id,
+        
         created_by: userId,
         creator_role: userRole,
         creation_timestamp: new Date().toISOString(),
@@ -46,9 +56,19 @@ async function createProduct(req, res) {
         product_name: product.name,
         product_code: product.product_code,
         manufacturer: product.manufacturer,
+        
+        // ✅ NEW: Log new category fields
+        category_id: product.category_id,
+        subcategory1_id: product.subcategory1_id,
+        subcategory2_id: product.subcategory2_id,
+        observations: product.observations,
+        uploaded_documents: product.uploaded_documents,
+        
+        // ✅ DEPRECATED: Keep old fields for backward compatibility
         product_line_id: product.product_line_id,
         group_id: product.group_id,
         temperature_range_id: product.temperature_range_id,
+        
         description: product.description,
         specifications: product.specifications,
         created_by: userId,
@@ -76,6 +96,10 @@ async function createProduct(req, res) {
         name: req.body.name,
         product_code: req.body.product_code,
         manufacturer: req.body.manufacturer,
+        category_id: req.body.category_id,
+        subcategory1_id: req.body.subcategory1_id,
+        subcategory2_id: req.body.subcategory2_id,
+        // ✅ DEPRECATED: Keep old fields
         product_line_id: req.body.product_line_id,
         group_id: req.body.group_id
       },
@@ -97,6 +121,13 @@ async function getAllProducts(req, res) {
     const userRole = req.user?.role;
     
     const filters = {
+      // ✅ NEW: Category-based filters
+      category_id: req.query.category_id,
+      subcategory1_id: req.query.subcategory1_id,
+      subcategory2_id: req.query.subcategory2_id,
+      manufacturer: req.query.manufacturer,
+      
+      // ✅ DEPRECATED: Keep old filters for backward compatibility
       product_line_id: req.query.product_line_id,
       group_id: req.query.group_id,
       name: req.query.name,
@@ -114,12 +145,13 @@ async function getAllProducts(req, res) {
         accessor_role: userRole,
         access_timestamp: new Date().toISOString(),
         filters_applied: filters,
-        has_filters: !!(filters.product_line_id || filters.group_id || filters.name)
+        has_filters: !!(filters.category_id || filters.subcategory1_id || filters.subcategory2_id || 
+                       filters.manufacturer || filters.product_line_id || filters.group_id || filters.name)
       },
       { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'LIST_ACCESS' }
     );
 
-    const products = await ProductService.getAllProducts(filters);
+    const products = await ProductService.getAllProducts(filters, userRole, userId);
     
     res.json(products);
   } catch (error) {
@@ -517,12 +549,142 @@ async function getFormFields(req, res) {
   }
 }
 
+// ✅ NEW: Get product categories
+async function getProductCategories(req, res) {
+  try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Product categories access
+    await req.logEvent(
+      'PRODUCT_CATEGORIES_ACCESSED',
+      'ProductCategory',
+      'PRODUCT_CATEGORIES_LIST',
+      `User accessed product categories list`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'CATEGORY_DATA_ACCESS' }
+    );
+
+    const categories = await ProductService.getProductCategories();
+    res.json(categories);
+  } catch (error) {
+    console.error('Error fetching product categories:', error);
+    
+    // ✅ LOG: Product categories access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getProductCategories',
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'PRODUCT_CATEGORIES_ACCESS_FAILED'
+    });
+    
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// ✅ NEW: Get subcategories1 for a category
+async function getSubCategories1(req, res) {
+  try {
+    const { categoryId } = req.query;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Subcategories1 access
+    await req.logEvent(
+      'PRODUCT_SUBCATEGORIES1_ACCESSED',
+      'ProductSubCategory1',
+      'SUBCATEGORIES1_LIST',
+      `User accessed subcategories1 list${categoryId ? ` for category ${categoryId}` : ''}`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        category_id: categoryId,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'SUBCATEGORY_DATA_ACCESS' }
+    );
+
+    const subcategories = await ProductService.getSubCategories1(categoryId);
+    res.json(subcategories);
+  } catch (error) {
+    console.error('Error fetching subcategories1:', error);
+    
+    // ✅ LOG: Subcategories1 access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getSubCategories1',
+      category_id: req.query.categoryId,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'SUBCATEGORIES1_ACCESS_FAILED'
+    });
+    
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// ✅ NEW: Get subcategories2 for a subcategory1
+async function getSubCategories2(req, res) {
+  try {
+    const { subcategory1Id } = req.query;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // ✅ LOG: Subcategories2 access
+    await req.logEvent(
+      'PRODUCT_SUBCATEGORIES2_ACCESSED',
+      'ProductSubCategory2',
+      'SUBCATEGORIES2_LIST',
+      `User accessed subcategories2 list${subcategory1Id ? ` for subcategory1 ${subcategory1Id}` : ''}`,
+      null,
+      {
+        accessed_by: userId,
+        accessor_role: userRole,
+        subcategory1_id: subcategory1Id,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'SUBCATEGORY_DATA_ACCESS' }
+    );
+
+    const subcategories = await ProductService.getSubCategories2(subcategory1Id);
+    res.json(subcategories);
+  } catch (error) {
+    console.error('Error fetching subcategories2:', error);
+    
+    // ✅ LOG: Subcategories2 access failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'getSubCategories2',
+      subcategory1_id: req.query.subcategory1Id,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'SUBCATEGORIES2_ACCESS_FAILED'
+    });
+    
+    res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   createProduct,
   getAllProducts,
   getProductById,
   updateProduct,
   deleteProduct,
+  
+  // ✅ NEW: Category system controllers
+  getProductCategories,
+  getSubCategories1,
+  getSubCategories2,
+  
+  // ✅ DEPRECATED: Keep old controllers for backward compatibility
   getProductLines,
   getGroups,
   getTemperatureRanges,
