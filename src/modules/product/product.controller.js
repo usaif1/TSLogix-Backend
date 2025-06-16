@@ -42,7 +42,7 @@ async function createProduct(req, res) {
       { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'CREATION_START' }
     );
 
-    const product = await ProductService.createProduct(productData);
+    const product = await ProductService.createProduct(productData, userId, userRole);
 
     // ✅ LOG: Successful product creation
     await req.logEvent(

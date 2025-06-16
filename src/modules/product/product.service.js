@@ -24,13 +24,14 @@ const generateProductCode = async () => {
   return productCode;
 };
 
-const createProduct = async (data) => {
+const createProduct = async (data, createdByUserId = null, userRole = null) => {
   // ✅ NEW: Auto-generate product code if not provided
   if (!data.product_code) {
     data.product_code = await generateProductCode();
   }
   
-  return prisma.product.create({
+  // Create the product first
+  const newProduct = await prisma.product.create({
     data: {
       // ✅ REQUIRED: Product code and name
       product_code: data.product_code,
@@ -87,6 +88,38 @@ const createProduct = async (data) => {
       active_state: { select: { name: true } },
     },
   });
+  
+  // ✅ NEW: Auto-assign product to CLIENT who created it
+  if (userRole === "CLIENT" && createdByUserId) {
+    try {
+      // Find the client associated with this user
+      const clientUser = await prisma.user.findUnique({
+        where: { id: createdByUserId },
+        include: { clientUserAccount: true }
+      });
+      
+      if (clientUser?.clientUserAccount) {
+        // Create client-product assignment
+        await prisma.clientProductAssignment.create({
+          data: {
+            client_id: clientUser.clientUserAccount.client_id,
+            product_id: newProduct.product_id,
+            assigned_by: createdByUserId,
+            client_product_code: `C${Math.floor(Math.random() * 1000)}-${newProduct.product_code}`,
+            notes: `Auto-assigned to client who created the product: ${newProduct.name}`,
+            is_active: true,
+          }
+        });
+        
+        console.log(`✅ Auto-assigned product ${newProduct.product_code} to client ${clientUser.clientUserAccount.client_id}`);
+      }
+    } catch (error) {
+      console.error(`⚠️ Failed to auto-assign product to client:`, error.message);
+      // Don't throw error - product creation was successful, assignment failed
+    }
+  }
+  
+  return newProduct;
 };
 
 const getAllProducts = async (filters = {}, userRole = null, userId = null) => {
