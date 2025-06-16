@@ -9,6 +9,16 @@ const productController = require('./product.controller');
 // This prevents static routes (e.g., '/form-fields') from being interpreted as dynamic parameters (e.g., '/:id').
 router.get('/form-fields', productController.getFormFields);
 
+// ✅ NEW: Category system routes
+router.get('/categories', productController.getProductCategories);
+router.get('/subcategories1', productController.getSubCategories1);
+router.get('/subcategories2', productController.getSubCategories2);
+
+// ✅ DEPRECATED: Keep old routes for backward compatibility
+router.get('/product-lines', productController.getProductLines);
+router.get('/groups', productController.getGroups);
+router.get('/temperature-ranges', productController.getTemperatureRanges);
+
 router.route('/')
   .post(productController.createProduct)
   .get(productController.getAllProducts);

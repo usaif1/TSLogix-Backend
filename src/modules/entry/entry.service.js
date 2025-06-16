@@ -442,9 +442,8 @@ async function getEntryFormFields() {
       },
     }),
     prisma.product.findMany({
-      where: {
-        active_state: { name: "Active" },
-      },
+      // ✅ FIXED: Remove restrictive active_state filter since products don't have active_state set
+      // Most products have active_state_id as null, so we'll get all products
       select: {
         product_id: true,
         product_code: true,

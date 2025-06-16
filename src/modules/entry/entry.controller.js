@@ -318,8 +318,8 @@ async function getAllEntryOrders(req, res) {
       return res.status(403).json({ message: "Authorization required" });
     }
 
-    // ✅ UPDATED: Admin can see all orders, others see only their organization's orders
-    const filterOrg = userRole === "ADMIN" ? null : organisationId;
+    // ✅ UPDATED: Admin and Warehouse Incharge can see all orders, others see only their organization's orders
+    const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
     
     // ✅ UPDATED: Changed sort field to match new schema
     const sortOptions = { 
@@ -389,13 +389,13 @@ async function getEntryOrderByNo(req, res) {
   try {
     const { orderNo } = req.params;
     const organisationId = req.user?.organisation_id;
-    const userRole = req.user?.role?.name;
+    const userRole = req.user?.role;
 
     if (!organisationId) {
       return res.status(403).json({ message: "Authorization required" });
     }
 
-    const filterOrg = userRole === "ADMIN" ? null : organisationId;
+    const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
     const entryOrder = await entryService.getEntryOrderByNo(orderNo, filterOrg);
 
     if (!entryOrder) {
@@ -437,7 +437,7 @@ async function getApprovedEntryOrders(req, res) {
       });
     }
 
-    const filterOrg = userRole === "ADMIN" ? null : organisationId;
+    const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
     const approvedOrders = await entryService.getApprovedEntryOrders(filterOrg, searchNo);
 
     return res.status(200).json({
@@ -638,7 +638,7 @@ async function getEntryOrdersByStatus(req, res) {
       });
     }
 
-    const filterOrg = userRole === "ADMIN" ? null : organisationId;
+    const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
     const orders = await entryService.getEntryOrdersByStatus(status.toUpperCase(), filterOrg);
 
     return res.status(200).json({

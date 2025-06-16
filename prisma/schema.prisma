@@ -445,6 +445,7 @@ model User {
   createdClients        Client[]             @relation("ClientCreator")
   clientUserAccount     Client?              @relation("ClientUser")
   productAssignments    ClientProductAssignment[] @relation("ProductAssigner")
+  supplierAssignments   ClientSupplierAssignment[] @relation("SupplierAssigner")
 
   @@map("users")
 }
@@ -635,6 +636,9 @@ model Supplier {
   // Relations
   country             Country?     @relation(fields: [country_id], references: [country_id])
   entryOrderProducts  EntryOrderProduct[]
+  
+  // ✅ NEW: Client supplier assignments (which clients can access this supplier)
+  clientAssignments   ClientSupplierAssignment[]
 
   @@map("suppliers")
 }
@@ -694,6 +698,9 @@ model Client {
   
   // ✅ NEW: Client product assignments (each client has their own products)
   productAssignments  ClientProductAssignment[]
+  
+  // ✅ NEW: Client supplier assignments (each client has their own suppliers)
+  supplierAssignments ClientSupplierAssignment[]
   
   // Client-specific cell assignments
   cellAssignments     ClientCellAssignment[]
@@ -770,6 +777,43 @@ model ClientProductAssignment {
   @@index([assigned_by], map: "idx_product_assigner")
   @@index([is_active], map: "idx_client_product_active")
   @@map("client_product_assignments")
+}
+
+// ✅ NEW: Client-specific supplier assignments (each client has their own supplier catalog)
+model ClientSupplierAssignment {
+  assignment_id       String       @id @default(uuid()) @map("assignment_id")
+  client_id           String       @map("client_id")
+  supplier_id         String       @map("supplier_id")
+  
+  // Assignment details
+  assigned_at         DateTime     @default(now())
+  assigned_by         String       // Warehouse incharge who assigned this supplier
+  is_active           Boolean      @default(true)
+  
+  // Supplier-specific settings for this client
+  client_supplier_code String?     // Custom supplier code for this client
+  preferred_supplier   Boolean     @default(false) // Mark as preferred supplier for this client
+  credit_limit         Decimal?    @db.Decimal(10, 2) // Credit limit for this client with this supplier
+  payment_terms        String?     // Payment terms (e.g., "Net 30", "COD")
+  notes                String?     // Notes about this supplier assignment
+  
+  // Contact preferences
+  primary_contact      String?     // Primary contact person for this client
+  contact_email        String?     // Specific email for this client
+  contact_phone        String?     // Specific phone for this client
+  
+  // Relations
+  client               Client      @relation(fields: [client_id], references: [client_id], onDelete: Cascade)
+  supplier             Supplier    @relation(fields: [supplier_id], references: [supplier_id], onDelete: Cascade)
+  assignedBy           User        @relation("SupplierAssigner", fields: [assigned_by], references: [id])
+
+  @@unique([client_id, supplier_id], name: "client_supplier_unique")
+  @@index([client_id], map: "idx_client_supplier_assignments")
+  @@index([supplier_id], map: "idx_supplier_client_assignments")
+  @@index([assigned_by], map: "idx_supplier_assigner")
+  @@index([is_active], map: "idx_client_supplier_active")
+  @@index([preferred_supplier], map: "idx_preferred_supplier")
+  @@map("client_supplier_assignments")
 }
 
 model Product {

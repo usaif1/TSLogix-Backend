@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
  * @param {Object} supplierData - The supplier data
  * @returns {Promise<Object>} - The created supplier
  */
-async function createSupplier(supplierData) {
+async function createSupplier(supplierData, userRole = null, userId = null) {
   try {
     const newSupplier = await prisma.supplier.create({
       data: {
@@ -33,6 +33,41 @@ async function createSupplier(supplierData) {
         country: true
       }
     });
+    
+    // ✅ NEW: Auto-assign supplier to client if created by CLIENT role
+    if (userRole === "CLIENT" && userId) {
+      try {
+        // Find the client account for this user
+        const clientUser = await prisma.user.findUnique({
+          where: { id: userId },
+          include: { 
+            clientUserAccount: true
+          }
+        });
+        
+        if (clientUser?.clientUserAccount) {
+          // Create client-supplier assignment
+          await prisma.clientSupplierAssignment.create({
+            data: {
+              client_id: clientUser.clientUserAccount.client_id,
+              supplier_id: newSupplier.supplier_id,
+              assigned_by: userId, // The client user who created it
+              preferred_supplier: false, // Not preferred by default
+              notes: `Auto-assigned when supplier was created by client user`,
+              is_active: true
+            }
+          });
+          
+          console.log(`✅ Auto-assigned supplier ${newSupplier.supplier_id} to client ${clientUser.clientUserAccount.client_id}`);
+        } else {
+          console.log(`⚠️ CLIENT user ${userId} has no client account - cannot auto-assign supplier`);
+        }
+      } catch (assignmentError) {
+        console.error("Error auto-assigning supplier to client:", assignmentError);
+        // Don't throw error - supplier creation succeeded, assignment failed
+      }
+    }
+    
     return newSupplier;
   } catch (error) {
     console.error("Error creating supplier:", error);
@@ -44,53 +79,110 @@ async function createSupplier(supplierData) {
  * Get all suppliers
  * @returns {Promise<Array>} - List of suppliers
  */
-async function getAllSuppliers(search) {
+async function getAllSuppliers(search, userRole = null, userId = null) {
   try {
-    const filter = search
-      ? {
-          OR: [
-            {
-              company_name: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-            {
-              category: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-            {
-              contact_person: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-            {
-              tax_id: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-            {
-              name: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-            {
-              ruc: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-          ],
+    // ✅ NEW: Client-specific filtering for suppliers
+    let whereClause = {};
+    
+    // ✅ CLIENT ROLE: Show only suppliers assigned to this client
+    if (userRole === "CLIENT" && userId) {
+      // For CLIENT role, check if they have a client account with supplier assignments
+      const clientUser = await prisma.user.findUnique({
+        where: { id: userId },
+        include: { 
+          clientUserAccount: {
+            include: {
+              supplierAssignments: {
+                where: { is_active: true }
+              }
+            }
+          }
         }
-      : {};
+      });
+      
+      if (clientUser?.clientUserAccount?.supplierAssignments?.length > 0) {
+        // ✅ NEW CLIENT SYSTEM: Show only assigned suppliers
+        whereClause.clientAssignments = {
+          some: {
+            client_id: clientUser.clientUserAccount.client_id,
+            is_active: true
+          }
+        };
+      } else {
+        // ✅ LEGACY CLIENT: No supplier assignments, return empty array
+        console.log(`⚠️ CLIENT user ${userId} has no supplier assignments - returning empty list`);
+        return [];
+      }
+    }
+    
+    // ✅ WAREHOUSE_ASSISTANT ROLE: Show suppliers for assigned clients only
+    if (userRole === "WAREHOUSE_ASSISTANT" && userId) {
+      const assistantUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { assigned_clients: true }
+      });
+      
+      if (assistantUser?.assigned_clients?.length > 0) {
+        whereClause.clientAssignments = {
+          some: {
+            client_id: { in: assistantUser.assigned_clients },
+            is_active: true
+          }
+        };
+      } else {
+        // No assigned clients, return empty array
+        console.log(`⚠️ WAREHOUSE_ASSISTANT user ${userId} has no assigned clients - returning empty list`);
+        return [];
+      }
+    }
+    
+    // ✅ OTHER ROLES (ADMIN, WAREHOUSE_INCHARGE, PHARMACIST): See all suppliers
+    // No additional filtering needed
+    
+    // Add search filtering
+    if (search) {
+      whereClause.OR = [
+        {
+          company_name: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          category: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          contact_person: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          tax_id: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          name: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          ruc: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+      ];
+    }
 
     const suppliers = await prisma.supplier.findMany({
-      where: filter,
+      where: whereClause,
       include: {
         country: {
           select: {
@@ -116,11 +208,33 @@ async function getAllSuppliers(search) {
             }
           }
         },
+        // ✅ NEW: Include client assignments for transparency
+        clientAssignments: {
+          where: { is_active: true },
+          include: {
+            client: {
+              select: {
+                client_id: true,
+                company_name: true,
+                first_names: true,
+                last_name: true,
+                client_type: true
+              }
+            }
+          }
+        }
       },
       orderBy: {
         created_at: "desc",
       },
     });
+    
+    console.log(`📊 Supplier filtering results for role ${userRole}:`, {
+      total_suppliers: suppliers.length,
+      user_id: userId,
+      has_search: !!search
+    });
+    
     return suppliers;
   } catch (error) {
     console.error("Error fetching suppliers:", error);
@@ -287,23 +401,211 @@ const getSupplierCategories = async () => {
 
 const getFormFields = async () => {
   try {
-    const [
-      countries,
-      supplierCategories
-    ] = await Promise.all([
-      getCountry(),
-      getSupplierCategories(),
-    ]);
-
+    const countries = await getCountry();
+    const categories = await getSupplierCategories();
+    
     return {
       countries,
-      supplierCategories,
-      country: countries,
+      categories
     };
   } catch (error) {
-    throw new Error("Failed to fetch form fields");
+    console.error("Error fetching form fields:", error);
+    throw new Error(`Error fetching form fields: ${error.message}`);
   }
 };
+
+// ✅ NEW: Create client-supplier assignments
+async function createClientSupplierAssignments(assignmentData) {
+  try {
+    const { client_id, supplier_ids, assigned_by, assignment_settings = {} } = assignmentData;
+    
+    // Validate client exists
+    const client = await prisma.client.findUnique({
+      where: { client_id },
+      select: { 
+        client_id: true, 
+        company_name: true, 
+        first_names: true, 
+        last_name: true,
+        client_type: true 
+      }
+    });
+    
+    if (!client) {
+      throw new Error("Client not found");
+    }
+    
+    // Validate suppliers exist
+    const suppliers = await prisma.supplier.findMany({
+      where: { supplier_id: { in: supplier_ids } },
+      select: { supplier_id: true, company_name: true, name: true }
+    });
+    
+    if (suppliers.length !== supplier_ids.length) {
+      throw new Error("One or more suppliers not found");
+    }
+    
+    // Create assignments
+    const assignments = [];
+    for (const supplier of suppliers) {
+      const assignment = await prisma.clientSupplierAssignment.create({
+        data: {
+          client_id,
+          supplier_id: supplier.supplier_id,
+          assigned_by,
+          client_supplier_code: assignment_settings.client_supplier_code || null,
+          preferred_supplier: assignment_settings.preferred_supplier || false,
+          credit_limit: assignment_settings.credit_limit || null,
+          payment_terms: assignment_settings.payment_terms || null,
+          notes: assignment_settings.notes || `Assigned to ${client.company_name || `${client.first_names} ${client.last_name}`}`,
+          primary_contact: assignment_settings.primary_contact || null,
+          contact_email: assignment_settings.contact_email || null,
+          contact_phone: assignment_settings.contact_phone || null,
+        },
+        include: {
+          client: {
+            select: {
+              client_id: true,
+              company_name: true,
+              first_names: true,
+              last_name: true,
+              client_type: true
+            }
+          },
+          supplier: {
+            select: {
+              supplier_id: true,
+              company_name: true,
+              name: true,
+              category: true
+            }
+          },
+          assignedBy: {
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              role: { select: { name: true } }
+            }
+          }
+        }
+      });
+      
+      assignments.push(assignment);
+    }
+    
+    console.log(`✅ Created ${assignments.length} supplier assignments for client ${client_id}`);
+    return assignments;
+  } catch (error) {
+    console.error("Error creating client-supplier assignments:", error);
+    throw new Error(`Error creating client-supplier assignments: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Get client-supplier assignments
+async function getClientSupplierAssignments(client_id) {
+  try {
+    const assignments = await prisma.clientSupplierAssignment.findMany({
+      where: { 
+        client_id,
+        is_active: true 
+      },
+      include: {
+        supplier: {
+          include: {
+            country: true
+          }
+        },
+        assignedBy: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: { select: { name: true } }
+          }
+        }
+      },
+      orderBy: [
+        { preferred_supplier: 'desc' },
+        { assigned_at: 'desc' }
+      ]
+    });
+    
+    return assignments;
+  } catch (error) {
+    console.error("Error fetching client-supplier assignments:", error);
+    throw new Error(`Error fetching client-supplier assignments: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Remove client-supplier assignment
+async function removeClientSupplierAssignment(assignment_id, removed_by) {
+  try {
+    const assignment = await prisma.clientSupplierAssignment.update({
+      where: { assignment_id },
+      data: {
+        is_active: false,
+        notes: `Deactivated by user ${removed_by} on ${new Date().toISOString()}`
+      },
+      include: {
+        client: {
+          select: {
+            client_id: true,
+            company_name: true,
+            first_names: true,
+            last_name: true
+          }
+        },
+        supplier: {
+          select: {
+            supplier_id: true,
+            company_name: true,
+            name: true
+          }
+        }
+      }
+    });
+    
+    console.log(`✅ Removed supplier assignment: ${assignment.supplier.company_name || assignment.supplier.name} from client ${assignment.client.company_name || `${assignment.client.first_names} ${assignment.client.last_name}`}`);
+    return assignment;
+  } catch (error) {
+    console.error("Error removing client-supplier assignment:", error);
+    throw new Error(`Error removing client-supplier assignment: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Get available suppliers for client assignment (not yet assigned)
+async function getAvailableSuppliersForClient(client_id) {
+  try {
+    // Get suppliers that are NOT assigned to this client
+    const availableSuppliers = await prisma.supplier.findMany({
+      where: {
+        clientAssignments: {
+          none: {
+            client_id,
+            is_active: true
+          }
+        }
+      },
+      include: {
+        country: {
+          select: {
+            country_id: true,
+            name: true
+          }
+        }
+      },
+      orderBy: {
+        company_name: 'asc'
+      }
+    });
+    
+    return availableSuppliers;
+  } catch (error) {
+    console.error("Error fetching available suppliers for client:", error);
+    throw new Error(`Error fetching available suppliers for client: ${error.message}`);
+  }
+}
 
 module.exports = {
   createSupplier,
@@ -313,4 +615,8 @@ module.exports = {
   deleteSupplier,
   getFormFields,
   getSupplierCategories,
+  createClientSupplierAssignments,
+  getClientSupplierAssignments,
+  removeClientSupplierAssignment,
+  getAvailableSuppliersForClient,
 };

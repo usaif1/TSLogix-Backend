@@ -402,10 +402,27 @@ async function createSuppliersAndCustomers() {
     
     const suppliers = [];
     for (let i = 0; i < COUNT.SUPPLIERS; i++) {
+      const companyName = faker.company.name();
       suppliers.push({
-        name: faker.company.name(),
-        address: faker.location.streetAddress(),
+        // ✅ NEW: Required company_name field
+        company_name: companyName,
+        category: faker.helpers.arrayElement([
+          "Pharmaceutical",
+          "Medical Equipment", 
+          "Laboratory Supplies",
+          "Healthcare Services",
+          "Biotechnology"
+        ]),
+        tax_id: `RUC${faker.string.numeric(8)}`,
+        registered_address: faker.location.streetAddress(),
         city: faker.location.city(),
+        contact_no: faker.phone.number(),
+        contact_person: faker.person.fullName(),
+        notes: faker.lorem.sentence(),
+        
+        // ✅ DEPRECATED: Keep old fields for backward compatibility
+        name: companyName,
+        address: faker.location.streetAddress(),
         phone: faker.phone.number(),
         email: faker.internet.email({ provider: "supplier.com" }),
         ruc: `RUC${faker.string.numeric(8)}`,
@@ -765,182 +782,91 @@ async function createClientProductAssignments() {
   }
 }
 
-// ✅ UPDATED: Function to create client cell assignments for ALL clients (now mandatory)
-async function createClientCellAssignments() {
+// ✅ NEW: Function to assign suppliers to clients (each client gets their own supplier catalog)
+async function createClientSupplierAssignments() {
   try {
-    console.log("Creating client cell assignments for ALL clients (mandatory)...");
+    console.log("Creating client-specific supplier assignments...");
     
     const clients = await prisma.client.findMany({
-      orderBy: { created_at: 'asc' }
+      include: { creator: true }
     });
     
-    const availableCells = await prisma.warehouseCell.findMany({
-      where: {
-        status: "AVAILABLE",
-        cell_role: "STANDARD" // Only assign standard cells to clients
-      },
-      include: {
-        warehouse: true
-      },
-      orderBy: [
-        { warehouse_id: 'asc' },
-        { row: 'asc' },
-        { bay: 'asc' },
-        { position: 'asc' }
-      ]
-    });
+    const suppliers = await prisma.supplier.findMany();
     
-    const warehouseUsers = await prisma.user.findMany({
-      where: { role: { name: "WAREHOUSE_INCHARGE" } }
-    });
-    
-    if (clients.length === 0) {
-      console.log("⚠️ No clients to assign cells to");
+    if (clients.length === 0 || suppliers.length === 0) {
+      console.log("⚠️ No clients or suppliers found for assignments");
       return;
     }
-    
-    if (availableCells.length === 0) {
-      console.log("⚠️ No available cells for client assignments");
-      return;
-    }
-    
-    if (warehouseUsers.length === 0) {
-      console.log("⚠️ No warehouse users to perform assignments");
-      return;
-    }
-    
-    console.log(`📊 Assigning cells to ${clients.length} clients from ${availableCells.length} available cells`);
     
     const assignments = [];
-    let cellIndex = 0;
     
-    // ✅ Ensure EVERY client gets at least one cell
-    for (let i = 0; i < clients.length; i++) {
-      const client = clients[i];
-      const cellsForClient = faker.number.int({ min: 1, max: 3 }); // 1-3 cells per client
-      const assigner = faker.helpers.arrayElement(warehouseUsers);
+    for (const client of clients) {
+      // Each client gets a random subset of suppliers (40-80% of all suppliers)
+      const supplierCount = faker.number.int({ 
+        min: Math.floor(suppliers.length * 0.4), 
+        max: Math.floor(suppliers.length * 0.8) 
+      });
       
-      let assignedCells = 0;
-      for (let j = 0; j < cellsForClient && cellIndex < availableCells.length; j++) {
-        const cell = availableCells[cellIndex];
-        
+      const assignedSuppliers = faker.helpers.arrayElements(suppliers, supplierCount);
+      
+      for (let i = 0; i < assignedSuppliers.length; i++) {
+        const supplier = assignedSuppliers[i];
         assignments.push({
           client_id: client.client_id,
-          cell_id: cell.id,
-          warehouse_id: cell.warehouse_id,
-          assigned_by: assigner.id,
-          priority: j + 1, // First cell has priority 1, second has priority 2, etc.
-          notes: `Assigned to ${client.client_type === "COMMERCIAL" ? client.company_name : `${client.first_names} ${client.last_name}`} - Priority ${j + 1}`,
-          max_capacity: faker.number.float({ min: 50, max: 100, fractionDigits: 2 }),
+          supplier_id: supplier.supplier_id,
+          assigned_by: client.created_by, // Warehouse incharge who created the client
+          client_supplier_code: `CS${faker.string.numeric(3)}-${supplier.supplier_id.slice(-6)}`, // Custom code for client
+          preferred_supplier: i === 0, // Make first supplier preferred
+          credit_limit: faker.helpers.maybe(() => 
+            parseFloat(faker.commerce.price({ min: 5000, max: 50000 })), 
+            { probability: 0.8 }
+          ),
+          payment_terms: faker.helpers.arrayElement([
+            'Net 15', 'Net 30', 'Net 45', 'COD', 'Prepaid'
+          ]),
+          notes: `Assigned to ${client.company_name || `${client.first_names} ${client.last_name}`} - ${supplier.company_name || supplier.name}`,
+          primary_contact: faker.helpers.maybe(() => 
+            faker.person.fullName(),
+            { probability: 0.6 }
+          ),
+          contact_email: faker.helpers.maybe(() => 
+            faker.internet.email({ provider: (supplier.company_name || supplier.name).toLowerCase().replace(/\s+/g, '') + '.com' }),
+            { probability: 0.5 }
+          ),
+          contact_phone: faker.helpers.maybe(() => 
+            faker.phone.number(),
+            { probability: 0.7 }
+          ),
         });
-        
-        cellIndex++;
-        assignedCells++;
-      }
-      
-      if (assignedCells === 0) {
-        console.log(`⚠️ Warning: Could not assign any cells to client ${client.client_id} - running out of available cells`);
-        break;
       }
     }
     
     // Create assignments in batches
-    const batchSize = 10;
+    const batchSize = 50;
     for (let i = 0; i < assignments.length; i += batchSize) {
       const batch = assignments.slice(i, i + batchSize);
-      await prisma.clientCellAssignment.createMany({
+      await prisma.clientSupplierAssignment.createMany({
         data: batch,
         skipDuplicates: true
       });
     }
     
-    console.log(`✅ Client cell assignments created: ${assignments.length} assignments for ${clients.length} clients`);
+    console.log(`✅ Client supplier assignments created: ${assignments.length} assignments`);
     
-    // Verify every client has at least one assignment
-    const clientsWithoutCells = await prisma.client.findMany({
-      where: {
-        cellAssignments: {
-          none: {
-            is_active: true
-          }
-        }
+    // Create summary by client
+    const clientSummary = {};
+    assignments.forEach(assignment => {
+      if (!clientSummary[assignment.client_id]) {
+        clientSummary[assignment.client_id] = 0;
       }
+      clientSummary[assignment.client_id]++;
     });
     
-    if (clientsWithoutCells.length > 0) {
-      console.log(`⚠️ Warning: ${clientsWithoutCells.length} clients still have no cell assignments`);
-    } else {
-      console.log(`✅ All ${clients.length} clients have cell assignments`);
-    }
+    console.log(`✅ Suppliers assigned per client (range: ${Math.min(...Object.values(clientSummary))} - ${Math.max(...Object.values(clientSummary))} suppliers)`);
     
     return assignments.length;
   } catch (error) {
-    console.error("❌ Error creating client cell assignments:", error);
-    throw error;
-  }
-}
-
-async function createProducts() {
-  try {
-    console.log("Creating products...");
-    
-    const productLines = await prisma.productLine.findMany();
-    const groupNames = await prisma.groupName.findMany();
-    const temperatureRanges = await prisma.temperatureRange.findMany();
-    const activeStates = await prisma.activeState.findMany();
-    
-    const products = [];
-    for (let i = 0; i < COUNT.PRODUCTS; i++) {
-      products.push({
-        product_code: `PRD-${faker.string.alphanumeric(8).toUpperCase()}`,
-        name: faker.commerce.productName(),
-        // ✅ NEW: Use new category system (with fallback to old system)
-        category_id: faker.helpers.maybe(() => faker.helpers.arrayElement(productLines).product_line_id, { probability: 0.7 }),
-        subcategory1_id: faker.helpers.maybe(() => faker.helpers.arrayElement(groupNames).group_id, { probability: 0.5 }),
-        
-        // ✅ DEPRECATED: Keep old fields for backward compatibility
-        product_line_id: faker.helpers.arrayElement(productLines).product_line_id,
-        group_id: faker.helpers.arrayElement(groupNames).group_id,
-        temperature_range_id: faker.helpers.maybe(
-          () => faker.helpers.arrayElement(temperatureRanges).temperature_range_id,
-          { probability: 0.7 }
-        ),
-        active_state_id: faker.helpers.arrayElement(activeStates).state_id,
-        humidity: `${faker.number.int({ min: 20, max: 80 })}%`,
-        manufacturer: faker.company.name(),
-        // ✅ NEW: Enhanced product fields
-        observations: faker.helpers.arrayElement([
-          "Store in a cool, dry place",
-          "Refrigerate after opening",
-          "Keep away from direct sunlight",
-          "Store in original packaging",
-          "Keep container tightly closed",
-          "Handle with care - fragile contents",
-          "Temperature sensitive - monitor closely",
-        ]),
-        uploaded_documents: faker.helpers.maybe(() => ({
-          certificates: [`cert_${faker.string.alphanumeric(8)}.pdf`],
-          specifications: [`spec_${faker.string.alphanumeric(8)}.pdf`],
-          msds: [`msds_${faker.string.alphanumeric(8)}.pdf`]
-        }), { probability: 0.3 }),
-        
-        // ✅ DEPRECATED: Keep old field for backward compatibility
-        storage_conditions: faker.helpers.arrayElement([
-          "Store in a cool, dry place",
-          "Refrigerate after opening",
-          "Keep away from direct sunlight",
-          "Store in original packaging",
-          "Keep container tightly closed",
-        ]),
-        unit_weight: parseFloat(faker.commerce.price({ min: 0.1, max: 50 })),
-        unit_volume: parseFloat(faker.commerce.price({ min: 0.1, max: 10 })),
-      });
-    }
-    
-    await prisma.product.createMany({ data: products, skipDuplicates: true });
-    console.log("✅ Products created");
-  } catch (error) {
-    console.error("❌ Error creating products:", error);
+    console.error("❌ Error creating client supplier assignments:", error);
     throw error;
   }
 }
@@ -1942,6 +1868,7 @@ async function main() {
     await assignClientsToWarehouseAssistants(); // ✅ NEW: Assign clients to warehouse assistants
     await createProducts();
     await createClientProductAssignments(); // ✅ NEW: Assign products to clients (client-specific catalogs)
+    await createClientSupplierAssignments(); // ✅ NEW: Assign suppliers to clients (client-specific catalogs)
     await createWarehousesAndCells();
     await createClientCellAssignments(); // ✅ NEW: Assign cells to clients
     await createEntryOrdersWithProducts();
@@ -1952,13 +1879,14 @@ async function main() {
     
     await createDepartureOrdersWithProducts();
     
-    console.log("🎉 Database seeded successfully with client-specific product catalogs and auto-generated credentials!");
+    console.log("🎉 Database seeded successfully with client-specific product & supplier catalogs and auto-generated credentials!");
     console.log("\n📊 Seed Summary:");
-    console.log("   • ✅ CLIENT ISOLATION: Each client has their own product catalog");
+    console.log("   • ✅ CLIENT ISOLATION: Each client has their own product & supplier catalogs");
     console.log("   • ✅ WAREHOUSE INCHARGE OWNERSHIP: Clients are created and owned by warehouse incharge users");
     console.log("   • ✅ AUTO-GENERATED CREDENTIALS: Username/password auto-created for each client (backend only)");
     console.log("   • ✅ CLIENT-PRODUCT MAPPING: Products are assigned to specific clients only");
-    console.log("   • ✅ ROLE-BASED ACCESS: Clients can only see their assigned products");
+    console.log("   • ✅ CLIENT-SUPPLIER MAPPING: Suppliers are assigned to specific clients only");
+    console.log("   • ✅ ROLE-BASED ACCESS: Clients can only see their assigned products & suppliers");
     console.log("   • Products start in CUARENTENA (Quarantine)");
     console.log("   • Quality control transitions to APROBADO (Approved), DEVOLUCIONES (Returns), etc.");
     console.log("   • Complete audit trail with user tracking");
@@ -1971,6 +1899,7 @@ async function main() {
     const stats = await Promise.all([
       prisma.client.count(),
       prisma.clientProductAssignment.count(),
+      prisma.clientSupplierAssignment.count(),
       prisma.user.count({ where: { role: { name: "CLIENT" } } }),
       prisma.inventoryAllocation.count(),
       prisma.qualityControlTransition.count(),
@@ -1982,12 +1911,13 @@ async function main() {
     console.log(`\n📈 Database Stats:`);
     console.log(`   • Total Clients: ${stats[0]}`);
     console.log(`   • Client-Product Assignments: ${stats[1]}`);
-    console.log(`   • Client User Accounts: ${stats[2]}`);
-    console.log(`   • Inventory Allocations: ${stats[3]}`);
-    console.log(`   • Quality Transitions: ${stats[4]}`);
-    console.log(`   • Audit Log Entries: ${stats[5]}`);
-    console.log(`   • Approved Inventory: ${stats[6]}`);
-    console.log(`   • Quarantine Inventory: ${stats[7]}`);
+    console.log(`   • Client-Supplier Assignments: ${stats[2]}`);
+    console.log(`   • Client User Accounts: ${stats[3]}`);
+    console.log(`   • Inventory Allocations: ${stats[4]}`);
+    console.log(`   • Quality Transitions: ${stats[5]}`);
+    console.log(`   • Audit Log Entries: ${stats[6]}`);
+    console.log(`   • Approved Inventory: ${stats[7]}`);
+    console.log(`   • Quarantine Inventory: ${stats[8]}`);
     
   } catch (error) {
     console.error("❌ Error seeding database:", error);

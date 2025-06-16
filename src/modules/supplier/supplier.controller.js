@@ -25,7 +25,11 @@ async function createSupplier(req, res) {
       });
     }
     
-    const newSupplier = await supplierService.createSupplier(supplierData);
+    // ✅ NEW: Pass user context for automatic client assignment
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    const newSupplier = await supplierService.createSupplier(supplierData, userRole, userId);
     
     return res.status(201).json({
       success: true,
@@ -50,13 +54,31 @@ async function createSupplier(req, res) {
 async function getAllSuppliers(req, res) {
   try {
     const search = req.query.search;
-    const suppliers = await supplierService.getAllSuppliers(search);
+    
+    // ✅ FIXED: Extract user context for client-based filtering
+    // The JWT token stores role directly as a string, not as an object
+    const userRole = req.user?.role; // Direct access to role string
+    const userId = req.user?.id;
+    
+    console.log(`🔍 Supplier request from user:`, {
+      user_id: userId,
+      role: userRole,
+      search: search || 'none'
+    });
+    
+    const suppliers = await supplierService.getAllSuppliers(search, userRole, userId);
 
     return res.status(200).json({
       success: true,
       message: "Suppliers retrieved successfully",
       data: suppliers,
       count: suppliers.length,
+      // ✅ NEW: Include filtering context in response
+      meta: {
+        filtered_by_role: userRole,
+        user_id: userId,
+        search_applied: !!search
+      }
     });
   } catch (error) {
     console.error("Error in getAllSuppliers controller:", error);
@@ -223,6 +245,146 @@ async function getSupplierCategories(req, res) {
   }
 }
 
+// ✅ NEW: Create client-supplier assignments
+async function createClientSupplierAssignments(req, res) {
+  try {
+    const { client_id, supplier_ids, assignment_settings } = req.body;
+    const assigned_by = req.user?.id;
+    
+    if (!client_id || !supplier_ids || !Array.isArray(supplier_ids) || supplier_ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Client ID and supplier IDs array are required"
+      });
+    }
+    
+    if (!assigned_by) {
+      return res.status(401).json({
+        success: false,
+        message: "User authentication required"
+      });
+    }
+    
+    const assignments = await supplierService.createClientSupplierAssignments({
+      client_id,
+      supplier_ids,
+      assigned_by,
+      assignment_settings
+    });
+    
+    return res.status(201).json({
+      success: true,
+      message: `Successfully assigned ${assignments.length} suppliers to client`,
+      data: assignments,
+      count: assignments.length
+    });
+  } catch (error) {
+    console.error("Error in createClientSupplierAssignments controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create client-supplier assignments",
+      error: error.message
+    });
+  }
+}
+
+// ✅ NEW: Get client-supplier assignments
+async function getClientSupplierAssignments(req, res) {
+  try {
+    const { client_id } = req.params;
+    
+    if (!client_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Client ID is required"
+      });
+    }
+    
+    const assignments = await supplierService.getClientSupplierAssignments(client_id);
+    
+    return res.status(200).json({
+      success: true,
+      message: "Client supplier assignments retrieved successfully",
+      data: assignments,
+      count: assignments.length
+    });
+  } catch (error) {
+    console.error("Error in getClientSupplierAssignments controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve client supplier assignments",
+      error: error.message
+    });
+  }
+}
+
+// ✅ NEW: Remove client-supplier assignment
+async function removeClientSupplierAssignment(req, res) {
+  try {
+    const { assignment_id } = req.params;
+    const removed_by = req.user?.id;
+    
+    if (!assignment_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Assignment ID is required"
+      });
+    }
+    
+    if (!removed_by) {
+      return res.status(401).json({
+        success: false,
+        message: "User authentication required"
+      });
+    }
+    
+    const assignment = await supplierService.removeClientSupplierAssignment(assignment_id, removed_by);
+    
+    return res.status(200).json({
+      success: true,
+      message: "Client supplier assignment removed successfully",
+      data: assignment
+    });
+  } catch (error) {
+    console.error("Error in removeClientSupplierAssignment controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to remove client supplier assignment",
+      error: error.message
+    });
+  }
+}
+
+// ✅ NEW: Get available suppliers for client assignment
+async function getAvailableSuppliersForClient(req, res) {
+  try {
+    const { client_id } = req.params;
+    
+    if (!client_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Client ID is required"
+      });
+    }
+    
+    const availableSuppliers = await supplierService.getAvailableSuppliersForClient(client_id);
+    
+    return res.status(200).json({
+      success: true,
+      message: "Available suppliers for client retrieved successfully",
+      data: availableSuppliers,
+      count: availableSuppliers.length
+    });
+  } catch (error) {
+    console.error("Error in getAvailableSuppliersForClient controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve available suppliers for client",
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   createSupplier,
   getAllSuppliers,
@@ -233,4 +395,10 @@ module.exports = {
   
   // ✅ NEW: Category system controller
   getSupplierCategories,
+  
+  // ✅ NEW: Client-supplier assignment management
+  createClientSupplierAssignments,
+  getClientSupplierAssignments,
+  removeClientSupplierAssignment,
+  getAvailableSuppliersForClient,
 };

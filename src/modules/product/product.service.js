@@ -1,7 +1,35 @@
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
+// ✅ NEW: Auto-generate unique product code
+const generateProductCode = async () => {
+  let isUnique = false;
+  let productCode = '';
+  
+  while (!isUnique) {
+    // Generate format: PRD-XXXXXXXX (8 alphanumeric characters)
+    const randomPart = Math.random().toString(36).substring(2, 10).toUpperCase();
+    productCode = `PRD-${randomPart}`;
+    
+    // Check if this code already exists
+    const existingProduct = await prisma.product.findUnique({
+      where: { product_code: productCode }
+    });
+    
+    if (!existingProduct) {
+      isUnique = true;
+    }
+  }
+  
+  return productCode;
+};
+
 const createProduct = async (data) => {
+  // ✅ NEW: Auto-generate product code if not provided
+  if (!data.product_code) {
+    data.product_code = await generateProductCode();
+  }
+  
   return prisma.product.create({
     data: {
       // ✅ REQUIRED: Product code and name
@@ -298,23 +326,18 @@ const deleteProduct = async (id) => {
   return prisma.product.delete({ where: { product_id: id } });
 };
 
-// ✅ NEW: Get product categories
+// ✅ NEW: Get product categories from database
 const getProductCategories = async () => {
   return prisma.productCategory.findMany({
-    orderBy: { name: 'asc' }
-  });
-};
-
-// ✅ NEW: Get subcategories for a category
-const getSubCategories1 = async (categoryId = null) => {
-  const where = categoryId ? { category_id: categoryId } : {};
-  return prisma.productSubCategory1.findMany({
-    where,
-    include: {
-      category: {
+    select: {
+      category_id: true,
+      name: true,
+      description: true,
+      created_at: true,
+      _count: {
         select: {
-          category_id: true,
-          name: true
+          subcategories1: true,
+          products: true
         }
       }
     },
@@ -322,12 +345,43 @@ const getSubCategories1 = async (categoryId = null) => {
   });
 };
 
-// ✅ NEW: Get subcategories2 for a subcategory1
+// ✅ NEW: Get subcategories1 for a category from database
+const getSubCategories1 = async (categoryId = null) => {
+  const where = categoryId ? { category_id: categoryId } : {};
+  return prisma.productSubCategory1.findMany({
+    where,
+    select: {
+      subcategory1_id: true,
+      name: true,
+      description: true,
+      created_at: true,
+      category: {
+        select: {
+          category_id: true,
+          name: true
+        }
+      },
+      _count: {
+        select: {
+          subcategories2: true,
+          products: true
+        }
+      }
+    },
+    orderBy: { name: 'asc' }
+  });
+};
+
+// ✅ NEW: Get subcategories2 for a subcategory1 from database
 const getSubCategories2 = async (subcategory1Id = null) => {
   const where = subcategory1Id ? { subcategory1_id: subcategory1Id } : {};
   return prisma.productSubCategory2.findMany({
     where,
-    include: {
+    select: {
+      subcategory2_id: true,
+      name: true,
+      description: true,
+      created_at: true,
       subcategory1: {
         select: {
           subcategory1_id: true,
@@ -338,6 +392,11 @@ const getSubCategories2 = async (subcategory1Id = null) => {
               name: true
             }
           }
+        }
+      },
+      _count: {
+        select: {
+          products: true
         }
       }
     },
@@ -381,16 +440,18 @@ const getFormFields = async () => {
 
     return {
       // ✅ NEW: Category system
-      productCategories,
-      subcategories1,
-      subcategories2,
+      productCategories: productCategories, // New healthcare categories
+      subcategories1: subcategories1, // New healthcare subcategories level 1
+      subcategories2: subcategories2, // New healthcare subcategories level 2
       temperatureRanges,
       
       // ✅ DEPRECATED: Keep old fields for backward compatibility
+      categories: productCategories, // Alias for backward compatibility
       productLines,
       groups,
     };
   } catch (error) {
+    console.error("Error in getFormFields:", error);
     throw new Error("Failed to fetch form fields");
   }
 };

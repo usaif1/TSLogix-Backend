@@ -18,7 +18,7 @@ async function createProduct(req, res) {
       null,
       {
         product_name: productData.name,
-        product_code: productData.product_code,
+        product_code: productData.product_code || 'AUTO_GENERATED',
         manufacturer: productData.manufacturer,
         
         // ✅ NEW: Log new category fields
@@ -591,7 +591,8 @@ async function getProductCategories(req, res) {
 // ✅ NEW: Get subcategories1 for a category
 async function getSubCategories1(req, res) {
   try {
-    const { categoryId } = req.query;
+    const { categoryId, category_id } = req.query; // Support both parameter names
+    const finalCategoryId = categoryId || category_id; // Flexible parameter handling
     const userId = req.user?.id;
     const userRole = req.user?.role;
     
@@ -600,18 +601,18 @@ async function getSubCategories1(req, res) {
       'PRODUCT_SUBCATEGORIES1_ACCESSED',
       'ProductSubCategory1',
       'SUBCATEGORIES1_LIST',
-      `User accessed subcategories1 list${categoryId ? ` for category ${categoryId}` : ''}`,
+      `User accessed subcategories1 list${finalCategoryId ? ` for category ${finalCategoryId}` : ''}`,
       null,
       {
         accessed_by: userId,
         accessor_role: userRole,
-        category_id: categoryId,
+        category_id: finalCategoryId,
         access_timestamp: new Date().toISOString()
       },
       { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'SUBCATEGORY_DATA_ACCESS' }
     );
 
-    const subcategories = await ProductService.getSubCategories1(categoryId);
+    const subcategories = await ProductService.getSubCategories1(finalCategoryId);
     res.json(subcategories);
   } catch (error) {
     console.error('Error fetching subcategories1:', error);
@@ -620,7 +621,7 @@ async function getSubCategories1(req, res) {
     await req.logError(error, {
       controller: 'product',
       action: 'getSubCategories1',
-      category_id: req.query.categoryId,
+      category_id: req.query.categoryId || req.query.category_id,
       user_id: req.user?.id,
       user_role: req.user?.role,
       error_context: 'SUBCATEGORIES1_ACCESS_FAILED'
@@ -633,7 +634,8 @@ async function getSubCategories1(req, res) {
 // ✅ NEW: Get subcategories2 for a subcategory1
 async function getSubCategories2(req, res) {
   try {
-    const { subcategory1Id } = req.query;
+    const { subcategory1Id, subcategory1_id } = req.query; // Support both parameter names
+    const finalSubcategory1Id = subcategory1Id || subcategory1_id; // Flexible parameter handling
     const userId = req.user?.id;
     const userRole = req.user?.role;
     
@@ -642,18 +644,18 @@ async function getSubCategories2(req, res) {
       'PRODUCT_SUBCATEGORIES2_ACCESSED',
       'ProductSubCategory2',
       'SUBCATEGORIES2_LIST',
-      `User accessed subcategories2 list${subcategory1Id ? ` for subcategory1 ${subcategory1Id}` : ''}`,
+      `User accessed subcategories2 list${finalSubcategory1Id ? ` for subcategory1 ${finalSubcategory1Id}` : ''}`,
       null,
       {
         accessed_by: userId,
         accessor_role: userRole,
-        subcategory1_id: subcategory1Id,
+        subcategory1_id: finalSubcategory1Id,
         access_timestamp: new Date().toISOString()
       },
       { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'SUBCATEGORY_DATA_ACCESS' }
     );
 
-    const subcategories = await ProductService.getSubCategories2(subcategory1Id);
+    const subcategories = await ProductService.getSubCategories2(finalSubcategory1Id);
     res.json(subcategories);
   } catch (error) {
     console.error('Error fetching subcategories2:', error);
@@ -662,7 +664,7 @@ async function getSubCategories2(req, res) {
     await req.logError(error, {
       controller: 'product',
       action: 'getSubCategories2',
-      subcategory1_id: req.query.subcategory1Id,
+      subcategory1_id: req.query.subcategory1Id || req.query.subcategory1_id,
       user_id: req.user?.id,
       user_role: req.user?.role,
       error_context: 'SUBCATEGORIES2_ACCESS_FAILED'
