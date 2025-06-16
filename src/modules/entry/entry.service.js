@@ -390,15 +390,147 @@ async function getAllEntryOrders(
 
 /**
  * Get form fields for entry order creation
+ * @param {string} userRole - Role of the user (CLIENT, ADMIN, etc.)
+ * @param {string} userId - ID of the user making the request
  */
-async function getEntryFormFields() {
+async function getEntryFormFields(userRole = null, userId = null) {
+  // ✅ NEW: Build client-specific filtering for products and suppliers
+  let productsPromise;
+  let suppliersPromise;
+
+  if (userRole === "CLIENT" && userId) {
+    // For CLIENT users, get only assigned products and suppliers
+    
+    // Get client record for this user
+    const clientUser = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { clientUserAccount: true }
+    });
+
+    if (clientUser?.clientUserAccount) {
+      const clientId = clientUser.clientUserAccount.client_id;
+      
+      // Get client-assigned products
+      productsPromise = prisma.product.findMany({
+        where: {
+          clientAssignments: {
+            some: {
+              client_id: clientId,
+              is_active: true
+            }
+          }
+        },
+        select: {
+          product_id: true,
+          product_code: true,
+          name: true,
+          unit_weight: true,
+          unit_volume: true,
+          manufacturer: true,
+          storage_conditions: true,
+          product_line: { select: { name: true } },
+          group: { select: { name: true } },
+          temperature_range: {
+            select: {
+              range: true,
+              min_celsius: true,
+              max_celsius: true,
+            },
+          },
+        },
+      });
+
+      // Get client-assigned suppliers
+      suppliersPromise = prisma.supplier.findMany({
+        where: {
+          clientAssignments: {
+            some: {
+              client_id: clientId,
+              is_active: true
+            }
+          }
+        },
+        select: {
+          supplier_id: true,
+          // ✅ NEW: Support new supplier fields
+          company_name: true,
+          category: true,
+          tax_id: true,
+          registered_address: true,
+          contact_no: true,
+          contact_person: true,
+          notes: true,
+          
+          // ✅ DEPRECATED: Keep old fields for backward compatibility
+          name: true,
+          address: true,
+          city: true,
+          phone: true,
+          email: true,
+          ruc: true,
+          
+          country: { select: { name: true } },
+        },
+      });
+    } else {
+      // Client user account not found, return empty arrays
+      productsPromise = Promise.resolve([]);
+      suppliersPromise = Promise.resolve([]);
+    }
+  } else {
+    // For non-CLIENT users (ADMIN, WAREHOUSE_INCHARGE, etc.), get all products and suppliers
+    productsPromise = prisma.product.findMany({
+      select: {
+        product_id: true,
+        product_code: true,
+        name: true,
+        unit_weight: true,
+        unit_volume: true,
+        manufacturer: true,
+        storage_conditions: true,
+        product_line: { select: { name: true } },
+        group: { select: { name: true } },
+        temperature_range: {
+          select: {
+            range: true,
+            min_celsius: true,
+            max_celsius: true,
+          },
+        },
+      },
+    });
+
+    suppliersPromise = prisma.supplier.findMany({
+      select: {
+        supplier_id: true,
+        // ✅ NEW: Support new supplier fields
+        company_name: true,
+        category: true,
+        tax_id: true,
+        registered_address: true,
+        contact_no: true,
+        contact_person: true,
+        notes: true,
+        
+        // ✅ DEPRECATED: Keep old fields for backward compatibility
+        name: true,
+        address: true,
+        city: true,
+        phone: true,
+        email: true,
+        ruc: true,
+        
+        country: { select: { name: true } },
+      },
+    });
+  }
+
   const [
     origins,
     documentTypes,
     users,
     suppliers,
     products,
-    warehouses,
     temperatureRanges,
   ] = await Promise.all([
     prisma.origin.findMany({
@@ -430,51 +562,8 @@ async function getEntryFormFields() {
         role: { select: { name: true } },
       },
     }),
-    prisma.supplier.findMany({
-      select: {
-        supplier_id: true,
-        name: true,
-        address: true,
-        city: true,
-        phone: true,
-        email: true,
-        country: { select: { name: true } },
-      },
-    }),
-    prisma.product.findMany({
-      // ✅ FIXED: Remove restrictive active_state filter since products don't have active_state set
-      // Most products have active_state_id as null, so we'll get all products
-      select: {
-        product_id: true,
-        product_code: true,
-        name: true,
-        unit_weight: true,
-        unit_volume: true,
-        manufacturer: true,
-        storage_conditions: true,
-        product_line: { select: { name: true } },
-        group: { select: { name: true } },
-        temperature_range: {
-          select: {
-            range: true,
-            min_celsius: true,
-            max_celsius: true,
-          },
-        },
-      },
-    }),
-    prisma.warehouse.findMany({
-      where: {
-        status: "ACTIVE",
-      },
-      select: {
-        warehouse_id: true,
-        name: true,
-        location: true,
-        capacity: true,
-        max_occupancy: true,
-      },
-    }),
+    suppliersPromise,
+    productsPromise,
     prisma.temperatureRange.findMany({
       select: {
         temperature_range_id: true,
@@ -581,7 +670,7 @@ async function getEntryFormFields() {
     users,
     suppliers,
     products,
-    warehouses,
+    // ✅ REMOVED: warehouses - no longer included per request
     temperatureRanges,
     // Enum options
     originTypes,

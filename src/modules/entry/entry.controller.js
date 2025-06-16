@@ -351,10 +351,20 @@ async function getAllEntryOrders(req, res) {
 // Fetch dropdown fields for Entry form (updated with new enums)
 async function getEntryFormFields(req, res) {
   try {
-    const data = await entryService.getEntryFormFields();
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    // ✅ NEW: Pass user role and ID to get client-specific products and suppliers
+    const data = await entryService.getEntryFormFields(userRole, userId);
+    
     return res.status(200).json({
       success: true,
       data: data,
+      user_role: userRole,
+      filtered_for_client: userRole === "CLIENT",
+      ...(userRole === "CLIENT" && {
+        message: "Form fields filtered for your assigned products and suppliers"
+      })
     });
   } catch (error) {
     console.error("Error fetching form fields:", error);
