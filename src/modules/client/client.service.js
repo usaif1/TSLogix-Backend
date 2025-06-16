@@ -44,6 +44,96 @@ function generateSecurePassword() {
   return password.split('').sort(() => Math.random() - 0.5).join('');
 }
 
+// ✅ NEW: Helper function to generate simple, name-based username
+function generateSimpleUsername(clientType, companyName, firstName, lastName) {
+  let baseName = "";
+  
+  if (clientType === "COMMERCIAL" && companyName) {
+    // Use company name: remove spaces, take first 6 chars, add numbers
+    baseName = companyName.toLowerCase()
+      .replace(/[^a-z0-9]/g, "") // Remove special chars and spaces
+      .substring(0, 6); // Take first 6 characters
+  } else if (clientType === "INDIVIDUAL" && firstName && lastName) {
+    // Use firstName + lastName: jumble them and add numbers
+    const cleanFirstName = firstName.toLowerCase().replace(/[^a-z]/g, "").substring(0, 4);
+    const cleanLastName = lastName.toLowerCase().replace(/[^a-z]/g, "").substring(0, 3);
+    baseName = cleanFirstName + cleanLastName;
+  } else {
+    baseName = "client";
+  }
+  
+  // Add simple 3-digit number for uniqueness
+  const simpleNumber = Math.floor(Math.random() * 900) + 100; // 100-999
+  return baseName + simpleNumber;
+}
+
+// ✅ NEW: Helper function to generate simple, name-based password
+function generateSimplePassword(clientType, companyName, firstName, lastName) {
+  let basePassword = "";
+  
+  if (clientType === "COMMERCIAL" && companyName) {
+    // Use company name: first 3 chars + "123" + last 2 chars (if available)
+    const cleanName = companyName.replace(/[^a-zA-Z]/g, "");
+    const firstPart = cleanName.substring(0, 3);
+    const lastPart = cleanName.length > 3 ? cleanName.slice(-2) : "";
+    basePassword = firstPart + "123" + lastPart;
+  } else if (clientType === "INDIVIDUAL" && firstName && lastName) {
+    // Use firstName (first 3) + "123" + lastName (first 2)
+    const cleanFirstName = firstName.replace(/[^a-zA-Z]/g, "").substring(0, 3);
+    const cleanLastName = lastName.replace(/[^a-zA-Z]/g, "").substring(0, 2);
+    basePassword = cleanFirstName + "123" + cleanLastName;
+  } else {
+    basePassword = "client123";
+  }
+  
+  // Add a simple 2-digit number at the end
+  const simpleNumber = Math.floor(Math.random() * 90) + 10; // 10-99
+  return basePassword + simpleNumber;
+}
+
+// ✅ NEW: Store client credentials for handover (temporary storage)
+const clientCredentialsForHandover = new Map();
+
+function storeCredentialsForHandover(clientId, username, password, clientName) {
+  clientCredentialsForHandover.set(clientId, {
+    username,
+    password,
+    clientName,
+    createdAt: new Date(),
+    handedOver: false
+  });
+  
+  // Auto-cleanup after 24 hours
+  setTimeout(() => {
+    clientCredentialsForHandover.delete(clientId);
+  }, 24 * 60 * 60 * 1000);
+}
+
+// ✅ NEW: Get credentials for handover
+function getCredentialsForHandover(clientId) {
+  return clientCredentialsForHandover.get(clientId);
+}
+
+// ✅ NEW: Mark credentials as handed over
+function markCredentialsAsHandedOver(clientId) {
+  const creds = clientCredentialsForHandover.get(clientId);
+  if (creds) {
+    creds.handedOver = true;
+    creds.handedOverAt = new Date();
+  }
+}
+
+// ✅ NEW: Get all pending credentials for handover
+function getAllPendingCredentials() {
+  const pending = [];
+  for (const [clientId, creds] of clientCredentialsForHandover.entries()) {
+    if (!creds.handedOver) {
+      pending.push({ clientId, ...creds });
+    }
+  }
+  return pending;
+}
+
 /**
  * Create a new client (Commercial or Individual) with REQUIRED cell assignment
  */
@@ -237,26 +327,50 @@ async function createClient(clientData, cellAssignmentData = {}) {
       cleanedData.date_of_birth = new Date(cleanedData.date_of_birth);
     }
 
-    // ✅ NEW: Generate auto-credentials for the client
-    const autoUsername = generateUniqueUsername(
+    // ✅ NEW: Generate simple auto-credentials for the client
+    const autoUsername = generateSimpleUsername(
       cleanedData.client_type,
       cleanedData.company_name,
       cleanedData.first_names,
       cleanedData.last_name
     );
-    const autoPassword = generateSecurePassword();
+    const autoPassword = generateSimplePassword(
+      cleanedData.client_type,
+      cleanedData.company_name,
+      cleanedData.first_names,
+      cleanedData.last_name
+    );
     const autoPasswordHash = await bcrypt.hash(autoPassword, 10);
 
     // Use transaction to ensure both client creation, user creation, and cell assignment succeed together
     const result = await prisma.$transaction(async (tx) => {
-      // ✅ NEW: First create the user account for the client
+      // ✅ FIXED: Get the creator's user info to use their organisation
+      const creator = await tx.user.findUnique({
+        where: { id: cellAssignmentData.assigned_by },
+        include: { organisation: true, role: true }
+      });
+
+      if (!creator) {
+        throw new Error("Creator user not found. Cannot create client without valid creator.");
+      }
+
+      // ✅ FIXED: Get CLIENT role ID
+      const clientRole = await tx.role.findUnique({
+        where: { name: "CLIENT" }
+      });
+
+      if (!clientRole) {
+        throw new Error("CLIENT role not found in database.");
+      }
+
+      // ✅ FIXED: First create the user account for the client using creator's organisation
       const clientUser = await tx.user.create({
         data: {
           user_id: autoUsername,  // ✅ FIXED: Use correct field name from schema
           email: cleanedData.email,
           password_hash: autoPasswordHash,  // ✅ FIXED: Use correct field name from schema
-          role: { connect: { name: "CLIENT" } },
-          organisation: { connect: { organisation_id: cellAssignmentData.organisation_id || "cf052739-c060-458c-abd1-63fb0aaef5d4" } }, // Default org for now
+          role: { connect: { role_id: clientRole.role_id } }, // ✅ FIXED: Use role_id instead of name
+          organisation: { connect: { organisation_id: creator.organisation_id } }, // ✅ FIXED: Use creator's organisation
           first_name: cleanedData.first_names || cleanedData.company_name?.split(" ")[0] || "Client",
           last_name: cleanedData.last_name || cleanedData.company_name?.split(" ").slice(1).join(" ") || "User"
           // ✅ REMOVED: created_at and updated_at (handled automatically by Prisma)
@@ -359,6 +473,18 @@ async function createClient(clientData, cellAssignmentData = {}) {
           }
         }
       });
+
+      // ✅ NEW: Store credentials for handover to client
+      const clientName = clientWithAssignments.client_type === "COMMERCIAL" 
+        ? clientWithAssignments.company_name 
+        : `${clientWithAssignments.first_names} ${clientWithAssignments.last_name}`;
+      
+      storeCredentialsForHandover(
+        clientWithAssignments.client_id, 
+        autoUsername, 
+        autoPassword, 
+        clientName
+      );
 
       // ✅ NEW: Add auto-generated credentials to response (for backend logging only)
       return {
@@ -1042,6 +1168,154 @@ async function getClientFormFields() {
   }
 }
 
+/**
+ * ✅ NEW: Get available warehouses for client assignment
+ */
+async function getAvailableWarehousesForAssignment() {
+  try {
+    return await prisma.warehouse.findMany({
+      select: {
+        warehouse_id: true,
+        name: true,
+        location: true,
+        status: true,
+        _count: {
+          select: {
+            cells: {
+              where: {
+                clientCellAssignments: {
+                  none: {
+                    is_active: true
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      where: {
+        status: "ACTIVE"
+      },
+      orderBy: { name: 'asc' }
+    });
+  } catch (error) {
+    console.error("Error in getAvailableWarehousesForAssignment service:", error);
+    throw error;
+  }
+}
+
+/**
+ * ✅ NEW: Get client credentials (for debugging/testing only)
+ */
+async function getClientCredentials() {
+  try {
+    // Return all clients for now (since schema might not be fully updated)
+    const clients = await prisma.client.findMany({
+      select: {
+        client_id: true,
+        client_type: true,
+        company_name: true,
+        first_names: true,
+        last_name: true,
+        email: true,
+        created_at: true,
+        creator: {
+          select: {
+            first_name: true,
+            last_name: true,
+            email: true,
+            role: {
+              select: { name: true }
+            }
+          }
+        }
+      },
+      orderBy: { created_at: 'desc' }
+    });
+
+    return clients.map(client => ({
+      client_id: client.client_id,
+      client_name: client.client_type === "COMMERCIAL" 
+        ? client.company_name 
+        : `${client.first_names} ${client.last_name}`,
+      client_type: client.client_type,
+      email: client.email,
+      created_by: `${client.creator.first_name} ${client.creator.last_name} (${client.creator.role.name})`,
+      created_at: client.created_at,
+      note: "Client created successfully. Auto-generated credentials are managed by the system."
+    }));
+  } catch (error) {
+    console.error("Error in getClientCredentials service:", error);
+    throw error;
+  }
+}
+
+/**
+ * ✅ NEW: Get pending credentials for handover
+ */
+async function getPendingCredentialsForHandover() {
+  try {
+    return getAllPendingCredentials();
+  } catch (error) {
+    console.error("Error in getPendingCredentialsForHandover service:", error);
+    throw error;
+  }
+}
+
+/**
+ * ✅ NEW: Get specific client credentials for handover
+ */
+async function getClientCredentialsForHandover(clientId) {
+  try {
+    const credentials = getCredentialsForHandover(clientId);
+    if (!credentials) {
+      throw new Error("Credentials not found or already handed over");
+    }
+    return credentials;
+  } catch (error) {
+    console.error("Error in getClientCredentialsForHandover service:", error);
+    throw error;
+  }
+}
+
+/**
+ * ✅ NEW: Mark credentials as handed over to client
+ */
+async function markCredentialsHandedOver(clientId) {
+  try {
+    markCredentialsAsHandedOver(clientId);
+    return { success: true, message: "Credentials marked as handed over" };
+  } catch (error) {
+    console.error("Error in markCredentialsHandedOver service:", error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Get client by user ID (for authentication purposes)
+async function getClientByUserId(userId) {
+  try {
+    const client = await prisma.client.findFirst({
+      where: { client_user_id: userId },
+      select: {
+        client_id: true,
+        client_type: true,
+        company_name: true,
+        first_names: true,
+        last_name: true,
+        email: true,
+        active_state: {
+          select: { name: true }
+        }
+      }
+    });
+    
+    return client;
+  } catch (error) {
+    console.error("Error finding client by user ID:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   createClient,
   getAllClients,
@@ -1051,5 +1325,11 @@ module.exports = {
   getClientCellAssignments,
   getAvailableCellsForClient,
   deactivateClientCellAssignment,
-  getClientFormFields
+  getClientFormFields,
+  getAvailableWarehousesForAssignment,
+  getClientCredentials,
+  getPendingCredentialsForHandover,
+  getClientCredentialsForHandover,
+  markCredentialsHandedOver,
+  getClientByUserId
 }; 

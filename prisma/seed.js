@@ -90,6 +90,248 @@ async function createBaseLookupTables() {
     });
     console.log("✅ Countries created");
 
+    // ✅ NEW: Product Categories
+    console.log("Creating product categories...");
+    await prisma.productCategory.createMany({
+      data: [
+        { name: "Dispositivos Médicos", description: "Medical devices and equipment" },
+        { name: "Productos Farmacéuticos", description: "Pharmaceutical products and medications" },
+        { name: "Productos Sanitarios", description: "Sanitary and hygiene products" },
+      ],
+      skipDuplicates: true,
+    });
+    console.log("✅ Product categories created");
+
+    // Get the created categories for subcategory creation
+    const categories = await prisma.productCategory.findMany();
+    const dispositivosMedicos = categories.find(c => c.name === "Dispositivos Médicos");
+    const productosFarmaceuticos = categories.find(c => c.name === "Productos Farmacéuticos");
+    const productosSanitarios = categories.find(c => c.name === "Productos Sanitarios");
+
+    // ✅ NEW: Product Subcategories1
+    console.log("Creating product subcategories1...");
+    
+    // Dispositivos Médicos - Subcategory 1
+    if (dispositivosMedicos) {
+      await prisma.productSubCategory1.createMany({
+        data: [
+          { name: "Equipos Médicos", description: "Medical equipment and machinery", category_id: dispositivosMedicos.category_id },
+          { name: "Material Médicos", description: "Medical materials and supplies", category_id: dispositivosMedicos.category_id },
+          { name: "Instrumental Médicos", description: "Medical instruments and tools", category_id: dispositivosMedicos.category_id },
+          { name: "Insumos", description: "Medical consumables and supplies", category_id: dispositivosMedicos.category_id },
+          { name: "Equipos Biomédicos", description: "Biomedical equipment and devices", category_id: dispositivosMedicos.category_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Productos Farmacéuticos - Subcategory 1
+    if (productosFarmaceuticos) {
+      await prisma.productSubCategory1.createMany({
+        data: [
+          { name: "Productos Emergencia", description: "Emergency pharmaceutical products", category_id: productosFarmaceuticos.category_id },
+          { name: "Productos Galénicos", description: "Galenic pharmaceutical preparations", category_id: productosFarmaceuticos.category_id },
+          { name: "Producto de Marca", description: "Brand name pharmaceutical products", category_id: productosFarmaceuticos.category_id },
+          { name: "Producto Genérico", description: "Generic pharmaceutical products", category_id: productosFarmaceuticos.category_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Productos Sanitarios - Subcategory 1
+    if (productosSanitarios) {
+      await prisma.productSubCategory1.createMany({
+        data: [
+          { name: "Productos Cosméticos", description: "Cosmetic and beauty products", category_id: productosSanitarios.category_id },
+          { name: "Productos de Higiene Doméstica", description: "Household hygiene products", category_id: productosSanitarios.category_id },
+          { name: "Artículos Sanitarios", description: "Sanitary articles and supplies", category_id: productosSanitarios.category_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+    console.log("✅ Product subcategories1 created");
+
+    // Get subcategories1 for subcategory2 creation
+    const subcategories1 = await prisma.productSubCategory1.findMany();
+    
+    // Dispositivos Médicos subcategories
+    const equiposMedicos = subcategories1.find(s => s.name === "Equipos Médicos");
+    const materialMedicos = subcategories1.find(s => s.name === "Material Médicos");
+    const instrumentalMedicos = subcategories1.find(s => s.name === "Instrumental Médicos");
+    const insumos = subcategories1.find(s => s.name === "Insumos");
+    const equiposBiomedicos = subcategories1.find(s => s.name === "Equipos Biomédicos");
+    
+    // Productos Farmacéuticos subcategories
+    const productosEmergencia = subcategories1.find(s => s.name === "Productos Emergencia");
+    const productosGalenicos = subcategories1.find(s => s.name === "Productos Galénicos");
+    const productoMarca = subcategories1.find(s => s.name === "Producto de Marca");
+    const productoGenerico = subcategories1.find(s => s.name === "Producto Genérico");
+    
+    // Productos Sanitarios subcategories
+    const productosCosmeticos = subcategories1.find(s => s.name === "Productos Cosméticos");
+    const productosHigieneDomestica = subcategories1.find(s => s.name === "Productos de Higiene Doméstica");
+    const articulosSanitarios = subcategories1.find(s => s.name === "Artículos Sanitarios");
+
+    // ✅ NEW: Product Subcategories2
+    console.log("Creating product subcategories2...");
+    
+    // Equipos Médicos - Subcategory 2
+    if (equiposMedicos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Equipos de Diagnóstico", description: "Diagnostic equipment and machines", subcategory1_id: equiposMedicos.subcategory1_id },
+          { name: "Equipos de Cirugía", description: "Surgical equipment and instruments", subcategory1_id: equiposMedicos.subcategory1_id },
+          { name: "Equipos de Terapia", description: "Therapy and treatment equipment", subcategory1_id: equiposMedicos.subcategory1_id },
+          { name: "Equipos de Monitoreo", description: "Patient monitoring equipment", subcategory1_id: equiposMedicos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Material Médicos - Subcategory 2
+    if (materialMedicos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Material Quirúrgico", description: "Surgical materials and supplies", subcategory1_id: materialMedicos.subcategory1_id },
+          { name: "Material de Curación", description: "Wound care and healing materials", subcategory1_id: materialMedicos.subcategory1_id },
+          { name: "Material de Protección", description: "Protective materials and PPE", subcategory1_id: materialMedicos.subcategory1_id },
+          { name: "Material Desechable", description: "Disposable medical materials", subcategory1_id: materialMedicos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Instrumental Médicos - Subcategory 2
+    if (instrumentalMedicos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Instrumentos Quirúrgicos", description: "Surgical instruments and tools", subcategory1_id: instrumentalMedicos.subcategory1_id },
+          { name: "Instrumentos de Diagnóstico", description: "Diagnostic instruments", subcategory1_id: instrumentalMedicos.subcategory1_id },
+          { name: "Instrumentos de Examinación", description: "Examination instruments", subcategory1_id: instrumentalMedicos.subcategory1_id },
+          { name: "Instrumentos de Precisión", description: "Precision medical instruments", subcategory1_id: instrumentalMedicos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Insumos - Subcategory 2
+    if (insumos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Insumos Quirúrgicos", description: "Surgical supplies and consumables", subcategory1_id: insumos.subcategory1_id },
+          { name: "Insumos de Laboratorio", description: "Laboratory supplies and reagents", subcategory1_id: insumos.subcategory1_id },
+          { name: "Insumos de Enfermería", description: "Nursing supplies and materials", subcategory1_id: insumos.subcategory1_id },
+          { name: "Insumos Especializados", description: "Specialized medical supplies", subcategory1_id: insumos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Equipos Biomédicos - Subcategory 2
+    if (equiposBiomedicos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Equipos de Análisis", description: "Biomedical analysis equipment", subcategory1_id: equiposBiomedicos.subcategory1_id },
+          { name: "Equipos de Imagenología", description: "Medical imaging equipment", subcategory1_id: equiposBiomedicos.subcategory1_id },
+          { name: "Equipos de Laboratorio", description: "Laboratory biomedical equipment", subcategory1_id: equiposBiomedicos.subcategory1_id },
+          { name: "Equipos de Rehabilitación", description: "Rehabilitation biomedical equipment", subcategory1_id: equiposBiomedicos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Productos Emergencia - Subcategory 2
+    if (productosEmergencia) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Medicamentos de Urgencia", description: "Emergency medications", subcategory1_id: productosEmergencia.subcategory1_id },
+          { name: "Antídotos", description: "Antidotes and counter-agents", subcategory1_id: productosEmergencia.subcategory1_id },
+          { name: "Sueros y Soluciones", description: "Emergency serums and solutions", subcategory1_id: productosEmergencia.subcategory1_id },
+          { name: "Medicamentos de Trauma", description: "Trauma care medications", subcategory1_id: productosEmergencia.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Productos Galénicos - Subcategory 2
+    if (productosGalenicos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Preparaciones Magistrales", description: "Custom pharmaceutical preparations", subcategory1_id: productosGalenicos.subcategory1_id },
+          { name: "Formas Farmacéuticas Sólidas", description: "Solid pharmaceutical forms", subcategory1_id: productosGalenicos.subcategory1_id },
+          { name: "Formas Farmacéuticas Líquidas", description: "Liquid pharmaceutical forms", subcategory1_id: productosGalenicos.subcategory1_id },
+          { name: "Formas Farmacéuticas Tópicas", description: "Topical pharmaceutical forms", subcategory1_id: productosGalenicos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Producto de Marca - Subcategory 2
+    if (productoMarca) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Medicamentos Éticos", description: "Prescription brand medications", subcategory1_id: productoMarca.subcategory1_id },
+          { name: "Medicamentos OTC", description: "Over-the-counter brand medications", subcategory1_id: productoMarca.subcategory1_id },
+          { name: "Productos Especializados", description: "Specialized brand products", subcategory1_id: productoMarca.subcategory1_id },
+          { name: "Productos Premium", description: "Premium brand pharmaceutical products", subcategory1_id: productoMarca.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Producto Genérico - Subcategory 2
+    if (productoGenerico) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Genéricos Bioequivalentes", description: "Bioequivalent generic medications", subcategory1_id: productoGenerico.subcategory1_id },
+          { name: "Genéricos Intercambiables", description: "Interchangeable generic medications", subcategory1_id: productoGenerico.subcategory1_id },
+          { name: "Genéricos de Primera Línea", description: "First-line generic medications", subcategory1_id: productoGenerico.subcategory1_id },
+          { name: "Genéricos Especializados", description: "Specialized generic medications", subcategory1_id: productoGenerico.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Productos Cosméticos - Subcategory 2
+    if (productosCosmeticos) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Cosméticos Faciales", description: "Facial cosmetics and skincare", subcategory1_id: productosCosmeticos.subcategory1_id },
+          { name: "Cosméticos Corporales", description: "Body cosmetics and care products", subcategory1_id: productosCosmeticos.subcategory1_id },
+          { name: "Cosméticos Capilares", description: "Hair care cosmetics", subcategory1_id: productosCosmeticos.subcategory1_id },
+          { name: "Cosméticos Especializados", description: "Specialized cosmetic products", subcategory1_id: productosCosmeticos.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Productos de Higiene Doméstica - Subcategory 2
+    if (productosHigieneDomestica) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Limpiadores Domésticos", description: "Household cleaning products", subcategory1_id: productosHigieneDomestica.subcategory1_id },
+          { name: "Desinfectantes", description: "Disinfectants and sanitizers", subcategory1_id: productosHigieneDomestica.subcategory1_id },
+          { name: "Productos de Lavandería", description: "Laundry and washing products", subcategory1_id: productosHigieneDomestica.subcategory1_id },
+          { name: "Productos Especializados", description: "Specialized household hygiene products", subcategory1_id: productosHigieneDomestica.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Artículos Sanitarios - Subcategory 2
+    if (articulosSanitarios) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Productos de Higiene Personal", description: "Personal hygiene products", subcategory1_id: articulosSanitarios.subcategory1_id },
+          { name: "Productos Femeninos", description: "Feminine hygiene products", subcategory1_id: articulosSanitarios.subcategory1_id },
+          { name: "Productos Infantiles", description: "Baby and infant hygiene products", subcategory1_id: articulosSanitarios.subcategory1_id },
+          { name: "Productos Geriátricos", description: "Geriatric and elderly care products", subcategory1_id: articulosSanitarios.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+    console.log("✅ Product subcategories2 created");
+
     // Product Lines
     console.log("Creating product lines...");
     await prisma.productLine.createMany({
@@ -1857,71 +2099,30 @@ async function createDepartureOrdersWithProducts() {
   }
 }
 
+// ✅ SIMPLIFIED: Create a warehouse-focused seed for testing
 async function main() {
   try {
-    console.log("🌱 Starting database seed with quarantine flow and user traceability...");
+    console.log("🌱 Starting simplified warehouse-focused seed...");
     
     await createBaseLookupTables();
     await createUsersAndOrganization();
     await createSuppliersAndCustomers(); 
-    await createClients(); // ✅ NEW: Create clients with warehouse incharge ownership
-    await assignClientsToWarehouseAssistants(); // ✅ NEW: Assign clients to warehouse assistants
-    await createProducts();
-    await createClientProductAssignments(); // ✅ NEW: Assign products to clients (client-specific catalogs)
-    await createClientSupplierAssignments(); // ✅ NEW: Assign suppliers to clients (client-specific catalogs)
+    // await createProducts(); // ✅ SKIP for now - focus on warehouse testing
     await createWarehousesAndCells();
-    await createClientCellAssignments(); // ✅ NEW: Assign cells to clients
-    await createEntryOrdersWithProducts();
-    await createInventoryAllocations();
     
-    // ✅ NEW: Add quality control transitions
-    await createQualityControlTransitions();
-    
-    await createDepartureOrdersWithProducts();
-    
-    console.log("🎉 Database seeded successfully with client-specific product & supplier catalogs and auto-generated credentials!");
+    console.log("🎉 Basic warehouse data seeded successfully!");
     console.log("\n📊 Seed Summary:");
-    console.log("   • ✅ CLIENT ISOLATION: Each client has their own product & supplier catalogs");
-    console.log("   • ✅ WAREHOUSE INCHARGE OWNERSHIP: Clients are created and owned by warehouse incharge users");
-    console.log("   • ✅ AUTO-GENERATED CREDENTIALS: Username/password auto-created for each client (backend only)");
-    console.log("   • ✅ CLIENT-PRODUCT MAPPING: Products are assigned to specific clients only");
-    console.log("   • ✅ CLIENT-SUPPLIER MAPPING: Suppliers are assigned to specific clients only");
-    console.log("   • ✅ ROLE-BASED ACCESS: Clients can only see their assigned products & suppliers");
-    console.log("   • Products start in CUARENTENA (Quarantine)");
-    console.log("   • Quality control transitions to APROBADO (Approved), DEVOLUCIONES (Returns), etc.");
-    console.log("   • Complete audit trail with user tracking");
-    console.log("   • Only approved inventory available for departure orders");
-    console.log("   • FIFO test data: 5 products × 3 entry dates for departure testing");
-    console.log("   • Product-wise departure flow with FIFO allocation (oldest inventory first)");
-    console.log("   • ✅ MANDATORY: Every client has cell assignments (compulsory for new clients)");
-    
-    // Print some stats
-    const stats = await Promise.all([
-      prisma.client.count(),
-      prisma.clientProductAssignment.count(),
-      prisma.clientSupplierAssignment.count(),
-      prisma.user.count({ where: { role: { name: "CLIENT" } } }),
-      prisma.inventoryAllocation.count(),
-      prisma.qualityControlTransition.count(),
-      prisma.systemAuditLog.count(),
-      prisma.inventory.count({ where: { quality_status: QualityControlStatus.APROBADO } }),
-      prisma.inventory.count({ where: { quality_status: QualityControlStatus.CUARENTENA } }),
-    ]);
-    
-    console.log(`\n📈 Database Stats:`);
-    console.log(`   • Total Clients: ${stats[0]}`);
-    console.log(`   • Client-Product Assignments: ${stats[1]}`);
-    console.log(`   • Client-Supplier Assignments: ${stats[2]}`);
-    console.log(`   • Client User Accounts: ${stats[3]}`);
-    console.log(`   • Inventory Allocations: ${stats[4]}`);
-    console.log(`   • Quality Transitions: ${stats[5]}`);
-    console.log(`   • Audit Log Entries: ${stats[6]}`);
-    console.log(`   • Approved Inventory: ${stats[7]}`);
-    console.log(`   • Quarantine Inventory: ${stats[8]}`);
+    console.log("   • ✅ WAREHOUSES: 3 warehouses created with cells");
+    console.log("   • ✅ USERS: Basic users including warehouse incharge");
+    console.log("   • ✅ SUPPLIERS: Basic suppliers for testing");
+    console.log("   • ✅ API TESTING: Ready for warehouse API testing");
+    console.log("\n🔑 Test Credentials:");
+    console.log("   • Warehouse Incharge: wh_incharge1@tslogix.com / WhIncharge123!");
+    console.log("   • Admin: admin1@tslogix.com / Admin123!");
     
   } catch (error) {
     console.error("❌ Error seeding database:", error);
-    process.exit(1);
+    throw error;
   } finally {
     await prisma.$disconnect();
   }

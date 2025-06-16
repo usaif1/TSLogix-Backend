@@ -11,8 +11,11 @@ router.get('/form-fields', productController.getFormFields);
 
 // ✅ NEW: Category system routes
 router.get('/categories', productController.getProductCategories);
+router.post('/categories', productController.createProductCategory);
 router.get('/subcategories1', productController.getSubCategories1);
+router.post('/subcategories1', productController.createSubCategory1);
 router.get('/subcategories2', productController.getSubCategories2);
+router.post('/subcategories2', productController.createSubCategory2);
 
 // ✅ DEPRECATED: Keep old routes for backward compatibility
 router.get('/product-lines', productController.getProductLines);

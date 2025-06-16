@@ -168,11 +168,25 @@ async function getAllWarehouseCells(filter = {}) {
 }
 
 /**
- * Fetch all warehouses for dropdown
+ * Fetch all warehouses for dropdown with detailed information
  */
 async function fetchWarehouses() {
   return await prisma.warehouse.findMany({
-    select: { warehouse_id: true, name: true },
+    select: { 
+      warehouse_id: true, 
+      name: true,
+      location: true,
+      capacity: true,
+      max_occupancy: true,
+      status: true,
+      _count: {
+        select: {
+          cells: true,
+          inventory: true
+        }
+      }
+    },
+    orderBy: { name: "asc" }
   });
 }
 

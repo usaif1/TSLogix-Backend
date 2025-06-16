@@ -72,8 +72,23 @@ async function listWarehouseCells(req, res) {
 }
 
 async function listWarehouses(req, res) {
-  const list = await fetchWarehouses();
-  res.json(list);
+  try {
+    const list = await fetchWarehouses();
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Warehouses fetched successfully", 
+      count: list.length,
+      data: list
+    });
+  } catch (err) {
+    console.error("Error fetching warehouses:", err);
+    return res.status(500).json({ 
+      success: false,
+      message: "Error fetching warehouses", 
+      error: err.message 
+    });
+  }
 }
 
 module.exports = { allocatePallets, listWarehouseCells, listWarehouses };

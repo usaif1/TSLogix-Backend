@@ -345,6 +345,42 @@ const getProductCategories = async () => {
   });
 };
 
+// ✅ NEW: Create product category
+const createProductCategory = async (categoryData) => {
+  try {
+    // Check if category name already exists
+    const existingCategory = await prisma.productCategory.findFirst({
+      where: { name: categoryData.name }
+    });
+    
+    if (existingCategory) {
+      throw new Error(`Category "${categoryData.name}" already exists`);
+    }
+    
+    return await prisma.productCategory.create({
+      data: {
+        name: categoryData.name,
+        description: categoryData.description || null
+      },
+      select: {
+        category_id: true,
+        name: true,
+        description: true,
+        created_at: true,
+        _count: {
+          select: {
+            subcategories1: true,
+            products: true
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error creating product category:", error);
+    throw error;
+  }
+};
+
 // ✅ NEW: Get subcategories1 for a category from database
 const getSubCategories1 = async (categoryId = null) => {
   const where = categoryId ? { category_id: categoryId } : {};
@@ -370,6 +406,57 @@ const getSubCategories1 = async (categoryId = null) => {
     },
     orderBy: { name: 'asc' }
   });
+};
+
+// ✅ NEW: Create subcategory1
+const createSubCategory1 = async (subcategoryData) => {
+  try {
+    // Validate that category exists
+    const category = await prisma.productCategory.findUnique({
+      where: { category_id: subcategoryData.category_id }
+    });
+    
+    if (!category) {
+      throw new Error("Category not found");
+    }
+    
+    // Check if subcategory name already exists in this category
+    const existingSubcategory = await prisma.productSubCategory1.findFirst({
+      where: {
+        category_id: subcategoryData.category_id,
+        name: subcategoryData.name
+      }
+    });
+    
+    if (existingSubcategory) {
+      throw new Error(`Subcategory "${subcategoryData.name}" already exists in category "${category.name}"`);
+    }
+    
+    return await prisma.productSubCategory1.create({
+      data: {
+        name: subcategoryData.name,
+        description: subcategoryData.description || null,
+        category_id: subcategoryData.category_id
+      },
+      include: {
+        category: {
+          select: {
+            category_id: true,
+            name: true
+          }
+        },
+        _count: {
+          select: {
+            subcategories2: true,
+            products: true
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error creating subcategory1:", error);
+    throw error;
+  }
 };
 
 // ✅ NEW: Get subcategories2 for a subcategory1 from database
@@ -402,6 +489,70 @@ const getSubCategories2 = async (subcategory1Id = null) => {
     },
     orderBy: { name: 'asc' }
   });
+};
+
+// ✅ NEW: Create subcategory2
+const createSubCategory2 = async (subcategoryData) => {
+  try {
+    // Validate that subcategory1 exists
+    const subcategory1 = await prisma.productSubCategory1.findUnique({
+      where: { subcategory1_id: subcategoryData.subcategory1_id },
+      include: {
+        category: {
+          select: {
+            category_id: true,
+            name: true
+          }
+        }
+      }
+    });
+    
+    if (!subcategory1) {
+      throw new Error("Subcategory1 not found");
+    }
+    
+    // Check if subcategory2 name already exists in this subcategory1
+    const existingSubcategory = await prisma.productSubCategory2.findFirst({
+      where: {
+        subcategory1_id: subcategoryData.subcategory1_id,
+        name: subcategoryData.name
+      }
+    });
+    
+    if (existingSubcategory) {
+      throw new Error(`Subcategory2 "${subcategoryData.name}" already exists in subcategory "${subcategory1.name}"`);
+    }
+    
+    return await prisma.productSubCategory2.create({
+      data: {
+        name: subcategoryData.name,
+        description: subcategoryData.description || null,
+        subcategory1_id: subcategoryData.subcategory1_id
+      },
+      include: {
+        subcategory1: {
+          select: {
+            subcategory1_id: true,
+            name: true,
+            category: {
+              select: {
+                category_id: true,
+                name: true
+              }
+            }
+          }
+        },
+        _count: {
+          select: {
+            products: true
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error creating subcategory2:", error);
+    throw error;
+  }
 };
 
 // ✅ DEPRECATED: Keep old functions for backward compatibility
@@ -465,8 +616,11 @@ module.exports = {
   
   // ✅ NEW: Category system functions
   getProductCategories,
+  createProductCategory,
   getSubCategories1,
+  createSubCategory1,
   getSubCategories2,
+  createSubCategory2,
   
   // ✅ DEPRECATED: Keep old functions for backward compatibility
   getProductLines,

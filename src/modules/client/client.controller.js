@@ -580,6 +580,212 @@ async function getClientStatistics(req, res) {
   }
 }
 
+/**
+ * ✅ DEBUG: Get client credentials (for testing purposes only)
+ */
+async function getClientCredentials(req, res) {
+  try {
+    // Only allow warehouse incharge and admin to access this
+    if (!["WAREHOUSE_INCHARGE", "ADMIN"].includes(req.user?.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only warehouse incharge and admin can access client credentials.",
+      });
+    }
+
+    const clients = await clientService.getClientCredentials();
+    
+    return res.status(200).json({
+      success: true,
+      message: "Client credentials retrieved successfully",
+      count: clients.length,
+      data: clients,
+      warning: "⚠️ This endpoint is for testing purposes only. Do not expose credentials in production.",
+    });
+  } catch (error) {
+    console.error("Error getting client credentials:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving client credentials",
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * ✅ TEST: Create a simple test client with minimal requirements
+ */
+async function createTestClient(req, res) {
+  try {
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    // Only allow warehouse incharge and admin to create test clients
+    if (!["WAREHOUSE_INCHARGE", "ADMIN"].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only warehouse incharge and admin can create test clients.",
+      });
+    }
+
+    // Get available warehouses and cells for assignment
+    const warehouses = await clientService.getAvailableWarehousesForAssignment();
+    if (warehouses.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No warehouses available for client assignment.",
+      });
+    }
+
+    // Get available cells from the first warehouse
+    const firstWarehouse = warehouses[0];
+    const availableCells = await clientService.getAvailableCellsForClient(firstWarehouse.warehouse_id);
+    
+    if (!availableCells.all_cells || availableCells.all_cells.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No available cells for client assignment.",
+      });
+    }
+
+    // Create a simple test client
+    const testClientData = {
+      client_type: "COMMERCIAL",
+      company_name: `Test Client ${Date.now()}`,
+      company_type: "PRIVATE",
+      establishment_type: "FARMACIA",
+      email: `testclient${Date.now()}@test.com`,
+      address: "123 Test Street, Test City",
+      phone: "123-456-7890",
+      cell_phone: "098-765-4321",
+      ruc: `20${Math.random().toString().slice(2, 11)}`,
+    };
+
+    // Use first 2 available cells for assignment
+    const cellAssignmentData = {
+      cell_ids: availableCells.all_cells.slice(0, 2).map(cell => cell.id),
+      warehouse_id: firstWarehouse.warehouse_id,
+      assigned_by: userId,
+      notes: "Test client created by system",
+      max_capacity: 100.00
+    };
+
+    const newClient = await clientService.createClient(testClientData, cellAssignmentData);
+    
+    return res.status(201).json({
+      success: true,
+      message: "Test client created successfully",
+      data: newClient,
+      warehouse_assigned: firstWarehouse.name,
+      cells_assigned: cellAssignmentData.cell_ids.length,
+    });
+  } catch (error) {
+    console.error("Error creating test client:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error creating test client",
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get pending credentials for handover to clients
+ */
+async function getPendingCredentials(req, res) {
+  try {
+    // Only allow warehouse incharge and admin to access credentials
+    if (!["WAREHOUSE_INCHARGE", "ADMIN"].includes(req.user?.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only warehouse incharge and admin can access client credentials.",
+      });
+    }
+
+    const pendingCredentials = await clientService.getPendingCredentialsForHandover();
+    
+    return res.status(200).json({
+      success: true,
+      message: "Pending credentials retrieved successfully",
+      count: pendingCredentials.length,
+      data: pendingCredentials,
+      note: "⚠️ These credentials should be securely handed over to clients. They will auto-expire after 24 hours.",
+    });
+  } catch (error) {
+    console.error("Error getting pending credentials:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving pending credentials",
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get specific client credentials for handover
+ */
+async function getClientCredentialsById(req, res) {
+  try {
+    const { client_id } = req.params;
+    
+    // Only allow warehouse incharge and admin to access credentials
+    if (!["WAREHOUSE_INCHARGE", "ADMIN"].includes(req.user?.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only warehouse incharge and admin can access client credentials.",
+      });
+    }
+
+    const credentials = await clientService.getClientCredentialsForHandover(client_id);
+    
+    return res.status(200).json({
+      success: true,
+      message: "Client credentials retrieved successfully",
+      data: credentials,
+      note: "⚠️ Please hand over these credentials securely to the client and mark as completed.",
+    });
+  } catch (error) {
+    console.error("Error getting client credentials:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving client credentials",
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Mark credentials as handed over to client
+ */
+async function markCredentialsHandedOver(req, res) {
+  try {
+    const { client_id } = req.params;
+    
+    // Only allow warehouse incharge and admin to mark credentials as handed over
+    if (!["WAREHOUSE_INCHARGE", "ADMIN"].includes(req.user?.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only warehouse incharge and admin can mark credentials as handed over.",
+      });
+    }
+
+    const result = await clientService.markCredentialsHandedOver(client_id);
+    
+    return res.status(200).json({
+      success: true,
+      message: "Credentials marked as handed over successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error marking credentials as handed over:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error marking credentials as handed over",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   createClient,
   getAllClients,
@@ -590,5 +796,10 @@ module.exports = {
   getAvailableCellsForClient,
   deactivateClientCellAssignment,
   getClientFormFields,
-  getClientStatistics
+  getClientStatistics,
+  getClientCredentials,
+  createTestClient,
+  getPendingCredentials,
+  getClientCredentialsById,
+  markCredentialsHandedOver,
 }; 

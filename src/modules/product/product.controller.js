@@ -559,7 +559,7 @@ async function getProductCategories(req, res) {
     await req.logEvent(
       'PRODUCT_CATEGORIES_ACCESSED',
       'ProductCategory',
-      'PRODUCT_CATEGORIES_LIST',
+      'CATEGORIES_LIST',
       `User accessed product categories list`,
       null,
       {
@@ -581,10 +581,92 @@ async function getProductCategories(req, res) {
       action: 'getProductCategories',
       user_id: req.user?.id,
       user_role: req.user?.role,
-      error_context: 'PRODUCT_CATEGORIES_ACCESS_FAILED'
+      error_context: 'CATEGORIES_ACCESS_FAILED'
     });
     
     res.status(500).json({ error: error.message });
+  }
+}
+
+// ✅ NEW: Create product category
+async function createProductCategory(req, res) {
+  try {
+    const { name, description } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // Validation
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+    
+    // ✅ LOG: Category creation process started
+    await req.logEvent(
+      'PRODUCT_CATEGORY_CREATION_STARTED',
+      'ProductCategory',
+      'NEW_CATEGORY',
+      `Started creating new product category: ${name}`,
+      null,
+      {
+        category_name: name,
+        description: description,
+        created_by: userId,
+        creator_role: userRole,
+        creation_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'CATEGORY_CREATION_START' }
+    );
+
+    const category = await ProductService.createProductCategory({ name: name.trim(), description });
+    
+    // ✅ LOG: Successful category creation
+    await req.logEvent(
+      'PRODUCT_CATEGORY_CREATED',
+      'ProductCategory',
+      category.category_id,
+      `Successfully created new product category: ${category.name}`,
+      null,
+      {
+        category_id: category.category_id,
+        category_name: category.name,
+        description: category.description,
+        created_by: userId,
+        creator_role: userRole,
+        created_at: category.created_at,
+        business_impact: 'NEW_CATEGORY_AVAILABLE_FOR_PRODUCTS'
+      },
+      { 
+        operation_type: 'PRODUCT_MANAGEMENT', 
+        action_type: 'CATEGORY_CREATION_SUCCESS',
+        business_impact: 'PRODUCT_CATEGORIZATION_EXPANDED'
+      }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Product category created successfully',
+      data: category
+    });
+  } catch (error) {
+    console.error('Error creating product category:', error);
+    
+    // ✅ LOG: Category creation failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'createProductCategory',
+      category_data: {
+        name: req.body.name,
+        description: req.body.description
+      },
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CATEGORY_CREATION_FAILED'
+    });
+    
+    res.status(400).json({ 
+      success: false,
+      error: error.message 
+    });
   }
 }
 
@@ -631,6 +713,99 @@ async function getSubCategories1(req, res) {
   }
 }
 
+// ✅ NEW: Create subcategory1
+async function createSubCategory1(req, res) {
+  try {
+    const { name, description, category_id } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // Validation
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: 'Subcategory name is required' });
+    }
+    if (!category_id) {
+      return res.status(400).json({ error: 'Category ID is required' });
+    }
+    
+    // ✅ LOG: Subcategory1 creation process started
+    await req.logEvent(
+      'PRODUCT_SUBCATEGORY1_CREATION_STARTED',
+      'ProductSubCategory1',
+      'NEW_SUBCATEGORY1',
+      `Started creating new subcategory1: ${name}`,
+      null,
+      {
+        subcategory_name: name,
+        description: description,
+        category_id: category_id,
+        created_by: userId,
+        creator_role: userRole,
+        creation_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'SUBCATEGORY1_CREATION_START' }
+    );
+
+    const subcategory = await ProductService.createSubCategory1({ 
+      name: name.trim(), 
+      description, 
+      category_id 
+    });
+    
+    // ✅ LOG: Successful subcategory1 creation
+    await req.logEvent(
+      'PRODUCT_SUBCATEGORY1_CREATED',
+      'ProductSubCategory1',
+      subcategory.subcategory1_id,
+      `Successfully created new subcategory1: ${subcategory.name}`,
+      null,
+      {
+        subcategory1_id: subcategory.subcategory1_id,
+        subcategory_name: subcategory.name,
+        description: subcategory.description,
+        category_id: subcategory.category_id,
+        category_name: subcategory.category?.name,
+        created_by: userId,
+        creator_role: userRole,
+        created_at: subcategory.created_at,
+        business_impact: 'NEW_SUBCATEGORY1_AVAILABLE_FOR_PRODUCTS'
+      },
+      { 
+        operation_type: 'PRODUCT_MANAGEMENT', 
+        action_type: 'SUBCATEGORY1_CREATION_SUCCESS',
+        business_impact: 'PRODUCT_CATEGORIZATION_EXPANDED'
+      }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Subcategory1 created successfully',
+      data: subcategory
+    });
+  } catch (error) {
+    console.error('Error creating subcategory1:', error);
+    
+    // ✅ LOG: Subcategory1 creation failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'createSubCategory1',
+      subcategory_data: {
+        name: req.body.name,
+        description: req.body.description,
+        category_id: req.body.category_id
+      },
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'SUBCATEGORY1_CREATION_FAILED'
+    });
+    
+    res.status(400).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+}
+
 // ✅ NEW: Get subcategories2 for a subcategory1
 async function getSubCategories2(req, res) {
   try {
@@ -674,6 +849,100 @@ async function getSubCategories2(req, res) {
   }
 }
 
+// ✅ NEW: Create subcategory2
+async function createSubCategory2(req, res) {
+  try {
+    const { name, description, subcategory1_id } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // Validation
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: 'Subcategory name is required' });
+    }
+    if (!subcategory1_id) {
+      return res.status(400).json({ error: 'Subcategory1 ID is required' });
+    }
+    
+    // ✅ LOG: Subcategory2 creation process started
+    await req.logEvent(
+      'PRODUCT_SUBCATEGORY2_CREATION_STARTED',
+      'ProductSubCategory2',
+      'NEW_SUBCATEGORY2',
+      `Started creating new subcategory2: ${name}`,
+      null,
+      {
+        subcategory_name: name,
+        description: description,
+        subcategory1_id: subcategory1_id,
+        created_by: userId,
+        creator_role: userRole,
+        creation_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'SUBCATEGORY2_CREATION_START' }
+    );
+
+    const subcategory = await ProductService.createSubCategory2({ 
+      name: name.trim(), 
+      description, 
+      subcategory1_id 
+    });
+    
+    // ✅ LOG: Successful subcategory2 creation
+    await req.logEvent(
+      'PRODUCT_SUBCATEGORY2_CREATED',
+      'ProductSubCategory2',
+      subcategory.subcategory2_id,
+      `Successfully created new subcategory2: ${subcategory.name}`,
+      null,
+      {
+        subcategory2_id: subcategory.subcategory2_id,
+        subcategory_name: subcategory.name,
+        description: subcategory.description,
+        subcategory1_id: subcategory.subcategory1_id,
+        subcategory1_name: subcategory.subcategory1?.name,
+        category_name: subcategory.subcategory1?.category?.name,
+        created_by: userId,
+        creator_role: userRole,
+        created_at: subcategory.created_at,
+        business_impact: 'NEW_SUBCATEGORY2_AVAILABLE_FOR_PRODUCTS'
+      },
+      { 
+        operation_type: 'PRODUCT_MANAGEMENT', 
+        action_type: 'SUBCATEGORY2_CREATION_SUCCESS',
+        business_impact: 'PRODUCT_CATEGORIZATION_EXPANDED'
+      }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Subcategory2 created successfully',
+      data: subcategory
+    });
+  } catch (error) {
+    console.error('Error creating subcategory2:', error);
+    
+    // ✅ LOG: Subcategory2 creation failure
+    await req.logError(error, {
+      controller: 'product',
+      action: 'createSubCategory2',
+      subcategory_data: {
+        name: req.body.name,
+        description: req.body.description,
+        subcategory1_id: req.body.subcategory1_id
+      },
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'SUBCATEGORY2_CREATION_FAILED'
+    });
+    
+    res.status(400).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+}
+
 module.exports = {
   createProduct,
   getAllProducts,
@@ -683,8 +952,11 @@ module.exports = {
   
   // ✅ NEW: Category system controllers
   getProductCategories,
+  createProductCategory,
   getSubCategories1,
+  createSubCategory1,
   getSubCategories2,
+  createSubCategory2,
   
   // ✅ DEPRECATED: Keep old controllers for backward compatibility
   getProductLines,

@@ -2,6 +2,15 @@ const express = require("express");
 const router = express.Router();
 const clientController = require("./client.controller");
 
+// ✅ DEBUG/TEST endpoints (before CRUD to avoid conflicts)
+router.get("/credentials", clientController.getClientCredentials);
+router.post("/test-client", clientController.createTestClient);
+
+// ✅ NEW: Credential handover endpoints
+router.get("/credentials/pending", clientController.getPendingCredentials);
+router.get("/credentials/:client_id", clientController.getClientCredentialsById);
+router.put("/credentials/:client_id/handed-over", clientController.markCredentialsHandedOver);
+
 // Client CRUD operations
 router.post("/", clientController.createClient);
 router.get("/", clientController.getAllClients);
