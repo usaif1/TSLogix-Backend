@@ -19,14 +19,14 @@ enum RoleName {
 
 // ✅ NEW: Client Type enum for different client categories
 enum ClientType {
-  COMMERCIAL  // Commercial clients (companies)
-  INDIVIDUAL  // Individual clients (persons)
+  JURIDICO   // Juridical clients (companies/organizations)
+  NATURAL    // Natural clients (individual persons)
 }
 
-// ✅ NEW: Company Type enum for commercial clients
+// ✅ NEW: Company Type enum for juridical clients
 enum CompanyType {
-  PRIVATE   // Empresa Privada
-  PUBLIC    // Empresa Pública
+  PRIVADO    // Empresa Privada
+  PUBLICO    // Empresa Pública
 }
 
 // ✅ NEW: Establishment Type enum for commercial clients
@@ -444,6 +444,11 @@ model User {
   // ✅ NEW: Client creation and ownership relations
   createdClients        Client[]             @relation("ClientCreator")
   clientUserAccount     Client?              @relation("ClientUser")
+  
+  // ✅ NEW: Multiple client user accounts relations
+  clientUserAccounts    ClientUser[]         @relation("ClientUserAccount")
+  createdClientUsers    ClientUser[]         @relation("ClientUserCreator")
+  
   productAssignments    ClientProductAssignment[] @relation("ProductAssigner")
   supplierAssignments   ClientSupplierAssignment[] @relation("SupplierAssigner")
 
@@ -658,7 +663,7 @@ model Customer {
   @@map("customers")
 }
 
-// ✅ NEW: Enhanced Client model for both commercial and individual clients
+// ✅ NEW: Enhanced Client model for both juridical and natural clients
 model Client {
   client_id           String            @id @default(uuid()) @map("client_id")
   client_type         ClientType        @map("client_type")
@@ -672,19 +677,19 @@ model Client {
   created_at          DateTime          @default(now())
   updated_at          DateTime          @updatedAt
   
-  // ✅ NEW: Client ownership and user credentials
+  // ✅ NEW: Client ownership and user credentials (DEPRECATED - use clientUsers relation)
   created_by          String            // Warehouse incharge who created this client
-  client_user_id      String            @unique // Auto-generated user account for this client (required, unique)
-  auto_username       String            @unique // Auto-generated username (backend only, required, unique)
-  auto_password_hash  String            // Auto-generated password hash (backend only, required)
+  client_user_id      String?           @unique // DEPRECATED: Use clientUsers relation instead
+  auto_username       String?           @unique // DEPRECATED: Use clientUsers relation instead
+  auto_password_hash  String?           // DEPRECATED: Use clientUsers relation instead
   
-  // Commercial client fields (used when client_type = COMMERCIAL)
+  // Juridical client fields (used when client_type = JURIDICO)
   company_name        String?           // Company Name
-  company_type        CompanyType?      // Private/Public
+  company_type        CompanyType?      // Privado/Publico
   establishment_type  EstablishmentType? @default(SELECCIONAR) // Type of establishment
   ruc                 String?           // RUC (tax identification)
   
-  // Individual client fields (used when client_type = INDIVIDUAL)
+  // Natural client fields (used when client_type = NATURAL)
   first_names         String?           // First Names
   last_name           String?           // Last Name
   mothers_last_name   String?           // Mother's Last Name
@@ -694,7 +699,10 @@ model Client {
   // Relations
   active_state        ActiveState?      @relation(fields: [active_state_id], references: [state_id])
   creator             User              @relation("ClientCreator", fields: [created_by], references: [id])
-  clientUser          User              @relation("ClientUser", fields: [client_user_id], references: [id])
+  clientUser          User?             @relation("ClientUser", fields: [client_user_id], references: [id])
+  
+  // ✅ NEW: Multiple users per client
+  clientUsers         ClientUser[]      @relation("ClientUsers")
   
   // ✅ NEW: Client product assignments (each client has their own products)
   productAssignments  ClientProductAssignment[]
@@ -714,6 +722,32 @@ model Client {
   @@index([active_state_id], map: "idx_client_active_state")
   @@index([created_by], map: "idx_client_created_by") // ✅ NEW: Index for creator lookup
   @@map("clients")
+}
+
+// ✅ NEW: Multiple users per client model
+model ClientUser {
+  client_user_id      String            @id @default(uuid()) @map("client_user_id")
+  client_id           String            @map("client_id")
+  user_id             String            @unique @map("user_id")
+  username            String            @unique @map("username")
+  password_hash       String            @map("password_hash")
+  is_primary          Boolean           @default(false) @map("is_primary") // Only one primary user per client
+  is_active           Boolean           @default(true) @map("is_active")
+  created_at          DateTime          @default(now())
+  created_by          String            @map("created_by")
+  notes               String?
+  
+  // Relations
+  client              Client            @relation("ClientUsers", fields: [client_id], references: [client_id], onDelete: Cascade)
+  user                User              @relation("ClientUserAccount", fields: [user_id], references: [id], onDelete: Cascade)
+  creator             User              @relation("ClientUserCreator", fields: [created_by], references: [id])
+
+  @@unique([client_id, is_primary], name: "client_primary_user_unique", map: "client_users_client_primary_unique")
+  @@index([client_id], map: "idx_client_users_client_id")
+  @@index([is_primary], map: "idx_client_users_is_primary")
+  @@index([is_active], map: "idx_client_users_is_active")
+  @@index([created_by], map: "idx_client_users_created_by")
+  @@map("client_users")
 }
 
 // ✅ NEW: Client-specific cell assignments model

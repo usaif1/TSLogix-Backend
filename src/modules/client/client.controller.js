@@ -13,8 +13,8 @@ async function createClient(req, res) {
     // Client type validation
     if (!clientData.client_type) {
       validationErrors.push("Client type is required");
-    } else if (!["COMMERCIAL", "INDIVIDUAL"].includes(clientData.client_type)) {
-      validationErrors.push("Client type must be COMMERCIAL or INDIVIDUAL");
+    } else if (!["JURIDICO", "NATURAL"].includes(clientData.client_type)) {
+      validationErrors.push("Client type must be JURIDICO or NATURAL");
     }
 
     // Common required fields
@@ -24,17 +24,17 @@ async function createClient(req, res) {
     if (!clientData.cell_phone) validationErrors.push("Cell phone number is required");
 
     // Client type specific validation
-    if (clientData.client_type === "COMMERCIAL") {
-      if (!clientData.company_name) validationErrors.push("Company name is required for commercial clients");
-      if (!clientData.ruc) validationErrors.push("RUC is required for commercial clients");
-      if (!clientData.company_type) validationErrors.push("Company type is required for commercial clients");
-      if (!clientData.establishment_type) validationErrors.push("Establishment type is required for commercial clients");
-    } else if (clientData.client_type === "INDIVIDUAL") {
-      if (!clientData.first_names) validationErrors.push("First names are required for individual clients");
-      if (!clientData.last_name) validationErrors.push("Last name is required for individual clients");
-      if (!clientData.mothers_last_name) validationErrors.push("Mother's last name is required for individual clients");
-      if (!clientData.individual_id) validationErrors.push("Individual ID is required for individual clients");
-      if (!clientData.date_of_birth) validationErrors.push("Date of birth is required for individual clients");
+    if (clientData.client_type === "JURIDICO") {
+      if (!clientData.company_name) validationErrors.push("Company name is required for juridical clients");
+      if (!clientData.ruc) validationErrors.push("RUC is required for juridical clients");
+      if (!clientData.company_type) validationErrors.push("Company type is required for juridical clients");
+      if (!clientData.establishment_type) validationErrors.push("Establishment type is required for juridical clients");
+    } else if (clientData.client_type === "NATURAL") {
+      if (!clientData.first_names) validationErrors.push("First names are required for natural clients");
+      if (!clientData.last_name) validationErrors.push("Last name is required for natural clients");
+      if (!clientData.mothers_last_name) validationErrors.push("Mother's last name is required for natural clients");
+      if (!clientData.individual_id) validationErrors.push("Individual ID is required for natural clients");
+      if (!clientData.date_of_birth) validationErrors.push("Date of birth is required for natural clients");
     }
 
     // Cell assignment validation (mandatory)
@@ -518,15 +518,15 @@ async function getClientStatistics(req, res) {
 
     const [
       totalClients,
-      commercialClients,
-      individualClients,
+      juridicalClients,
+      naturalClients,
       activeClients,
       clientsWithCells,
       recentClients
     ] = await Promise.all([
       prisma.client.count(),
-      prisma.client.count({ where: { client_type: "COMMERCIAL" } }),
-      prisma.client.count({ where: { client_type: "INDIVIDUAL" } }),
+      prisma.client.count({ where: { client_type: "JURIDICO" } }),
+      prisma.client.count({ where: { client_type: "NATURAL" } }),
       prisma.client.count({ 
         where: { 
           active_state: { name: "Active" }
@@ -552,14 +552,14 @@ async function getClientStatistics(req, res) {
 
     const statistics = {
       totalClients,
-      commercialClients,
-      individualClients,
+      juridicalClients,
+      naturalClients,
       activeClients,
       clientsWithCells,
       recentClients,
       percentages: {
-        commercial: totalClients > 0 ? ((commercialClients / totalClients) * 100).toFixed(1) : 0,
-        individual: totalClients > 0 ? ((individualClients / totalClients) * 100).toFixed(1) : 0,
+        juridical: totalClients > 0 ? ((juridicalClients / totalClients) * 100).toFixed(1) : 0,
+        natural: totalClients > 0 ? ((naturalClients / totalClients) * 100).toFixed(1) : 0,
         active: totalClients > 0 ? ((activeClients / totalClients) * 100).toFixed(1) : 0,
         withCells: totalClients > 0 ? ((clientsWithCells / totalClients) * 100).toFixed(1) : 0
       }

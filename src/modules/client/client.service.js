@@ -8,10 +8,10 @@ function generateUniqueUsername(clientType, companyName, firstName, lastName) {
   const prefix = "client_";
   let baseName = "";
   
-  if (clientType === "COMMERCIAL" && companyName) {
+  if (clientType === "JURIDICO" && companyName) {
     // Use first word of company name
     baseName = companyName.split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
-  } else if (clientType === "INDIVIDUAL" && firstName && lastName) {
+  } else if (clientType === "NATURAL" && firstName && lastName) {
     // Use first name + last name initial
     baseName = (firstName.toLowerCase() + lastName.charAt(0).toLowerCase()).replace(/[^a-z0-9]/g, "");
   } else {
@@ -48,12 +48,12 @@ function generateSecurePassword() {
 function generateSimpleUsername(clientType, companyName, firstName, lastName) {
   let baseName = "";
   
-  if (clientType === "COMMERCIAL" && companyName) {
+  if (clientType === "JURIDICO" && companyName) {
     // Use company name: remove spaces, take first 6 chars, add numbers
     baseName = companyName.toLowerCase()
       .replace(/[^a-z0-9]/g, "") // Remove special chars and spaces
       .substring(0, 6); // Take first 6 characters
-  } else if (clientType === "INDIVIDUAL" && firstName && lastName) {
+  } else if (clientType === "NATURAL" && firstName && lastName) {
     // Use firstName + lastName: jumble them and add numbers
     const cleanFirstName = firstName.toLowerCase().replace(/[^a-z]/g, "").substring(0, 4);
     const cleanLastName = lastName.toLowerCase().replace(/[^a-z]/g, "").substring(0, 3);
@@ -71,13 +71,13 @@ function generateSimpleUsername(clientType, companyName, firstName, lastName) {
 function generateSimplePassword(clientType, companyName, firstName, lastName) {
   let basePassword = "";
   
-  if (clientType === "COMMERCIAL" && companyName) {
+  if (clientType === "JURIDICO" && companyName) {
     // Use company name: first 3 chars + "123" + last 2 chars (if available)
     const cleanName = companyName.replace(/[^a-zA-Z]/g, "");
     const firstPart = cleanName.substring(0, 3);
     const lastPart = cleanName.length > 3 ? cleanName.slice(-2) : "";
     basePassword = firstPart + "123" + lastPart;
-  } else if (clientType === "INDIVIDUAL" && firstName && lastName) {
+  } else if (clientType === "NATURAL" && firstName && lastName) {
     // Use firstName (first 3) + "123" + lastName (first 2)
     const cleanFirstName = firstName.replace(/[^a-zA-Z]/g, "").substring(0, 3);
     const cleanLastName = lastName.replace(/[^a-zA-Z]/g, "").substring(0, 2);
@@ -170,62 +170,62 @@ async function createClient(clientData, cellAssignmentData = {}) {
     }
 
     // Client type specific required fields
-    if (clientData.client_type === "COMMERCIAL") {
+    if (clientData.client_type === "JURIDICO") {
       if (!clientData.company_name) {
-        throw new Error("Company name is required for commercial clients");
+        throw new Error("Company name is required for juridical clients");
       }
       if (!clientData.ruc) {
-        throw new Error("RUC is required for commercial clients");
+        throw new Error("RUC is required for juridical clients");
       }
       if (!clientData.company_type) {
-        throw new Error("Company type is required for commercial clients");
+        throw new Error("Company type is required for juridical clients");
       }
       if (!clientData.establishment_type) {
-        throw new Error("Establishment type is required for commercial clients");
+        throw new Error("Establishment type is required for juridical clients");
       }
-    } else if (clientData.client_type === "INDIVIDUAL") {
+    } else if (clientData.client_type === "NATURAL") {
       if (!clientData.first_names) {
-        throw new Error("First names are required for individual clients");
+        throw new Error("First names are required for natural clients");
       }
       if (!clientData.last_name) {
-        throw new Error("Last name is required for individual clients");
+        throw new Error("Last name is required for natural clients");
       }
       if (!clientData.mothers_last_name) {
-        throw new Error("Mother's last name is required for individual clients");
+        throw new Error("Mother's last name is required for natural clients");
       }
       if (!clientData.individual_id) {
-        throw new Error("Individual ID is required for individual clients");
+        throw new Error("Individual ID is required for natural clients");
       }
       if (!clientData.date_of_birth) {
-        throw new Error("Date of birth is required for individual clients");
+        throw new Error("Date of birth is required for natural clients");
       }
     } else {
-      throw new Error("Invalid client type. Must be COMMERCIAL or INDIVIDUAL");
+      throw new Error("Invalid client type. Must be JURIDICO or NATURAL");
     }
 
-    // Check for duplicate RUC for commercial clients
-    if (clientData.client_type === "COMMERCIAL" && clientData.ruc) {
+    // Check for duplicate RUC for juridical clients
+    if (clientData.client_type === "JURIDICO" && clientData.ruc) {
       const existingClient = await prisma.client.findFirst({
         where: { 
           ruc: clientData.ruc,
-          client_type: "COMMERCIAL"
+          client_type: "JURIDICO"
         }
       });
       if (existingClient) {
-        throw new Error("A commercial client with this RUC already exists");
+        throw new Error("A juridical client with this RUC already exists");
       }
     }
 
-    // Check for duplicate individual_id for individual clients
-    if (clientData.client_type === "INDIVIDUAL" && clientData.individual_id) {
+    // Check for duplicate individual_id for natural clients
+    if (clientData.client_type === "NATURAL" && clientData.individual_id) {
       const existingClient = await prisma.client.findFirst({
         where: { 
           individual_id: clientData.individual_id,
-          client_type: "INDIVIDUAL"
+          client_type: "NATURAL"
         }
       });
       if (existingClient) {
-        throw new Error("An individual client with this ID already exists");
+        throw new Error("A natural client with this ID already exists");
       }
     }
 
@@ -284,12 +284,12 @@ async function createClient(clientData, cellAssignmentData = {}) {
       'phone',
       'cell_phone',
       'active_state_id',
-      // Commercial fields
+      // Juridical fields
       'company_name',
       'company_type',
       'establishment_type',
       'ruc',
-      // Individual fields
+      // Natural fields
       'first_names',
       'last_name',
       'mothers_last_name',
@@ -307,15 +307,15 @@ async function createClient(clientData, cellAssignmentData = {}) {
       }
     });
     
-    if (clientData.client_type === "COMMERCIAL") {
-      // Clear individual fields for commercial clients
+    if (clientData.client_type === "JURIDICO") {
+      // Clear natural fields for juridical clients
       cleanedData.first_names = null;
       cleanedData.last_name = null;
       cleanedData.mothers_last_name = null;
       cleanedData.individual_id = null;
       cleanedData.date_of_birth = null;
-    } else if (clientData.client_type === "INDIVIDUAL") {
-      // Clear commercial fields for individual clients
+    } else if (clientData.client_type === "NATURAL") {
+      // Clear juridical fields for natural clients
       cleanedData.company_name = null;
       cleanedData.company_type = null;
       cleanedData.establishment_type = null;
@@ -475,7 +475,7 @@ async function createClient(clientData, cellAssignmentData = {}) {
       });
 
       // ✅ NEW: Store credentials for handover to client
-      const clientName = clientWithAssignments.client_type === "COMMERCIAL" 
+      const clientName = clientWithAssignments.client_type === "JURIDICO" 
         ? clientWithAssignments.company_name 
         : `${clientWithAssignments.first_names} ${clientWithAssignments.last_name}`;
       
@@ -661,12 +661,12 @@ async function updateClient(clientId, updateData) {
       const duplicateRuc = await prisma.client.findFirst({
         where: { 
           ruc: updateData.ruc,
-          client_type: "COMMERCIAL",
+          client_type: "JURIDICO",
           client_id: { not: clientId }
         }
       });
       if (duplicateRuc) {
-        throw new Error("A commercial client with this RUC already exists");
+        throw new Error("A juridical client with this RUC already exists");
       }
     }
 
@@ -674,12 +674,12 @@ async function updateClient(clientId, updateData) {
       const duplicateId = await prisma.client.findFirst({
         where: { 
           individual_id: updateData.individual_id,
-          client_type: "INDIVIDUAL",
+          client_type: "NATURAL",
           client_id: { not: clientId }
         }
       });
       if (duplicateId) {
-        throw new Error("An individual client with this ID already exists");
+        throw new Error("A natural client with this ID already exists");
       }
     }
 
@@ -703,12 +703,12 @@ async function updateClient(clientId, updateData) {
       'phone',
       'cell_phone',
       'active_state_id',
-      // Commercial fields
+      // Juridical fields
       'company_name',
       'company_type',
       'establishment_type',
       'ruc',
-      // Individual fields
+      // Natural fields
       'first_names',
       'last_name',
       'mothers_last_name',
@@ -1114,13 +1114,13 @@ async function getClientFormFields() {
       }),
       // Get enum values for client types
       Promise.resolve([
-        { value: "COMMERCIAL", label: "Commercial" },
-        { value: "INDIVIDUAL", label: "Individual" }
+        { value: "JURIDICO", label: "Jurídico" },
+        { value: "NATURAL", label: "Natural" }
       ]),
       // Get enum values for company types
       Promise.resolve([
-        { value: "PRIVATE", label: "Private" },
-        { value: "PUBLIC", label: "Public" }
+        { value: "PRIVADO", label: "Privado" },
+        { value: "PUBLICO", label: "Público" }
       ]),
       // Get enum values for establishment types
       Promise.resolve([
@@ -1140,26 +1140,30 @@ async function getClientFormFields() {
       establishment_types: establishmentTypes,
       required_fields: {
         common: ["client_type", "email", "address", "phone", "cell_phone", "cell_ids", "warehouse_id"],
-        commercial: ["company_name", "ruc", "company_type", "establishment_type"],
-        individual: ["first_names", "last_name", "mothers_last_name", "individual_id", "date_of_birth"]
+        juridical: ["company_name", "ruc", "company_type", "establishment_type"],
+        natural: ["first_names", "last_name", "mothers_last_name", "individual_id", "date_of_birth"],
+        // ✅ NEW: Support for multiple users
+        users: ["users"] // Array of user objects with username and password
       },
       field_descriptions: {
-        client_type: "Type of client: COMMERCIAL or INDIVIDUAL (REQUIRED)",
+        client_type: "Type of client: JURIDICO or NATURAL (REQUIRED)",
         email: "Email address for the client (REQUIRED)",
         address: "Physical address of the client (REQUIRED)",
         phone: "Primary phone number (REQUIRED)",
         cell_phone: "Mobile/cell phone number (REQUIRED)",
-        company_name: "Company name (REQUIRED for commercial clients)",
-        ruc: "RUC (Registro Único de Contribuyente) - 11 digits (REQUIRED for commercial clients)",
-        company_type: "PRIVATE or PUBLIC company (REQUIRED for commercial clients)",
-        establishment_type: "Type of commercial establishment (REQUIRED for commercial clients)",
-        first_names: "First and middle names (REQUIRED for individual clients)",
-        last_name: "Last name/surname (REQUIRED for individual clients)",
-        mothers_last_name: "Mother's last name (REQUIRED for individual clients)",
-        individual_id: "DNI or similar identification document (REQUIRED for individual clients)",
-        date_of_birth: "Date of birth in YYYY-MM-DD format (REQUIRED for individual clients)",
+        company_name: "Company name (REQUIRED for juridical clients)",
+        ruc: "RUC (Registro Único de Contribuyente) - 11 digits (REQUIRED for juridical clients)",
+        company_type: "PRIVADO or PUBLICO company (REQUIRED for juridical clients)",
+        establishment_type: "Type of juridical establishment (REQUIRED for juridical clients)",
+        first_names: "First and middle names (REQUIRED for natural clients)",
+        last_name: "Last name/surname (REQUIRED for natural clients)",
+        mothers_last_name: "Mother's last name (REQUIRED for natural clients)",
+        individual_id: "DNI or similar identification document (REQUIRED for natural clients)",
+        date_of_birth: "Date of birth in YYYY-MM-DD format (REQUIRED for natural clients)",
         cell_ids: "Array of cell IDs to assign to the client (REQUIRED - at least 1 cell)",
-        warehouse_id: "Warehouse ID where the cells are located (REQUIRED)"
+        warehouse_id: "Warehouse ID where the cells are located (REQUIRED)",
+        // ✅ NEW: Multiple users support
+        users: "Array of user objects with username and password (OPTIONAL - if not provided, auto-generated credentials will be created)"
       }
     };
   } catch (error) {
@@ -1235,7 +1239,7 @@ async function getClientCredentials() {
 
     return clients.map(client => ({
       client_id: client.client_id,
-      client_name: client.client_type === "COMMERCIAL" 
+      client_name: client.client_type === "JURIDICO" 
         ? client.company_name 
         : `${client.first_names} ${client.last_name}`,
       client_type: client.client_type,
@@ -1294,7 +1298,8 @@ async function markCredentialsHandedOver(clientId) {
 // ✅ NEW: Get client by user ID (for authentication purposes)
 async function getClientByUserId(userId) {
   try {
-    const client = await prisma.client.findFirst({
+    // First try the old single user field (for backward compatibility)
+    let client = await prisma.client.findFirst({
       where: { client_user_id: userId },
       select: {
         client_id: true,
@@ -1309,9 +1314,248 @@ async function getClientByUserId(userId) {
       }
     });
     
+    // If not found, try the new multiple users table
+    if (!client) {
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { 
+          user_id: userId,
+          is_active: true
+        },
+        include: {
+          client: {
+            select: {
+              client_id: true,
+              client_type: true,
+              company_name: true,
+              first_names: true,
+              last_name: true,
+              email: true,
+              active_state: {
+                select: { name: true }
+              }
+            }
+          }
+        }
+      });
+      
+      if (clientUser) {
+        client = clientUser.client;
+      }
+    }
+    
     return client;
   } catch (error) {
     console.error("Error finding client by user ID:", error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Add multiple users to a client
+async function addClientUsers(clientId, usersData, createdBy) {
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Validate client exists
+      const client = await tx.client.findUnique({
+        where: { client_id: clientId },
+        select: {
+          client_id: true,
+          client_type: true,
+          company_name: true,
+          first_names: true,
+          last_name: true
+        }
+      });
+
+      if (!client) {
+        throw new Error("Client not found");
+      }
+
+      // Validate users data
+      if (!Array.isArray(usersData) || usersData.length === 0) {
+        throw new Error("Users data must be a non-empty array");
+      }
+
+      // Validate each user has required fields
+      for (let i = 0; i < usersData.length; i++) {
+        const userData = usersData[i];
+        if (!userData.username || !userData.password) {
+          throw new Error(`User ${i + 1}: username and password are required`);
+        }
+      }
+
+      // Check for username conflicts
+      const usernames = usersData.map(u => u.username);
+      const duplicateUsernames = usernames.filter((username, index) => usernames.indexOf(username) !== index);
+      if (duplicateUsernames.length > 0) {
+        throw new Error(`Duplicate usernames found: ${[...new Set(duplicateUsernames)].join(', ')}`);
+      }
+
+      // Check for existing usernames in database
+      const existingUsernames = await tx.user.findMany({
+        where: { user_id: { in: usernames } },
+        select: { user_id: true }
+      });
+      if (existingUsernames.length > 0) {
+        throw new Error(`Usernames already exist: ${existingUsernames.map(u => u.user_id).join(', ')}`);
+      }
+
+      // Get creator's organization
+      const creator = await tx.user.findUnique({
+        where: { id: createdBy },
+        include: { organisation: true, role: true }
+      });
+
+      if (!creator) {
+        throw new Error("Creator user not found");
+      }
+
+      // Get CLIENT role
+      const clientRole = await tx.role.findUnique({
+        where: { name: "CLIENT" }
+      });
+
+      if (!clientRole) {
+        throw new Error("CLIENT role not found in database");
+      }
+
+      // Create users and client users
+      const createdUsers = [];
+      for (let i = 0; i < usersData.length; i++) {
+        const userData = usersData[i];
+        const passwordHash = await bcrypt.hash(userData.password, 10);
+
+        // Create user account
+        const newUser = await tx.user.create({
+          data: {
+            user_id: userData.username,
+            email: userData.email || `${userData.username}@client.local`,
+            password_hash: passwordHash,
+            role: { connect: { role_id: clientRole.role_id } },
+            organisation: { connect: { organisation_id: creator.organisation_id } },
+            first_name: userData.first_name || client.first_names?.split(" ")[0] || client.company_name?.split(" ")[0] || "Client",
+            last_name: userData.last_name || client.last_name || client.company_name?.split(" ").slice(1).join(" ") || "User"
+          }
+        });
+
+        // Create client user link
+        const clientUser = await tx.clientUser.create({
+          data: {
+            client_id: clientId,
+            user_id: newUser.id,
+            username: userData.username,
+            password_hash: passwordHash,
+            is_primary: i === 0, // First user is primary
+            is_active: true,
+            created_by: createdBy,
+            notes: userData.notes || `User ${i + 1} for client`
+          }
+        });
+
+        createdUsers.push({
+          clientUser,
+          user: newUser
+        });
+      }
+
+      return createdUsers;
+    });
+
+    return result;
+  } catch (error) {
+    console.error("Error in addClientUsers service:", error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Get all users for a client
+async function getClientUsers(clientId) {
+  try {
+    const clientUsers = await prisma.clientUser.findMany({
+      where: { 
+        client_id: clientId,
+        is_active: true
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            user_id: true,
+            email: true,
+            first_name: true,
+            last_name: true,
+            created_at: true
+          }
+        },
+        creator: {
+          select: {
+            first_name: true,
+            last_name: true,
+            email: true
+          }
+        }
+      },
+      orderBy: [
+        { is_primary: 'desc' },
+        { created_at: 'asc' }
+      ]
+    });
+
+    return clientUsers;
+  } catch (error) {
+    console.error("Error in getClientUsers service:", error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Deactivate a client user
+async function deactivateClientUser(clientUserId, deactivatedBy) {
+  try {
+    const clientUser = await prisma.clientUser.findUnique({
+      where: { client_user_id: clientUserId },
+      include: {
+        client: {
+          select: {
+            client_id: true,
+            client_type: true,
+            company_name: true,
+            first_names: true,
+            last_name: true
+          }
+        }
+      }
+    });
+
+    if (!clientUser) {
+      throw new Error("Client user not found");
+    }
+
+    if (!clientUser.is_active) {
+      throw new Error("Client user is already deactivated");
+    }
+
+    // Prevent deactivating the only active user
+    const activeUsersCount = await prisma.clientUser.count({
+      where: {
+        client_id: clientUser.client_id,
+        is_active: true
+      }
+    });
+
+    if (activeUsersCount === 1) {
+      throw new Error("Cannot deactivate the only active user for this client");
+    }
+
+    const updatedClientUser = await prisma.clientUser.update({
+      where: { client_user_id: clientUserId },
+      data: {
+        is_active: false,
+        notes: `${clientUser.notes || ''}\nDeactivated on ${new Date().toISOString()} by ${deactivatedBy}`
+      }
+    });
+
+    return updatedClientUser;
+  } catch (error) {
+    console.error("Error in deactivateClientUser service:", error);
     throw error;
   }
 }
