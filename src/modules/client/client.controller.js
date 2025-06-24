@@ -81,64 +81,11 @@ async function createClient(req, res) {
       ...pureClientData
     } = clientData;
     
-    // ✅ LOG: Client creation process started
-    await req.logEvent(
-      'CLIENT_CREATION_STARTED',
-      'Client',
-      'NEW_CLIENT',
-      `Started creating new client: ${clientData.name}`,
-      null,
-      {
-        client_name: clientData.name,
-        client_email: clientData.email,
-        client_phone: clientData.phone,
-        client_address: clientData.address,
-        client_city: clientData.city,
-        client_country: clientData.country,
-        contact_person: clientData.contact_person,
-        created_by: userId,
-        creator_role: userRole,
-        creation_timestamp: new Date().toISOString(),
-        has_tax_id: !!clientData.tax_id,
-        has_registration_number: !!clientData.registration_number
-      },
-      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'CREATION_START' }
-    );
+    // ✅ OPTIMIZATION: Skip redundant logging in controller since service will log the creation
     
     const newClient = await clientService.createClient(pureClientData, cellAssignmentData);
     
-    // ✅ LOG: Successful client creation
-    await req.logEvent(
-      'CLIENT_CREATED',
-      'Client',
-      newClient.client_id,
-      `Successfully created new client: ${newClient.name}`,
-      null,
-      {
-        client_id: newClient.client_id,
-        client_name: newClient.name,
-        client_email: newClient.email,
-        client_phone: newClient.phone,
-        client_address: newClient.address,
-        client_city: newClient.city,
-        client_country: newClient.country,
-        contact_person: newClient.contact_person,
-        tax_id: newClient.tax_id,
-        registration_number: newClient.registration_number,
-        status: newClient.status,
-        created_by: userId,
-        creator_role: userRole,
-        created_at: newClient.created_at,
-        business_impact: 'NEW_CLIENT_AVAILABLE_FOR_ORDERS'
-      },
-      { 
-        operation_type: 'CLIENT_MANAGEMENT', 
-        action_type: 'CREATION_SUCCESS',
-        business_impact: 'CLIENT_ONBOARDED',
-        next_steps: 'CLIENT_CAN_CREATE_DEPARTURE_ORDERS'
-      }
-    );
-    
+    // ✅ OPTIMIZATION: Single success log (service already logs detailed creation)
     res.status(201).json({
       success: true,
       message: "Client created and cells assigned successfully",
@@ -147,19 +94,13 @@ async function createClient(req, res) {
   } catch (error) {
     console.error("Error in createClient controller:", error);
     
-    // ✅ LOG: Client creation failure
+    // ✅ OPTIMIZATION: Simplified error logging
     await req.logError(error, {
       controller: 'client',
       action: 'createClient',
-      client_data: {
-        name: req.body.name,
-        email: req.body.email,
-        phone: req.body.phone,
-        city: req.body.city,
-        country: req.body.country
-      },
+      client_type: req.body.client_type,
+      cell_count: req.body.cell_ids?.length || 0,
       user_id: req.user?.id,
-      user_role: req.user?.role,
       error_context: 'CLIENT_CREATION_FAILED'
     });
     
@@ -650,9 +591,9 @@ async function createTestClient(req, res) {
 
     // Create a simple test client
     const testClientData = {
-      client_type: "COMMERCIAL",
+      client_type: "JURIDICO",
       company_name: `Test Client ${Date.now()}`,
-      company_type: "PRIVATE",
+              company_type: "PRIVADO",
       establishment_type: "FARMACIA",
       email: `testclient${Date.now()}@test.com`,
       address: "123 Test Street, Test City",

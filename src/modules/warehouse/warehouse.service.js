@@ -144,7 +144,7 @@ async function getAllWarehouseCells(filter = {}) {
     const activeAssignment = cell.clientCellAssignments[0] || null;
     const clientInfo = activeAssignment ? {
       client_id: activeAssignment.client.client_id,
-      client_name: activeAssignment.client.client_type === "COMMERCIAL" 
+                client_name: activeAssignment.client.client_type === "JURIDICO" 
         ? activeAssignment.client.company_name 
         : `${activeAssignment.client.first_names} ${activeAssignment.client.last_name}`,
       client_type: activeAssignment.client.client_type,
