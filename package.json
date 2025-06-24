@@ -6,7 +6,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "show-db": "npx prisma studio",
-    "reset-db": "npx prisma migrate reset"
+    "reset-db": "npx prisma migrate reset",
+    "populate-countries": "node scripts/populate-countries.js"
   },
   "_moduleAliases": {
     "@": "src"
