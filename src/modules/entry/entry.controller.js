@@ -330,7 +330,9 @@ async function getAllEntryOrders(req, res) {
     const entryOrders = await entryService.getAllEntryOrders(
       filterOrg,
       sortOptions,
-      searchOrderNo
+      searchOrderNo,
+      userRole,
+      req.user?.id
     );
 
     return res.status(200).json({
@@ -406,7 +408,7 @@ async function getEntryOrderByNo(req, res) {
     }
 
     const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
-    const entryOrder = await entryService.getEntryOrderByNo(orderNo, filterOrg);
+    const entryOrder = await entryService.getEntryOrderByNo(orderNo, filterOrg, userRole, req.user?.id);
 
     if (!entryOrder) {
       return res.status(404).json({ 
@@ -649,7 +651,7 @@ async function getEntryOrdersByStatus(req, res) {
     }
 
     const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
-    const orders = await entryService.getEntryOrdersByStatus(status.toUpperCase(), filterOrg);
+    const orders = await entryService.getEntryOrdersByStatus(status.toUpperCase(), filterOrg, userRole, req.user?.id);
 
     return res.status(200).json({
       success: true,

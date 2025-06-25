@@ -108,7 +108,20 @@ async function createProduct(req, res) {
       error_context: 'PRODUCT_CREATION_FAILED'
     });
     
-    res.status(400).json({ error: error.message });
+    // ✅ IMPROVED: Better error handling for unique constraint violations
+    if (error.message.includes('already exists')) {
+      res.status(409).json({ 
+        success: false,
+        error: error.message,
+        error_type: 'DUPLICATE_PRODUCT_CODE',
+        suggestion: 'Please use a different product code or leave it empty for auto-generation'
+      });
+    } else {
+      res.status(400).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
   }
 }
 

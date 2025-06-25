@@ -437,6 +437,20 @@ async function createClient(clientData, cellAssignmentData = {}) {
         }
       });
 
+      // ✅ FIX: Create ClientUser record (clientUserAccounts) for proper user-client relationship
+      await tx.clientUser.create({
+        data: {
+          client_id: client.client_id,
+          user_id: clientUser.id,
+          username: autoUsername,
+          password_hash: autoPasswordHash,
+          is_primary: true, // This is the primary user for the client
+          is_active: true,
+          created_by: cellAssignmentData.assigned_by,
+          notes: `Primary user created during client creation for ${client.client_type === "JURIDICO" ? client.company_name : `${client.first_names} ${client.last_name}`}`
+        }
+      });
+
       // ✅ OPTIMIZATION 4: Bulk create cell assignments
       const finalNotes = cellAssignmentData.notes || `Cell assigned during client creation for ${client.client_type === "JURIDICO" ? client.company_name : `${client.first_names} ${client.last_name}`}`;
       

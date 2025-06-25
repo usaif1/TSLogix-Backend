@@ -152,7 +152,9 @@ async function createEntryOrder(entryData) {
 async function getAllEntryOrders(
   organisationId = null,
   sortOptions = null,
-  entryOrderNo = null
+  entryOrderNo = null,
+  userRole = null,
+  userId = null
 ) {
   const query = {
     select: {
@@ -299,6 +301,12 @@ async function getAllEntryOrders(
   if (entryOrderNo) {
     whereConds.entry_order_no = { contains: entryOrderNo, mode: "insensitive" };
   }
+  
+  // ✅ NEW: CLIENT-specific filtering - clients can only see their own entry orders
+  if (userRole === "CLIENT" && userId) {
+    whereConds.created_by = userId;
+  }
+  
   if (Object.keys(whereConds).length) {
     query.where = whereConds;
   }
@@ -394,21 +402,22 @@ async function getAllEntryOrders(
  * @param {string} userId - ID of the user making the request
  */
 async function getEntryFormFields(userRole = null, userId = null) {
-  // ✅ NEW: Build client-specific filtering for products and suppliers
+  // ✅ NEW: Build client-specific filtering for products, suppliers, and users
   let productsPromise;
   let suppliersPromise;
+  let usersPromise;
 
   if (userRole === "CLIENT" && userId) {
-    // For CLIENT users, get only assigned products and suppliers
+    // For CLIENT users, get only assigned products, suppliers, and client users
     
     // Get client record for this user
     const clientUser = await prisma.user.findUnique({
       where: { id: userId },
-      include: { clientUserAccount: true }
+      include: { clientUserAccounts: true }
     });
 
-    if (clientUser?.clientUserAccount) {
-      const clientId = clientUser.clientUserAccount.client_id;
+    if (clientUser?.clientUserAccounts && clientUser.clientUserAccounts.length > 0) {
+      const clientId = clientUser.clientUserAccounts[0].client_id;
       
       // Get client-assigned products
       productsPromise = prisma.product.findMany({
@@ -472,13 +481,35 @@ async function getEntryFormFields(userRole = null, userId = null) {
           country: { select: { name: true } },
         },
       });
+
+      // Get client-specific users (all users belonging to this client)
+      usersPromise = prisma.user.findMany({
+        where: {
+          clientUserAccounts: {
+            some: {
+              client_id: clientId,
+              is_active: true
+            }
+          },
+          active_state: { name: "Active" },
+        },
+        select: {
+          id: true,
+          user_id: true,
+          first_name: true,
+          last_name: true,
+          email: true,
+          role: { select: { name: true } },
+        },
+      });
     } else {
       // Client user account not found, return empty arrays
       productsPromise = Promise.resolve([]);
       suppliersPromise = Promise.resolve([]);
+      usersPromise = Promise.resolve([]);
     }
   } else {
-    // For non-CLIENT users (ADMIN, WAREHOUSE_INCHARGE, etc.), get all products and suppliers
+    // For non-CLIENT users (ADMIN, WAREHOUSE_INCHARGE, etc.), get all products, suppliers, and users
     productsPromise = prisma.product.findMany({
       select: {
         product_id: true,
@@ -523,6 +554,21 @@ async function getEntryFormFields(userRole = null, userId = null) {
         country: { select: { name: true } },
       },
     });
+
+    // For non-CLIENT users, get all users
+    usersPromise = prisma.user.findMany({
+      where: {
+        active_state: { name: "Active" },
+      },
+      select: {
+        id: true,
+        user_id: true,
+        first_name: true,
+        last_name: true,
+        email: true,
+        role: { select: { name: true } },
+      },
+    });
   }
 
   const [
@@ -549,19 +595,7 @@ async function getEntryFormFields(userRole = null, userId = null) {
         description: true,
       },
     }),
-    prisma.user.findMany({
-      where: {
-        active_state: { name: "Active" },
-      },
-      select: {
-        id: true,
-        user_id: true,
-        first_name: true,
-        last_name: true,
-        email: true,
-        role: { select: { name: true } },
-      },
-    }),
+    usersPromise,
     suppliersPromise,
     productsPromise,
     prisma.temperatureRange.findMany({
@@ -711,10 +745,15 @@ async function getCurrentEntryOrderNo() {
 /**
  * Get single entry order by order number with full details
  */
-async function getEntryOrderByNo(orderNo, organisationId = null) {
+async function getEntryOrderByNo(orderNo, organisationId = null, userRole = null, userId = null) {
   const where = { entry_order_no: orderNo };
   if (organisationId) {
     where.order = { organisation_id: organisationId };
+  }
+  
+  // ✅ NEW: CLIENT-specific filtering - clients can only see their own entry orders
+  if (userRole === "CLIENT" && userId) {
+    where.created_by = userId;
   }
 
   const order = await prisma.entryOrder.findFirst({
@@ -1091,11 +1130,16 @@ async function reviewEntryOrder(orderNo, reviewData) {
 /**
  * Get entry orders by review status
  */
-async function getEntryOrdersByStatus(reviewStatus, organisationId = null) {
+async function getEntryOrdersByStatus(reviewStatus, organisationId = null, userRole = null, userId = null) {
   const where = { review_status: reviewStatus };
 
   if (organisationId) {
     where.order = { organisation_id: organisationId };
+  }
+  
+  // ✅ NEW: CLIENT-specific filtering - clients can only see their own entry orders
+  if (userRole === "CLIENT" && userId) {
+    where.created_by = userId;
   }
 
   const orders = await prisma.entryOrder.findMany({

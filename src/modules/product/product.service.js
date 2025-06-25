@@ -1,15 +1,16 @@
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
-// ✅ NEW: Auto-generate unique product code
+// ✅ NEW: Auto-generate unique product code with better collision handling
 const generateProductCode = async () => {
-  let isUnique = false;
-  let productCode = '';
+  let attempts = 0;
+  const maxAttempts = 10;
   
-  while (!isUnique) {
-    // Generate format: PRD-XXXXXXXX (8 alphanumeric characters)
-    const randomPart = Math.random().toString(36).substring(2, 10).toUpperCase();
-    productCode = `PRD-${randomPart}`;
+  while (attempts < maxAttempts) {
+    // Generate format: PRD-XXXXXXXX (8 alphanumeric characters + timestamp suffix for better uniqueness)
+    const timestamp = Date.now().toString().slice(-4); // Last 4 digits of timestamp
+    const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase(); // 4 random chars
+    const productCode = `PRD-${randomPart}${timestamp}`;
     
     // Check if this code already exists
     const existingProduct = await prisma.product.findUnique({
@@ -17,17 +18,34 @@ const generateProductCode = async () => {
     });
     
     if (!existingProduct) {
-      isUnique = true;
+      return productCode;
     }
+    
+    attempts++;
+    // Small delay to avoid rapid-fire collisions
+    await new Promise(resolve => setTimeout(resolve, 10));
   }
   
-  return productCode;
+  // Fallback: use UUID-based code if all attempts failed
+  const { v4: uuidv4 } = require('uuid');
+  const fallbackCode = `PRD-${uuidv4().substring(0, 8).toUpperCase()}`;
+  console.warn(`⚠️ Used fallback product code generation: ${fallbackCode}`);
+  return fallbackCode;
 };
 
 const createProduct = async (data, createdByUserId = null, userRole = null) => {
   // ✅ NEW: Auto-generate product code if not provided
   if (!data.product_code) {
     data.product_code = await generateProductCode();
+  } else {
+    // ✅ FIXED: Check if manually provided product_code already exists
+    const existingProduct = await prisma.product.findUnique({
+      where: { product_code: data.product_code }
+    });
+    
+    if (existingProduct) {
+      throw new Error(`Product code "${data.product_code}" already exists. Please use a different product code or leave it empty for auto-generation.`);
+    }
   }
   
   // Create the product first
