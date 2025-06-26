@@ -37,19 +37,24 @@ async function createSupplier(supplierData, userRole = null, userId = null) {
     // ✅ NEW: Auto-assign supplier to client if created by CLIENT role
     if (userRole === "CLIENT" && userId) {
       try {
-        // Find the client account for this user
-        const clientUser = await prisma.user.findUnique({
-          where: { id: userId },
-          include: { 
-            clientUserAccount: true
+        // Find the client account for this user using the new ClientUser table
+        const clientUser = await prisma.clientUser.findFirst({
+          where: { 
+            user_id: userId,
+            is_active: true
+          },
+          include: {
+            client: {
+              select: { client_id: true }
+            }
           }
         });
         
-        if (clientUser?.clientUserAccount) {
+        if (clientUser?.client) {
           // Create client-supplier assignment
           await prisma.clientSupplierAssignment.create({
             data: {
-              client_id: clientUser.clientUserAccount.client_id,
+              client_id: clientUser.client.client_id,
               supplier_id: newSupplier.supplier_id,
               assigned_by: userId, // The client user who created it
               preferred_supplier: false, // Not preferred by default
@@ -58,7 +63,7 @@ async function createSupplier(supplierData, userRole = null, userId = null) {
             }
           });
           
-          console.log(`✅ Auto-assigned supplier ${newSupplier.supplier_id} to client ${clientUser.clientUserAccount.client_id}`);
+          console.log(`✅ Auto-assigned supplier ${newSupplier.supplier_id} to client ${clientUser.client.client_id}`);
         } else {
           console.log(`⚠️ CLIENT user ${userId} has no client account - cannot auto-assign supplier`);
         }
@@ -87,10 +92,13 @@ async function getAllSuppliers(search, userRole = null, userId = null) {
     // ✅ CLIENT ROLE: Show only suppliers assigned to this client
     if (userRole === "CLIENT" && userId) {
       // For CLIENT role, check if they have a client account with supplier assignments
-      const clientUser = await prisma.user.findUnique({
-        where: { id: userId },
-        include: { 
-          clientUserAccount: {
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { 
+          user_id: userId,
+          is_active: true
+        },
+        include: {
+          client: {
             include: {
               supplierAssignments: {
                 where: { is_active: true }
@@ -100,11 +108,11 @@ async function getAllSuppliers(search, userRole = null, userId = null) {
         }
       });
       
-      if (clientUser?.clientUserAccount?.supplierAssignments?.length > 0) {
+      if (clientUser?.client?.supplierAssignments?.length > 0) {
         // ✅ NEW CLIENT SYSTEM: Show only assigned suppliers
         whereClause.clientAssignments = {
           some: {
-            client_id: clientUser.clientUserAccount.client_id,
+            client_id: clientUser.client.client_id,
             is_active: true
           }
         };

@@ -677,6 +677,9 @@ model Client {
   created_at          DateTime          @default(now())
   updated_at          DateTime          @updatedAt
   
+  // ✅ NEW: Store simple client users data from request (for entry form fields)
+  client_users_data   Json?             // Store the simple client_users array from request
+  
   // ✅ NEW: Client ownership and user credentials (DEPRECATED - use clientUsers relation)
   created_by          String            // Warehouse incharge who created this client
   client_user_id      String?           @unique // DEPRECATED: Use clientUsers relation instead

@@ -362,7 +362,7 @@ async function getEntryFormFields(req, res) {
     return res.status(200).json({
       success: true,
       data: data,
-      user_role: userRole,
+      user_role: { name: userRole },
       filtered_for_client: userRole === "CLIENT",
       ...(userRole === "CLIENT" && {
         message: "Form fields filtered for your assigned products and suppliers"

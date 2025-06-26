@@ -110,17 +110,24 @@ const createProduct = async (data, createdByUserId = null, userRole = null) => {
   // ✅ NEW: Auto-assign product to CLIENT who created it
   if (userRole === "CLIENT" && createdByUserId) {
     try {
-      // Find the client associated with this user
-      const clientUser = await prisma.user.findUnique({
-        where: { id: createdByUserId },
-        include: { clientUserAccount: true }
+      // Find the client associated with this user using the new ClientUser table
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { 
+          user_id: createdByUserId,
+          is_active: true
+        },
+        include: {
+          client: {
+            select: { client_id: true }
+          }
+        }
       });
       
-      if (clientUser?.clientUserAccount) {
+      if (clientUser?.client) {
         // Create client-product assignment
         await prisma.clientProductAssignment.create({
           data: {
-            client_id: clientUser.clientUserAccount.client_id,
+            client_id: clientUser.client.client_id,
             product_id: newProduct.product_id,
             assigned_by: createdByUserId,
             client_product_code: `C${Math.floor(Math.random() * 1000)}-${newProduct.product_code}`,
@@ -129,7 +136,7 @@ const createProduct = async (data, createdByUserId = null, userRole = null) => {
           }
         });
         
-        console.log(`✅ Auto-assigned product ${newProduct.product_code} to client ${clientUser.clientUserAccount.client_id}`);
+        console.log(`✅ Auto-assigned product ${newProduct.product_code} to client ${clientUser.client.client_id}`);
       }
     } catch (error) {
       console.error(`⚠️ Failed to auto-assign product to client:`, error.message);
@@ -146,15 +153,22 @@ const getAllProducts = async (filters = {}, userRole = null, userId = null) => {
   // ✅ NEW: Client-specific filtering
   if (userRole === "CLIENT" && userId) {
     // For CLIENT role, only show products assigned to this client
-    const clientUser = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { clientUserAccount: true }
+    const clientUser = await prisma.clientUser.findFirst({
+      where: { 
+        user_id: userId,
+        is_active: true
+      },
+      include: {
+        client: {
+          select: { client_id: true }
+        }
+      }
     });
     
-    if (clientUser?.clientUserAccount) {
+    if (clientUser?.client) {
       where.clientAssignments = {
         some: {
-          client_id: clientUser.clientUserAccount.client_id,
+          client_id: clientUser.client.client_id,
           is_active: true
         }
       };

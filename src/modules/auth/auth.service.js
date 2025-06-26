@@ -86,10 +86,17 @@ async function registerUser(loginPayload) {
  */
 async function loginUser(userId, plainPassword, ipAddress = null, userAgent = null, sessionId = null) {
   try {
-    // ✅ Find user by `userId`
+    // ✅ Find user by `userId` and include related data
     const user = await prisma.user.findUnique({
       where: { user_id: userId },
-      include: { role: true }, // Include role to get role name
+      include: { 
+        role: true, // Include role to get role name
+        clientUserAccounts: {
+          include: {
+            client: true // Include client data for CLIENT role users
+          }
+        }
+      },
     });
 
     if (!user) {
@@ -138,10 +145,47 @@ async function loginUser(userId, plainPassword, ipAddress = null, userAgent = nu
       throw new Error("Invalid userID or password.");
     }
 
-    // ✅ Generate JWT token
+    // ✅ Get username and client data for CLIENT role users
+    let username = user.user_id; // Default to user_id
+    let clientData = null;
+
+    if (user.role.name === 'CLIENT' && user.clientUserAccounts.length > 0) {
+      // Get the client user account (there should be only one for a user)
+      const clientUserAccount = user.clientUserAccounts[0];
+      username = clientUserAccount.username; // Use the client username
+      
+      if (clientUserAccount.client) {
+        const client = clientUserAccount.client;
+        
+        // Prepare client name data based on client type
+        if (client.client_type === 'JURIDICO') {
+          clientData = {
+            client_id: client.client_id,
+            client_type: client.client_type,
+            name: client.company_name,
+            company_type: client.company_type,
+            establishment_type: client.establishment_type,
+            ruc: client.ruc
+          };
+        } else if (client.client_type === 'NATURAL') {
+          clientData = {
+            client_id: client.client_id,
+            client_type: client.client_type,
+            name: `${client.first_names} ${client.last_name} ${client.mothers_last_name || ''}`.trim(),
+            first_names: client.first_names,
+            last_name: client.last_name,
+            mothers_last_name: client.mothers_last_name,
+            individual_id: client.individual_id
+          };
+        }
+      }
+    }
+
+    // ✅ Generate JWT token with username
     const token = jwt.sign(
       {
         userId: user.user_id,
+        username: username,
         email: user.email,
         role: user.role.name, // Attach role name in the token
         organisation_id: user.organisation_id,
@@ -150,31 +194,50 @@ async function loginUser(userId, plainPassword, ipAddress = null, userAgent = nu
       SECRET_KEY
     );
 
+    // ✅ Prepare response object
+    const response = {
+      token,
+      username,
+      role: user.role.name,
+      organisation_id: user.organisation_id,
+      id: user.id
+    };
+
+    // ✅ Add client data for CLIENT role users
+    if (clientData) {
+      response.client = clientData;
+    }
+
     // Log successful login
     await eventLogger.logEvent({
       userId: user.id,
       action: 'USER_LOGIN',
       entityType: 'User',
       entityId: user.id,
-      description: `User logged in successfully: ${user.email}`,
+      description: `User logged in successfully: ${user.email}${clientData ? ` (Client: ${clientData.name})` : ''}`,
       newValues: {
         login_time: new Date().toISOString(),
+        username: username,
         role: user.role.name,
-        organisation_id: user.organisation_id
+        organisation_id: user.organisation_id,
+        client_data: clientData
       },
       metadata: {
         operation_type: 'AUTHENTICATION',
         login_method: 'PASSWORD',
         user_email: user.email,
+        username: username,
         role: user.role.name,
-        organisation_id: user.organisation_id
+        organisation_id: user.organisation_id,
+        client_type: clientData?.client_type || null,
+        client_id: clientData?.client_id || null
       },
       ipAddress,
       userAgent,
       sessionId
     });
 
-    return { token, role: user.role.name, organisation_id: user.organisation_id, id: user.id };
+    return response;
   } catch (error) {
     console.error("❌ Error logging in:", error.message);
     throw new Error("Login failed: " + error.message);

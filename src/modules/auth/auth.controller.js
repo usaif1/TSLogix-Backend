@@ -171,26 +171,31 @@ async function login(req, res) {
     }
 
     // Changed variable name from 'res' to 'authResult' to avoid conflict
-    const authResult = await authService.loginUser(userId, password);
+    const authResult = await authService.loginUser(
+      userId, 
+      password, 
+      req.ip, 
+      req.get('User-Agent'), 
+      req.sessionID || `session-${Date.now()}`
+    );
 
     console.log("authResult", authResult);
-
-    // Make sure we have all required data from authResult
-    const { token, role, organisation_id, id } = authResult;
 
     // ✅ LOG: Successful login
     if (req.logEvent) {
       await req.logEvent(
         'USER_LOGIN_SUCCESS',
         'User',
-        id,
-        `User ${userId} successfully logged in`,
+        authResult.id,
+        `User ${userId} successfully logged in${authResult.client ? ` (Client: ${authResult.client.name})` : ''}`,
         null,
         {
           user_id: userId,
-          database_id: id,
-          role: role,
-          organisation_id: organisation_id,
+          database_id: authResult.id,
+          username: authResult.username,
+          role: authResult.role,
+          organisation_id: authResult.organisation_id,
+          client_data: authResult.client || null,
           login_timestamp: new Date().toISOString(),
           ip_address: req.ip,
           user_agent: req.get('User-Agent'),
@@ -207,16 +212,8 @@ async function login(req, res) {
       );
     }
 
-    return res.status(200).json({
-      success: true,
-      message: "Login successful",
-      data: {
-        token,
-        role,
-        organisation_id,
-        id
-      }
-    });
+    // ✅ Return the complete authResult with username and client data
+    return res.status(200).json(authResult);
   } catch (err) {
     console.error("Login error:", err);
     

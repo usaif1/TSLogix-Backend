@@ -410,14 +410,19 @@ async function getEntryFormFields(userRole = null, userId = null) {
   if (userRole === "CLIENT" && userId) {
     // For CLIENT users, get only assigned products, suppliers, and client users
     
-    // Get client record for this user
-    const clientUser = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { clientUserAccounts: true }
+    // ✅ FIXED: Get client record for this user using the correct relation
+    const clientUser = await prisma.clientUser.findFirst({
+      where: { 
+        user_id: userId,
+        is_active: true
+      },
+      include: {
+        client: true
+      }
     });
 
-    if (clientUser?.clientUserAccounts && clientUser.clientUserAccounts.length > 0) {
-      const clientId = clientUser.clientUserAccounts[0].client_id;
+    if (clientUser?.client) {
+      const clientId = clientUser.client.client_id;
       
       // Get client-assigned products
       productsPromise = prisma.product.findMany({
@@ -482,25 +487,16 @@ async function getEntryFormFields(userRole = null, userId = null) {
         },
       });
 
-      // Get client-specific users (all users belonging to this client)
-      usersPromise = prisma.user.findMany({
-        where: {
-          clientUserAccounts: {
-            some: {
-              client_id: clientId,
-              is_active: true
-            }
-          },
-          active_state: { name: "Active" },
-        },
+      // ✅ NEW: Get simple client_users_data from the client record (as provided during creation)
+      usersPromise = prisma.client.findUnique({
+        where: { client_id: clientId },
         select: {
-          id: true,
-          user_id: true,
-          first_name: true,
-          last_name: true,
-          email: true,
-          role: { select: { name: true } },
-        },
+          client_users_data: true
+        }
+      }).then(client => {
+        // Return the simple client_users_data as provided during creation
+        // This will be the array like [{"name": "user 1"}, {"name": "user 2"}]
+        return client?.client_users_data || [];
       });
     } else {
       // Client user account not found, return empty arrays
