@@ -1117,7 +1117,7 @@ async function createWarehousesAndCells() {
   try {
     console.log("Creating warehouses and cells...");
 
-    // Create warehouses
+    // Create warehouses (MODIFIED: Only 1 warehouse instead of 3)
     const warehouses = await prisma.warehouse.createMany({
       data: [
         {
@@ -1125,20 +1125,6 @@ async function createWarehousesAndCells() {
           location: "Lima, Peru",
           capacity: 10000,
           max_occupancy: 8000,
-          status: "ACTIVE",
-        },
-        {
-          name: "Cold Storage",
-          location: "Callao, Peru", 
-          capacity: 5000,
-          max_occupancy: 4000,
-          status: "ACTIVE",
-        },
-        {
-          name: "Distribution Center",
-          location: "Arequipa, Peru",
-          capacity: 7500,
-          max_occupancy: 6000,
           status: "ACTIVE",
         },
       ],
@@ -2112,13 +2098,14 @@ async function main() {
     
     console.log("🎉 Basic warehouse data seeded successfully!");
     console.log("\n📊 Seed Summary:");
-    console.log("   • ✅ WAREHOUSES: 3 warehouses created with cells");
-    console.log("   • ✅ USERS: Basic users including warehouse incharge");
+    console.log("   • ✅ WAREHOUSES: 1 warehouse created with cells");
+    console.log("   • ✅ USERS: Basic users including warehouse incharge and client");
     console.log("   • ✅ SUPPLIERS: Basic suppliers for testing");
     console.log("   • ✅ API TESTING: Ready for warehouse API testing");
     console.log("\n🔑 Test Credentials:");
-    console.log("   • Warehouse Incharge: wh_incharge1@tslogix.com / WhIncharge123!");
-    console.log("   • Admin: admin1@tslogix.com / Admin123!");
+    console.log("   • Admin: admin1 / Admin123!");
+    console.log("   • Warehouse Incharge: wh_incharge1 / WhIncharge123!");
+    console.log("   • Client: client1 / Client123!");
     
   } catch (error) {
     console.error("❌ Error seeding database:", error);
