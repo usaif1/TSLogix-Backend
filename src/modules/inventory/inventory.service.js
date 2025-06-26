@@ -2252,23 +2252,544 @@ async function getEntryOrderWarehouse(entryOrderId) {
   }
 }
 
+// ✅ NEW: Get comprehensive allocation helper information for an entry order
+async function getEntryOrderAllocationHelper(entryOrderId, userRole = null, userId = null) {
+  try {
+    // 1. Get entry order with all product details
+    const entryOrder = await prisma.entryOrder.findUnique({
+      where: { 
+        entry_order_id: entryOrderId,
+        review_status: "APPROVED" 
+      },
+      include: {
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true
+          }
+        },
+        creator: {
+          select: {
+            id: true,
+            role: { select: { name: true } }
+          }
+        },
+        products: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                manufacturer: true,
+                temperature_range: true
+              }
+            },
+            supplier: {
+              select: {
+                supplier_id: true,
+                company_name: true,
+                name: true
+              }
+            },
+            inventoryAllocations: {
+              select: {
+                allocation_id: true,
+                inventory_quantity: true,
+                package_quantity: true,
+                weight_kg: true,
+                volume_m3: true,
+                cell: {
+                  select: {
+                    id: true,
+                    row: true,
+                    bay: true,
+                    position: true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!entryOrder) {
+      throw new Error("Entry order not found or not approved");
+    }
+
+    // 2. Get available warehouses
+    const availableWarehouses = await prisma.warehouse.findMany({
+      where: { status: "ACTIVE" },
+      select: {
+        warehouse_id: true,
+        name: true,
+        location: true,
+        capacity: true,
+        max_occupancy: true,
+        _count: {
+          select: {
+            cells: {
+              where: { status: "AVAILABLE" }
+            }
+          }
+        }
+      },
+      orderBy: { name: 'asc' }
+    });
+
+    // 3. For each warehouse, get available cells (with client filtering if applicable)
+    const warehousesWithCells = await Promise.all(
+      availableWarehouses.map(async (warehouse) => {
+        // Get available cells for this warehouse
+        const availableCells = await getAvailableCells(warehouse.warehouse_id, entryOrderId);
+        
+        return {
+          ...warehouse,
+          available_cells_count: availableCells.length,
+          available_cells: availableCells.map(cell => ({
+            ...cell,
+            cell_reference: `${cell.row}.${String(cell.bay).padStart(2, "0")}.${String(cell.position).padStart(2, "0")}`,
+            available_capacity: parseFloat(cell.capacity) - parseFloat(cell.currentUsage),
+            capacity_percentage: parseFloat(cell.currentUsage) / parseFloat(cell.capacity) * 100
+          }))
+        };
+      })
+    );
+
+    // 4. Calculate product details with remaining quantities
+    const productsWithDetails = entryOrder.products.map(product => {
+      const allocatedQuantity = product.inventoryAllocations.reduce((sum, alloc) => sum + alloc.inventory_quantity, 0);
+      const allocatedPackages = product.inventoryAllocations.reduce((sum, alloc) => sum + alloc.package_quantity, 0);
+      const allocatedWeight = product.inventoryAllocations.reduce((sum, alloc) => sum + parseFloat(alloc.weight_kg), 0);
+
+      return {
+        ...product,
+        supplier_name: product.supplier?.company_name || product.supplier?.name,
+        allocated_quantity: allocatedQuantity,
+        remaining_quantity: product.inventory_quantity - allocatedQuantity,
+        allocated_packages: allocatedPackages,
+        remaining_packages: product.package_quantity - allocatedPackages,
+        allocated_weight: allocatedWeight,
+        remaining_weight: parseFloat(product.weight_kg) - allocatedWeight,
+        allocation_percentage: product.inventory_quantity > 0 ? (allocatedQuantity / product.inventory_quantity) * 100 : 0,
+        is_fully_allocated: allocatedQuantity >= product.inventory_quantity,
+        needs_allocation: allocatedQuantity < product.inventory_quantity
+      };
+    });
+
+    // 5. Calculate overall allocation summary
+    const totalProducts = entryOrder.products.length;
+    const totalQuantity = entryOrder.products.reduce((sum, p) => sum + p.inventory_quantity, 0);
+    const totalPackages = entryOrder.products.reduce((sum, p) => sum + p.package_quantity, 0);
+    const totalWeight = entryOrder.products.reduce((sum, p) => sum + parseFloat(p.weight_kg), 0);
+
+    const totalAllocatedQuantity = productsWithDetails.reduce((sum, p) => sum + p.allocated_quantity, 0);
+    const totalAllocatedPackages = productsWithDetails.reduce((sum, p) => sum + p.allocated_packages, 0);
+    const totalAllocatedWeight = productsWithDetails.reduce((sum, p) => sum + p.allocated_weight, 0);
+
+    const productsNeedingAllocation = productsWithDetails.filter(p => p.needs_allocation);
+    const isFullyAllocated = productsNeedingAllocation.length === 0;
+
+    // 6. Allocation constraints and recommendations
+    const constraints = {
+      client_specific_cells: entryOrder.creator.role.name === "CLIENT",
+      requires_temperature_control: productsWithDetails.some(p => p.temperature_range && p.temperature_range !== "AMBIENTE"),
+      multi_warehouse_allowed: true, // ✅ Now allowing multi-warehouse allocation
+      total_volume_estimate: productsWithDetails.reduce((sum, p) => sum + parseFloat(p.volume_m3 || 0), 0)
+    };
+
+    // 7. Validation summary
+    const validation = {
+      can_complete_allocation: productsNeedingAllocation.length > 0,
+      blocking_issues: [],
+      warnings: [],
+      recommendations: []
+    };
+
+    // Check for blocking issues
+    if (warehousesWithCells.every(w => w.available_cells_count === 0)) {
+      validation.blocking_issues.push("No available cells found in any warehouse");
+    }
+
+    if (constraints.client_specific_cells) {
+      const clientCellsAvailable = warehousesWithCells.some(w => 
+        w.available_cells.some(c => c.is_client_assigned || c.client_assignment_info)
+      );
+      if (!clientCellsAvailable) {
+        validation.blocking_issues.push("No client-assigned cells available for CLIENT entry order");
+      }
+    }
+
+    // Add warnings
+    if (constraints.total_volume_estimate > 1000) {
+      validation.warnings.push("Large volume order - ensure sufficient warehouse capacity");
+    }
+
+    if (productsNeedingAllocation.length > 20) {
+      validation.warnings.push("Large number of products - consider batch allocation");
+    }
+
+    // Add recommendations
+    if (constraints.requires_temperature_control) {
+      validation.recommendations.push("Prioritize temperature-controlled cells for products requiring special storage");
+    }
+
+    validation.recommendations.push("Review cell capacity before allocation to avoid over-utilization");
+
+    return {
+      entry_order: {
+        entry_order_id: entryOrder.entry_order_id,
+        entry_order_no: entryOrder.entry_order_no,
+        warehouse: entryOrder.warehouse,
+        creator_role: entryOrder.creator.role.name
+      },
+      products: productsWithDetails,
+      warehouses: warehousesWithCells,
+      allocation_summary: {
+        total_products: totalProducts,
+        products_needing_allocation: productsNeedingAllocation.length,
+        products_fully_allocated: totalProducts - productsNeedingAllocation.length,
+        overall_allocation_percentage: totalQuantity > 0 ? (totalAllocatedQuantity / totalQuantity) * 100 : 0,
+        is_fully_allocated: isFullyAllocated,
+        totals: {
+          quantity: { total: totalQuantity, allocated: totalAllocatedQuantity, remaining: totalQuantity - totalAllocatedQuantity },
+          packages: { total: totalPackages, allocated: totalAllocatedPackages, remaining: totalPackages - totalAllocatedPackages },
+          weight: { total: totalWeight, allocated: totalAllocatedWeight, remaining: totalWeight - totalAllocatedWeight }
+        }
+      },
+      constraints,
+      validation,
+      can_proceed: validation.blocking_issues.length === 0 && productsNeedingAllocation.length > 0
+    };
+  } catch (error) {
+    console.error("Error in getEntryOrderAllocationHelper:", error);
+    throw new Error(`Failed to get allocation helper data: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Bulk assign all products in an entry order in one operation
+async function bulkAssignEntryOrder(bulkAssignmentData) {
+  const {
+    entry_order_id,
+    allocations,
+    assigned_by,
+    force_complete_allocation = false,
+    notes
+  } = bulkAssignmentData;
+
+  // Validate required data
+  if (!entry_order_id || !allocations || !Array.isArray(allocations) || allocations.length === 0) {
+    throw new Error("Entry order ID and allocations array are required");
+  }
+
+  if (!assigned_by) {
+    throw new Error("Assigned by user ID is required");
+  }
+
+  return await prisma.$transaction(async (tx) => {
+    // 1. Validate entry order exists and is approved
+    const entryOrder = await tx.entryOrder.findUnique({
+      where: { 
+        entry_order_id,
+        review_status: "APPROVED" 
+      },
+      include: {
+        products: true
+      }
+    });
+
+    if (!entryOrder) {
+      throw new Error("Entry order not found or not approved");
+    }
+
+    // 2. Validate all products exist and belong to this entry order
+    const entryOrderProductIds = entryOrder.products.map(p => p.entry_order_product_id);
+    const allocationProductIds = allocations.map(a => a.entry_order_product_id);
+    
+    const missingProducts = allocationProductIds.filter(id => !entryOrderProductIds.includes(id));
+    if (missingProducts.length > 0) {
+      throw new Error(`Invalid product IDs: ${missingProducts.join(', ')}`);
+    }
+
+    // 3. Validate each allocation individually
+    for (let i = 0; i < allocations.length; i++) {
+      const allocation = allocations[i];
+      
+      // Required fields validation
+      const requiredFields = ['entry_order_product_id', 'cell_id', 'inventory_quantity', 'package_quantity', 'weight_kg', 'warehouse_id'];
+      const missingFields = requiredFields.filter(field => !allocation[field]);
+      
+      if (missingFields.length > 0) {
+        throw new Error(`Allocation ${i + 1}: Missing required fields: ${missingFields.join(', ')}`);
+      }
+
+      // Validate positive quantities
+      if (allocation.inventory_quantity <= 0 || allocation.package_quantity <= 0 || allocation.weight_kg <= 0) {
+        throw new Error(`Allocation ${i + 1}: Quantities must be positive numbers`);
+      }
+    }
+
+    // 4. Validate cells exist and are available
+    const cellIds = [...new Set(allocations.map(a => a.cell_id))];
+    const cells = await tx.warehouseCell.findMany({
+      where: { 
+        id: { in: cellIds },
+        status: "AVAILABLE" 
+      }
+    });
+
+    if (cells.length !== cellIds.length) {
+      const foundCellIds = cells.map(c => c.id);
+      const missingCells = cellIds.filter(id => !foundCellIds.includes(id));
+      throw new Error(`Cells not available: ${missingCells.join(', ')}`);
+    }
+
+    // 5. Validate quantities don't exceed product limits
+    const productQuantityCheck = {};
+    for (const allocation of allocations) {
+      const productId = allocation.entry_order_product_id;
+      if (!productQuantityCheck[productId]) {
+        productQuantityCheck[productId] = { quantity: 0, packages: 0, weight: 0 };
+      }
+      productQuantityCheck[productId].quantity += parseInt(allocation.inventory_quantity);
+      productQuantityCheck[productId].packages += parseInt(allocation.package_quantity);
+      productQuantityCheck[productId].weight += parseFloat(allocation.weight_kg);
+    }
+
+    // Check against existing allocations + new allocations
+    for (const product of entryOrder.products) {
+      const existingAllocations = await tx.inventoryAllocation.findMany({
+        where: { entry_order_product_id: product.entry_order_product_id }
+      });
+
+      const existingQuantity = existingAllocations.reduce((sum, a) => sum + a.inventory_quantity, 0);
+      const existingPackages = existingAllocations.reduce((sum, a) => sum + a.package_quantity, 0);
+      const existingWeight = existingAllocations.reduce((sum, a) => sum + parseFloat(a.weight_kg), 0);
+
+      const newQuantity = productQuantityCheck[product.entry_order_product_id]?.quantity || 0;
+      const newPackages = productQuantityCheck[product.entry_order_product_id]?.packages || 0;
+      const newWeight = productQuantityCheck[product.entry_order_product_id]?.weight || 0;
+
+      if (existingQuantity + newQuantity > product.inventory_quantity) {
+        throw new Error(`Product ${product.product_code}: Total allocation (${existingQuantity + newQuantity}) exceeds available quantity (${product.inventory_quantity})`);
+      }
+
+      if (existingPackages + newPackages > product.package_quantity) {
+        throw new Error(`Product ${product.product_code}: Total package allocation (${existingPackages + newPackages}) exceeds available packages (${product.package_quantity})`);
+      }
+
+      if (existingWeight + newWeight > parseFloat(product.weight_kg)) {
+        throw new Error(`Product ${product.product_code}: Total weight allocation (${existingWeight + newWeight}) exceeds available weight (${product.weight_kg})`);
+      }
+    }
+
+    // 6. Create all allocations
+    const createdAllocations = [];
+    const createdInventoryRecords = [];
+    const cellsToUpdate = new Map();
+
+    for (const allocationData of allocations) {
+      // Get product status and status code
+      const productStatusEnum = allocationData.product_status || 'PAL_NORMAL';
+      const statusCode = allocationData.status_code || 30;
+
+      // Create allocation
+      const allocation = await tx.inventoryAllocation.create({
+        data: {
+          entry_order_id,
+          entry_order_product_id: allocationData.entry_order_product_id,
+          inventory_quantity: parseInt(allocationData.inventory_quantity),
+          package_quantity: parseInt(allocationData.package_quantity),
+          quantity_pallets: parseInt(allocationData.quantity_pallets) || Math.ceil(parseInt(allocationData.package_quantity) / 20),
+          presentation: allocationData.presentation || 'PALETA',
+          weight_kg: parseFloat(allocationData.weight_kg),
+          volume_m3: parseFloat(allocationData.volume_m3) || null,
+          cell_id: allocationData.cell_id,
+          product_status: productStatusEnum,
+          status_code: statusCode,
+          quality_status: "CUARENTENA",
+          allocated_by: assigned_by,
+          guide_number: allocationData.guide_number || null,
+          uploaded_documents: allocationData.uploaded_documents || null,
+          observations: allocationData.observations || notes || null,
+          status: "ACTIVE"
+        }
+      });
+
+      createdAllocations.push(allocation);
+
+      // Create inventory record
+      const inventory = await tx.inventory.create({
+        data: {
+          allocation_id: allocation.allocation_id,
+          product_id: (await tx.entryOrderProduct.findUnique({
+            where: { entry_order_product_id: allocationData.entry_order_product_id },
+            select: { product_id: true }
+          })).product_id,
+          cell_id: allocationData.cell_id,
+          warehouse_id: allocationData.warehouse_id,
+          current_quantity: parseInt(allocationData.inventory_quantity),
+          current_package_quantity: parseInt(allocationData.package_quantity),
+          current_weight: parseFloat(allocationData.weight_kg),
+          current_volume: parseFloat(allocationData.volume_m3) || null,
+          status: "QUARANTINED",
+          product_status: productStatusEnum,
+          status_code: statusCode,
+          quality_status: "CUARENTENA",
+          created_by: assigned_by
+        }
+      });
+
+      createdInventoryRecords.push(inventory);
+
+      // Track cell updates
+      const cellId = allocationData.cell_id;
+      if (!cellsToUpdate.has(cellId)) {
+        cellsToUpdate.set(cellId, { packages: 0, weight: 0, volume: 0 });
+      }
+      const cellUpdate = cellsToUpdate.get(cellId);
+      cellUpdate.packages += parseInt(allocationData.package_quantity);
+      cellUpdate.weight += parseFloat(allocationData.weight_kg);
+      cellUpdate.volume += parseFloat(allocationData.volume_m3) || 0;
+
+      // Create inventory log
+      await tx.inventoryLog.create({
+        data: {
+          user_id: assigned_by,
+          product_id: inventory.product_id,
+          movement_type: "ENTRY",
+          quantity_change: parseInt(allocationData.inventory_quantity),
+          package_change: parseInt(allocationData.package_quantity),
+          weight_change: parseFloat(allocationData.weight_kg),
+          volume_change: parseFloat(allocationData.volume_m3) || null,
+          entry_order_id,
+          entry_order_product_id: allocationData.entry_order_product_id,
+          allocation_id: allocation.allocation_id,
+          warehouse_id: allocationData.warehouse_id,
+          cell_id: allocationData.cell_id,
+          product_status: productStatusEnum,
+          status_code: statusCode,
+          notes: `Bulk assignment: ${allocationData.inventory_quantity} units to quarantine`
+        }
+      });
+    }
+
+    // 7. Update all affected cells
+    const cellUpdates = [];
+    for (const [cellId, updates] of cellsToUpdate.entries()) {
+      await tx.warehouseCell.update({
+        where: { id: cellId },
+        data: {
+          status: "OCCUPIED",
+          current_packaging_qty: { increment: updates.packages },
+          current_weight: { increment: updates.weight },
+          currentUsage: updates.volume > 0 ? { increment: updates.volume } : undefined
+        }
+      });
+      cellUpdates.push({ cellId, ...updates });
+    }
+
+    // 8. Calculate final allocation status
+    const updatedProducts = await tx.entryOrderProduct.findMany({
+      where: { entry_order_id },
+      include: {
+        inventoryAllocations: true,
+        product: { select: { product_code: true, name: true } }
+      }
+    });
+
+    let totalQuantity = 0;
+    let totalAllocated = 0;
+    const allocationSummary = {
+      total_quantity_allocated: 0,
+      total_packages_allocated: 0,
+      total_weight_allocated: 0,
+      products_fully_allocated: 0,
+      products_partially_allocated: 0,
+      products_not_allocated: 0
+    };
+
+    updatedProducts.forEach(product => {
+      const allocated = product.inventoryAllocations.reduce((sum, a) => sum + a.inventory_quantity, 0);
+      totalQuantity += product.inventory_quantity;
+      totalAllocated += allocated;
+
+      if (allocated >= product.inventory_quantity) {
+        allocationSummary.products_fully_allocated++;
+      } else if (allocated > 0) {
+        allocationSummary.products_partially_allocated++;
+      } else {
+        allocationSummary.products_not_allocated++;
+      }
+
+      allocationSummary.total_quantity_allocated += allocated;
+      allocationSummary.total_packages_allocated += product.inventoryAllocations.reduce((sum, a) => sum + a.package_quantity, 0);
+      allocationSummary.total_weight_allocated += product.inventoryAllocations.reduce((sum, a) => sum + parseFloat(a.weight_kg), 0);
+    });
+
+    const isFullyAllocated = totalAllocated >= totalQuantity;
+    const allocationPercentage = totalQuantity > 0 ? (totalAllocated / totalQuantity) * 100 : 0;
+
+    // 9. Create audit log
+    await createAuditLog(
+      assigned_by,
+      "INVENTORY_ALLOCATED",
+      "EntryOrder",
+      entry_order_id,
+      `Bulk allocated ${createdAllocations.length} product allocations for entry order ${entryOrder.entry_order_no}`,
+      null,
+      {
+        allocations_created: createdAllocations.length,
+        products_affected: Object.keys(productQuantityCheck).length,
+        cells_used: cellsToUpdate.size,
+        is_fully_allocated: isFullyAllocated,
+        allocation_percentage: allocationPercentage
+      },
+      {
+        entry_order_no: entryOrder.entry_order_no,
+        bulk_operation: true,
+        warehouses_used: [...new Set(allocations.map(a => a.warehouse_id))]
+      }
+    );
+
+    return {
+      entry_order_id,
+      entry_order_no: entryOrder.entry_order_no,
+      allocations: createdAllocations,
+      inventory_records: createdInventoryRecords,
+      cells_occupied: cellUpdates,
+      is_fully_allocated: isFullyAllocated,
+      allocation_percentage: allocationPercentage,
+      summary: allocationSummary,
+      warehouses_used: [...new Set(allocations.map(a => a.warehouse_id))],
+      message: isFullyAllocated 
+        ? "Entry order fully allocated to quarantine" 
+        : `Entry order partially allocated (${allocationPercentage.toFixed(1)}%)`
+    };
+  });
+}
+
 module.exports = {
   getApprovedEntryOrdersForInventory,
   getEntryOrderProductsForInventory,
   assignProductToCell,
   getAvailableCells,
-  getClientAssignedCells, // ✅ NEW: Get cells assigned to a specific client
+  getClientAssignedCells,
   getInventorySummary,
   getAllWarehouses,
   getWarehouseCells,
   createAuditLog,
-  // ✅ NEW: Quality control functions
   getQuarantineInventory,
-  getInventoryByQualityStatus, // ✅ NEW: Dynamic quality status API
+  getInventoryByQualityStatus,
   transitionQualityStatus,
   getAvailableInventoryForDeparture,
   getInventoryAuditTrail,
   validateInventorySynchronization,
-  getCellsByQualityStatus, // ✅ NEW: Cell filtering by quality status
-  getEntryOrderWarehouse, // ✅ NEW: Get warehouse information for an entry order
+  getCellsByQualityStatus,
+  getEntryOrderWarehouse,
+  // ✅ NEW: Simplified allocation flow
+  getEntryOrderAllocationHelper,
+  bulkAssignEntryOrder,
 };

@@ -43,4 +43,11 @@ router.get("/validate-synchronization", controller.validateInventorySynchronizat
 // ✅ NEW: Get cells filtered by quality status for transitions
 router.get("/cells-by-quality-status", controller.getCellsByQualityStatus);
 
+// ✅ NEW: Simplified allocation flow routes
+// Get comprehensive allocation helper information for an entry order
+router.get("/entry-order/:entryOrderId/allocation-helper", controller.getEntryOrderAllocationHelper);
+
+// Bulk assign all products in an entry order in one operation
+router.post("/bulk-assign-entry-order", controller.bulkAssignEntryOrder);
+
 module.exports = router;

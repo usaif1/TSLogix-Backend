@@ -995,6 +995,182 @@ async function getCellsByQualityStatus(req, res) {
   }
 }
 
+// ✅ NEW: Get comprehensive allocation helper information for an entry order
+async function getEntryOrderAllocationHelper(req, res) {
+  try {
+    const { entryOrderId } = req.params;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+
+    if (!entryOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Entry order ID is required"
+      });
+    }
+
+    // ✅ LOG: Allocation helper access
+    await req.logEvent(
+      'ALLOCATION_HELPER_ACCESSED',
+      'EntryOrder',
+      entryOrderId,
+      `User accessed allocation helper for entry order ${entryOrderId}`,
+      null,
+      {
+        entry_order_id: entryOrderId,
+        accessed_by: userId,
+        accessor_role: userRole,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'INVENTORY_ALLOCATION', action_type: 'HELPER_ACCESS' }
+    );
+
+    const allocationHelper = await inventoryService.getEntryOrderAllocationHelper(entryOrderId, userRole, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Allocation helper data fetched successfully",
+      data: allocationHelper
+    });
+  } catch (error) {
+    console.error("Error in getEntryOrderAllocationHelper controller:", error);
+    
+    // ✅ LOG: Allocation helper access failure
+    await req.logError(error, {
+      controller: 'inventory',
+      action: 'getEntryOrderAllocationHelper',
+      entry_order_id: req.params.entryOrderId,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'ALLOCATION_HELPER_ACCESS_FAILED'
+    });
+
+    res.status(500).json({
+      success: false,
+      message: "Error fetching allocation helper data",
+      error: error.message,
+    });
+  }
+}
+
+// ✅ NEW: Bulk assign all products in an entry order in one operation
+async function bulkAssignEntryOrder(req, res) {
+  try {
+    const bulkAssignmentData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+
+    // Validate required fields
+    if (!bulkAssignmentData.entry_order_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Entry order ID is required"
+      });
+    }
+
+    if (!bulkAssignmentData.allocations || !Array.isArray(bulkAssignmentData.allocations) || bulkAssignmentData.allocations.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Allocations array is required and must contain at least one allocation"
+      });
+    }
+
+    // ✅ LOG: Bulk assignment process started
+    await req.logEvent(
+      'BULK_ASSIGNMENT_STARTED',
+      'EntryOrder',
+      bulkAssignmentData.entry_order_id,
+      `Started bulk assignment for entry order ${bulkAssignmentData.entry_order_id} with ${bulkAssignmentData.allocations.length} allocations`,
+      null,
+      {
+        entry_order_id: bulkAssignmentData.entry_order_id,
+        allocations_count: bulkAssignmentData.allocations.length,
+        assigned_by: userId,
+        assigner_role: userRole,
+        assignment_timestamp: new Date().toISOString(),
+        total_products: bulkAssignmentData.allocations.map(a => a.entry_order_product_id).filter((v, i, arr) => arr.indexOf(v) === i).length,
+        force_complete_allocation: bulkAssignmentData.force_complete_allocation || false,
+        warehouse_ids: [...new Set(bulkAssignmentData.allocations.map(a => a.warehouse_id))],
+        cell_ids: [...new Set(bulkAssignmentData.allocations.map(a => a.cell_id))]
+      },
+      { operation_type: 'INVENTORY_ALLOCATION', action_type: 'BULK_ASSIGNMENT_START' }
+    );
+
+    // Add assigned_by to the request data
+    bulkAssignmentData.assigned_by = userId;
+
+    const result = await inventoryService.bulkAssignEntryOrder(bulkAssignmentData);
+
+    // ✅ LOG: Successful bulk assignment
+    await req.logEvent(
+      'BULK_ASSIGNMENT_COMPLETED',
+      'EntryOrder',
+      bulkAssignmentData.entry_order_id,
+      `Successfully completed bulk assignment for entry order ${bulkAssignmentData.entry_order_id}`,
+      null,
+      {
+        entry_order_id: bulkAssignmentData.entry_order_id,
+        entry_order_no: result.entry_order_no,
+        allocations_created: result.allocations.length,
+        inventory_records_created: result.inventory_records.length,
+        cells_occupied: result.cells_occupied.length,
+        assigned_by: userId,
+        assigner_role: userRole,
+        completed_at: new Date().toISOString(),
+        is_fully_allocated: result.is_fully_allocated,
+        allocation_percentage: result.allocation_percentage,
+        total_quantity_allocated: result.summary.total_quantity_allocated,
+        total_packages_allocated: result.summary.total_packages_allocated,
+        total_weight_allocated: result.summary.total_weight_allocated,
+        warehouses_used: result.warehouses_used,
+        business_impact: result.is_fully_allocated ? 'ENTRY_ORDER_FULLY_ALLOCATED' : 'ENTRY_ORDER_PARTIALLY_ALLOCATED'
+      },
+      { 
+        operation_type: 'INVENTORY_ALLOCATION', 
+        action_type: 'BULK_ASSIGNMENT_SUCCESS',
+        business_impact: result.is_fully_allocated ? 'INVENTORY_READY_FOR_QUALITY_CONTROL' : 'PARTIAL_ALLOCATION_REQUIRES_REVIEW',
+        next_steps: result.is_fully_allocated ? 'QUALITY_CONTROL_CAN_BEGIN' : 'COMPLETE_REMAINING_ALLOCATIONS'
+      }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: result.is_fully_allocated 
+        ? "Entry order fully allocated successfully" 
+        : "Entry order partially allocated successfully",
+      data: result
+    });
+  } catch (error) {
+    console.error("Error in bulkAssignEntryOrder controller:", error);
+    
+    // ✅ LOG: Bulk assignment failure
+    await req.logError(error, {
+      controller: 'inventory',
+      action: 'bulkAssignEntryOrder',
+      entry_order_id: req.body.entry_order_id,
+      allocations_count: req.body.allocations?.length || 0,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'BULK_ASSIGNMENT_FAILED'
+    });
+
+    // ✅ Enhanced error handling for validation failures
+    if (error.message.includes('validation') || error.message.includes('exceed') || error.message.includes('not found')) {
+      res.status(400).json({
+        success: false,
+        message: error.message,
+        error_type: 'VALIDATION_ERROR'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: "Error processing bulk assignment",
+        error: error.message,
+      });
+    }
+  }
+}
+
 module.exports = {
   getApprovedEntryOrdersForInventory,
   getEntryOrderProductsForInventory,
@@ -1003,12 +1179,13 @@ module.exports = {
   getInventorySummary,
   fetchWarehouses,
   fetchCells,
-  // ✅ NEW: Quality control endpoints
   getQuarantineInventory,
-  getInventoryByQualityStatus, // ✅ NEW: Dynamic quality status endpoint
+  getInventoryByQualityStatus,
   transitionQualityStatus,
   getAvailableInventoryForDeparture,
   getInventoryAuditTrail,
   validateInventorySynchronization,
-  getCellsByQualityStatus, // ✅ NEW: Cell filtering endpoint
+  getCellsByQualityStatus,
+  getEntryOrderAllocationHelper,
+  bulkAssignEntryOrder,
 };
