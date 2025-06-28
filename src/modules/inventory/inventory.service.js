@@ -411,13 +411,7 @@ async function assignProductToCell(assignmentData) {
       );
     }
 
-    if (totalAllocatedWeight + parseFloat(weight_kg) > parseFloat(entryOrderProduct.weight_kg)) {
-      throw new Error(
-        `Weight allocation exceeds available weight. Available: ${
-          parseFloat(entryOrderProduct.weight_kg) - totalAllocatedWeight
-        }kg, Requested: ${weight_kg}kg`
-      );
-    }
+
 
     // 3. ✅ FIXED: Calculate proper usage for cell capacity
     const requestedUsage = parseFloat(volume_m3 || 0);
@@ -1605,21 +1599,7 @@ async function transitionQualityStatus(transitionData) {
       cleanVolumeToMove = parseFloat(allocation.volume_m3) * proportionRatio;
     }
 
-    // ✅ VALIDATION: Ensure the provided quantities are proportionally correct
-    const expectedPackageQty = Math.ceil(allocation.package_quantity * proportionRatio);
-    const expectedWeight = parseFloat(allocation.weight_kg) * proportionRatio;
-    
-    // Allow 5% tolerance for rounding differences
-    const packageTolerance = Math.max(1, expectedPackageQty * 0.05);
-    const weightTolerance = expectedWeight * 0.05;
-    
-    if (Math.abs(cleanPackageQuantityToMove - expectedPackageQty) > packageTolerance) {
-      throw new Error(`Package quantity out of sync. Expected: ${expectedPackageQty}, Provided: ${cleanPackageQuantityToMove}`);
-    }
-    
-    if (Math.abs(cleanWeightToMove - expectedWeight) > weightTolerance) {
-      throw new Error(`Weight out of sync. Expected: ${expectedWeight.toFixed(2)} kg, Provided: ${cleanWeightToMove} kg`);
-    }
+
 
     // ✅ NEW: Calculate remaining quantities that will stay in original allocation
     const remainingQuantity = allocation.inventory_quantity - cleanQuantityToMove;
@@ -1753,7 +1733,7 @@ async function transitionQualityStatus(transitionData) {
       // 5b. Create NEW inventory record for the transitioned portion
       const newInventoryStatus = to_status === "APROBADO" ? "AVAILABLE" :
                                 to_status === "RECHAZADOS" ? "DAMAGED" :
-                                to_status === "CONTRAMUESTRAS" ? "SAMPLING" :
+                                to_status === "CONTRAMUESTRAS" ? "RESERVED" :
                                 to_status === "DEVOLUCIONES" ? "RETURNED" :
                                 to_status === "CUARENTENA" ? "QUARANTINED" : "RETURNED";
 
@@ -2058,15 +2038,7 @@ async function validateInventorySynchronization(options = {}) {
         });
       }
       
-      if (totalAllocatedWeight > parseFloat(entryProduct.weight_kg)) {
-        issues.push({
-          type: "OVER_ALLOCATION_WEIGHT",
-          entity: "EntryOrderProduct",
-          id: entryProduct.entry_order_product_id,
-          issue: `Allocated weight (${totalAllocatedWeight} kg) exceeds entry weight (${entryProduct.weight_kg} kg)`,
-          severity: "HIGH"
-        });
-      }
+
     }
     
     // 2. Check InventoryAllocation vs Inventory sync
@@ -2104,16 +2076,7 @@ async function validateInventorySynchronization(options = {}) {
           });
         }
         
-        // Check weight sync
-        if (parseFloat(inventory.current_weight) > parseFloat(allocation.weight_kg)) {
-          issues.push({
-            type: "INVENTORY_WEIGHT_MISMATCH",
-            entity: "Inventory", 
-            id: inventory.inventory_id,
-            issue: `Inventory weight (${inventory.current_weight} kg) exceeds allocation weight (${allocation.weight_kg} kg)`,
-            severity: "MEDIUM"
-          });
-        }
+        
       }
     }
     
@@ -2150,25 +2113,7 @@ async function validateInventorySynchronization(options = {}) {
         }
       }
       
-      // Check weight sync
-      if (Math.abs(parseFloat(cell.current_weight) - totalCellWeight) > 0.1) {
-        issues.push({
-          type: "CELL_WEIGHT_MISMATCH",
-          entity: "WarehouseCell", 
-          id: cell.id,
-          issue: `Cell weight (${cell.current_weight} kg) doesn't match inventory total (${totalCellWeight.toFixed(2)} kg)`,
-          severity: "LOW",
-          autoFixable: true
-        });
-        
-        if (autoFix) {
-          await prisma.warehouseCell.update({
-            where: { id: cell.id },
-            data: { current_weight: totalCellWeight }
-          });
-          fixes.push(`Fixed cell ${cell.row}.${cell.bay}.${cell.position} weight: ${cell.current_weight} kg → ${totalCellWeight.toFixed(2)} kg`);
-        }
-      }
+
     }
     
     // 4. Check for orphaned records
@@ -2580,9 +2525,7 @@ async function bulkAssignEntryOrder(bulkAssignmentData) {
         throw new Error(`Product ${product.product_code}: Total package allocation (${existingPackages + newPackages}) exceeds available packages (${product.package_quantity})`);
       }
 
-      if (existingWeight + newWeight > parseFloat(product.weight_kg)) {
-        throw new Error(`Product ${product.product_code}: Total weight allocation (${existingWeight + newWeight}) exceeds available weight (${product.weight_kg})`);
-      }
+
     }
 
     // 6. Create all allocations

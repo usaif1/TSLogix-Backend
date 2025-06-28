@@ -22,7 +22,13 @@ async function listWarehouseCells(req, res) {
     const filter = {};
     if (req.query.warehouse_id) filter.warehouse_id = req.query.warehouse_id;
     
-    const allCells = await getAllWarehouseCells(filter);
+    // ✅ NEW: Add user context for client-based filtering
+    const userContext = {
+      userId: req.user?.id,
+      userRole: req.user?.role // JWT token includes role name directly
+    };
+    
+    const allCells = await getAllWarehouseCells(filter, userContext);
     
     // Apply additional filters based on query parameters
     let filteredCells = allCells;
@@ -51,7 +57,10 @@ async function listWarehouseCells(req, res) {
       unassigned_cells: allCells.filter(cell => !cell.is_assigned_to_client).length,
       available_cells: allCells.filter(cell => cell.status === 'AVAILABLE').length,
       occupied_cells: allCells.filter(cell => cell.status === 'OCCUPIED').length,
-      cells_with_inventory: allCells.filter(cell => cell.has_inventory).length
+      cells_with_inventory: allCells.filter(cell => cell.has_inventory).length,
+      // ✅ NEW: Add user context info
+      user_role: userContext.userRole,
+      is_client_filtered: userContext.userRole && !['ADMIN', 'WAREHOUSE_INCHARGE'].includes(userContext.userRole)
     };
     
     return res.status(200).json({ 
@@ -73,13 +82,22 @@ async function listWarehouseCells(req, res) {
 
 async function listWarehouses(req, res) {
   try {
-    const list = await fetchWarehouses();
+    // ✅ NEW: Add user context for client-based filtering
+    const userContext = {
+      userId: req.user?.id,
+      userRole: req.user?.role // JWT token includes role name directly
+    };
+    
+    const list = await fetchWarehouses(userContext);
     
     return res.status(200).json({ 
       success: true,
       message: "Warehouses fetched successfully", 
       count: list.length,
-      data: list
+      data: list,
+      // ✅ NEW: Add filtering context info
+      user_role: userContext.userRole,
+      is_client_filtered: userContext.userRole && !['ADMIN', 'WAREHOUSE_INCHARGE'].includes(userContext.userRole)
     });
   } catch (err) {
     console.error("Error fetching warehouses:", err);

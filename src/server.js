@@ -35,6 +35,7 @@ app.use(eventLoggerMiddleware);
 // routes
 const authRoutes = require("@/modules/auth/auth.route");
 const organisationRoutes = require("@/modules/organisation/organisation.route");
+const countryRoutes = require("@/modules/organisation/country.route"); // ✅ NEW: Countries routes
 // const processesRoutes = require("@/modules/processes/processes.route");
 const maintenanceRoutes = require("@/modules/maintenance/maintenance.route");
 const supplierRoutes = require("@/modules/supplier/supplier.route");
@@ -50,6 +51,7 @@ const eventLogRoutes = require("@/modules/eventlog/eventlog.route");
 // Mount your module routes
 app.use("/auth", authRoutes);
 app.use("/organisation", organisationRoutes);
+app.use("/countries", authenticateToken, countryRoutes); // ✅ NEW: Mount countries routes
 // app.use("/processes", authenticateToken, processesRoutes);
 app.use("/maintenance", authenticateToken, maintenanceRoutes);
 app.use("/suppliers", authenticateToken, supplierRoutes);

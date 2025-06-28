@@ -264,9 +264,19 @@ async function createClient(clientData, cellAssignmentData = {}) {
         id: { in: cellAssignmentData.cell_ids },
         warehouse_id: cellAssignmentData.warehouse_id,
         status: "AVAILABLE",
-          cell_role: "STANDARD"
+          // ✅ NEW: Allow assignment of standard AND special quality control cells
+          cell_role: { 
+            in: [
+              "STANDARD",     // Regular storage cells
+              "REJECTED",     // For RECHAZADOS (rejected products)
+              "SAMPLES",      // For CONTRAMUESTRAS (samples)
+              "RETURNS",      // For DEVOLUCIONES (returns)
+              "DAMAGED",      // For damaged products
+              "EXPIRED"       // For expired products
+            ]
+          }
         },
-        select: { id: true, row: true, bay: true, position: true }
+        select: { id: true, row: true, bay: true, position: true, cell_role: true }
       }),
 
     // Check for existing assignments for these cells
@@ -858,7 +868,19 @@ async function assignCellsToClient(assignmentData) {
           where: {
             id: { in: cellIdsArray },
             status: "AVAILABLE",
-            cell_role: "STANDARD"
+            // ✅ NEW: Include warehouse filter if provided
+            ...(warehouse_id && { warehouse_id }),
+            // ✅ NEW: Allow assignment of standard AND special quality control cells
+            cell_role: { 
+              in: [
+                "STANDARD",     // Regular storage cells
+                "REJECTED",     // For RECHAZADOS (rejected products)
+                "SAMPLES",      // For CONTRAMUESTRAS (samples)
+                "RETURNS",      // For DEVOLUCIONES (returns)
+                "DAMAGED",      // For damaged products
+                "EXPIRED"       // For expired products
+              ]
+            }
           },
           include: {
             warehouse: {
@@ -889,7 +911,13 @@ async function assignCellsToClient(assignmentData) {
       if (cells.length !== cellIdsArray.length) {
         const foundCellIds = cells.map(c => c.id);
         const missingCells = cellIdsArray.filter(id => !foundCellIds.includes(id));
-        throw new Error(`Some cells are not available or don't exist: ${missingCells.join(', ')}`);
+        
+        // Provide more specific error message
+        if (warehouse_id) {
+          throw new Error(`Some cells are not available or don't exist in the specified warehouse: ${missingCells.join(', ')}`);
+        } else {
+          throw new Error(`Some cells are not available or don't exist: ${missingCells.join(', ')}`);
+        }
       }
 
       if (existingAssignments.length > 0) {
@@ -1021,13 +1049,23 @@ async function getClientCellAssignments(clientId) {
 }
 
 /**
- * Get available cells for client assignment (excludes cells already assigned to clients)
+ * Get available cells for client assignment (includes standard cells + special quality control cells)
  */
 async function getAvailableCellsForClient(warehouseId) {
   try {
     const whereCondition = {
       status: "AVAILABLE",
-      cell_role: "STANDARD" // Only standard cells for client assignment
+      // ✅ NEW: Include standard cells AND special quality control cells
+      cell_role: { 
+        in: [
+          "STANDARD",     // Regular storage cells
+          "REJECTED",     // For RECHAZADOS (rejected products)
+          "SAMPLES",      // For CONTRAMUESTRAS (samples)
+          "RETURNS",      // For DEVOLUCIONES (returns)
+          "DAMAGED",      // For damaged products
+          "EXPIRED"       // For expired products
+        ]
+      }
     };
 
     if (warehouseId) {
@@ -1064,36 +1102,88 @@ async function getAvailableCellsForClient(warehouseId) {
       },
       orderBy: [
         { warehouse_id: 'asc' },
+        { cell_role: 'asc' }, // ✅ NEW: Group by cell role first
         { row: 'asc' },
         { bay: 'asc' },
         { position: 'asc' }
       ]
     });
 
-    // Group by warehouse for better organization
+    // ✅ NEW: Group by warehouse AND cell role for better organization
     const cellsByWarehouse = {};
+    const cellsByRole = {
+      STANDARD: [],
+      REJECTED: [],
+      SAMPLES: [],
+      RETURNS: [],
+      DAMAGED: [],
+      EXPIRED: []
+    };
+
     availableCells.forEach(cell => {
+      // Group by warehouse
       if (!cellsByWarehouse[cell.warehouse_id]) {
         cellsByWarehouse[cell.warehouse_id] = {
           warehouse: cell.warehouse,
-          cells: []
+          cells: [],
+          by_role: {
+            STANDARD: [],
+            REJECTED: [],
+            SAMPLES: [],
+            RETURNS: [],
+            DAMAGED: [],
+            EXPIRED: []
+          }
         };
       }
-      cellsByWarehouse[cell.warehouse_id].cells.push({
+
+      const cellData = {
         ...cell,
         is_assigned_to_client: false, // These are unassigned cells
-        client_assignment: null
-      });
+        client_assignment: null,
+        // ✅ NEW: Add quality control purpose mapping
+        quality_purpose: {
+          STANDARD: "Regular storage",
+          REJECTED: "RECHAZADOS - Rejected products",
+          SAMPLES: "CONTRAMUESTRAS - Product samples",
+          RETURNS: "DEVOLUCIONES - Product returns",
+          DAMAGED: "Damaged products",
+          EXPIRED: "Expired products"
+        }[cell.cell_role]
+      };
+
+      cellsByWarehouse[cell.warehouse_id].cells.push(cellData);
+      cellsByWarehouse[cell.warehouse_id].by_role[cell.cell_role].push(cellData);
+      cellsByRole[cell.cell_role].push(cellData);
     });
 
     return {
       total_available: availableCells.length,
       cells_by_warehouse: cellsByWarehouse,
+      cells_by_role: cellsByRole, // ✅ NEW: Grouped by cell role for easier filtering
       all_cells: availableCells.map(cell => ({
         ...cell,
         is_assigned_to_client: false,
-        client_assignment: null
-      }))
+        client_assignment: null,
+        quality_purpose: {
+          STANDARD: "Regular storage",
+          REJECTED: "RECHAZADOS - Rejected products",
+          SAMPLES: "CONTRAMUESTRAS - Product samples", 
+          RETURNS: "DEVOLUCIONES - Product returns",
+          DAMAGED: "Damaged products",
+          EXPIRED: "Expired products"
+        }[cell.cell_role]
+      })),
+      // ✅ NEW: Summary counts by cell role
+      summary: {
+        standard_cells: cellsByRole.STANDARD.length,
+        rejected_cells: cellsByRole.REJECTED.length,
+        samples_cells: cellsByRole.SAMPLES.length,
+        returns_cells: cellsByRole.RETURNS.length,
+        damaged_cells: cellsByRole.DAMAGED.length,
+        expired_cells: cellsByRole.EXPIRED.length,
+        total_special_cells: cellsByRole.REJECTED.length + cellsByRole.SAMPLES.length + cellsByRole.RETURNS.length + cellsByRole.DAMAGED.length + cellsByRole.EXPIRED.length
+      }
     };
   } catch (error) {
     console.error("Error in getAvailableCellsForClient service:", error);
@@ -1221,7 +1311,7 @@ async function getClientFormFields() {
         mothers_last_name: "Mother's last name (REQUIRED for natural clients)",
         individual_id: "DNI or similar identification document (REQUIRED for natural clients)",
         date_of_birth: "Date of birth in YYYY-MM-DD format (REQUIRED for natural clients)",
-        cell_ids: "Array of cell IDs to assign to the client (REQUIRED - at least 1 cell)",
+        cell_ids: "Array of cell IDs to assign to the client (REQUIRED - at least 1 cell). Includes standard storage cells and special quality control cells for RECHAZADOS, CONTRAMUESTRAS, DEVOLUCIONES, damaged, and expired products.",
         warehouse_id: "Warehouse ID where the cells are located (REQUIRED)",
         // ✅ NEW: Multiple users support
         users: "Array of user objects with username and password (OPTIONAL - if not provided, auto-generated credentials will be created)"

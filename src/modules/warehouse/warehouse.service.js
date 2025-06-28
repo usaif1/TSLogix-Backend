@@ -70,11 +70,51 @@ async function assignPallets(
 }
 
 /**
- * Fetch all cells with client assignment status, optionally filtering by warehouse
+ * Fetch all cells with client assignment status, optionally filtering by warehouse and user role
  */
-async function getAllWarehouseCells(filter = {}) {
+async function getAllWarehouseCells(filter = {}, userContext = {}) {
+  const { userId, userRole } = userContext;
+  
+  // ✅ NEW: Determine if user should see only their assigned cells
+  const isClientUser = userRole && !['ADMIN', 'WAREHOUSE_INCHARGE'].includes(userRole);
+  
   const where = {};
   if (filter.warehouse_id) where.warehouse_id = filter.warehouse_id;
+  
+  // ✅ NEW: If client user, find their client assignments first
+  let userClientIds = [];
+  if (isClientUser && userId) {
+    try {
+      // Check if user is a client user (has clientUserAccounts)
+      const userWithClients = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          clientUserAccounts: {
+            where: { is_active: true },
+            select: { client_id: true }
+          }
+        }
+      });
+      
+      if (userWithClients?.clientUserAccounts?.length > 0) {
+        userClientIds = userWithClients.clientUserAccounts.map(acc => acc.client_id);
+        
+        // ✅ Filter to only show cells assigned to user's clients
+        where.clientCellAssignments = {
+          some: {
+            is_active: true,
+            client_id: { in: userClientIds }
+          }
+        };
+      } else {
+        // If no client assignments found, return empty array
+        return [];
+      }
+    } catch (error) {
+      console.error("Error fetching user client assignments:", error);
+      return [];
+    }
+  }
   
   const cells = await prisma.warehouseCell.findMany({
     where,
@@ -144,7 +184,7 @@ async function getAllWarehouseCells(filter = {}) {
     const activeAssignment = cell.clientCellAssignments[0] || null;
     const clientInfo = activeAssignment ? {
       client_id: activeAssignment.client.client_id,
-                client_name: activeAssignment.client.client_type === "JURIDICO" 
+      client_name: activeAssignment.client.client_type === "JURIDICO" 
         ? activeAssignment.client.company_name 
         : `${activeAssignment.client.first_names} ${activeAssignment.client.last_name}`,
       client_type: activeAssignment.client.client_type,
@@ -162,16 +202,132 @@ async function getAllWarehouseCells(filter = {}) {
       client_assignment: clientInfo,
       has_inventory: cell._count.inventory > 0,
       inventory_count: cell._count.inventory,
-      assignment_count: cell._count.clientCellAssignments
+      assignment_count: cell._count.clientCellAssignments,
+      // ✅ NEW: Add quality control purpose for special cells
+      quality_purpose: {
+        STANDARD: "Regular storage",
+        REJECTED: "RECHAZADOS - Rejected products",
+        SAMPLES: "CONTRAMUESTRAS - Product samples",
+        RETURNS: "DEVOLUCIONES - Product returns",
+        DAMAGED: "Damaged products",
+        EXPIRED: "Expired products"
+      }[cell.cell_role] || "Regular storage"
     };
   });
 }
 
 /**
- * Fetch all warehouses for dropdown with detailed information
+ * Fetch all warehouses for dropdown with detailed information, filtered by user role
  */
-async function fetchWarehouses() {
-  return await prisma.warehouse.findMany({
+async function fetchWarehouses(userContext = {}) {
+  const { userId, userRole } = userContext;
+  
+  // ✅ NEW: Determine if user should see only warehouses with their assigned cells
+  const isClientUser = userRole && !['ADMIN', 'WAREHOUSE_INCHARGE'].includes(userRole);
+  
+  if (isClientUser && userId) {
+    try {
+      // ✅ Get warehouses that contain cells assigned to user's clients
+      const userWithClients = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          clientUserAccounts: {
+            where: { is_active: true },
+            select: { 
+              client: {
+                select: {
+                  cellAssignments: {
+                    where: { is_active: true },
+                    select: {
+                      warehouse_id: true,
+                      warehouse: {
+                        select: {
+                          warehouse_id: true,
+                          name: true,
+                          location: true,
+                          capacity: true,
+                          max_occupancy: true,
+                          status: true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      if (!userWithClients?.clientUserAccounts?.length) {
+        return []; // No client assignments found
+      }
+      
+      // Extract unique warehouse IDs from client assignments
+      const warehouseIds = new Set();
+      const warehouseMap = new Map();
+      
+      userWithClients.clientUserAccounts.forEach(account => {
+        account.client.cellAssignments.forEach(assignment => {
+          warehouseIds.add(assignment.warehouse_id);
+          warehouseMap.set(assignment.warehouse_id, assignment.warehouse);
+        });
+      });
+      
+      if (warehouseIds.size === 0) {
+        return []; // No warehouses found
+      }
+      
+      // Get detailed warehouse information with counts
+      const warehouses = await prisma.warehouse.findMany({
+        where: {
+          warehouse_id: { in: Array.from(warehouseIds) }
+        },
+        select: { 
+          warehouse_id: true, 
+          name: true,
+          location: true,
+          capacity: true,
+          max_occupancy: true,
+          status: true,
+          _count: {
+            select: {
+              cells: true,
+              inventory: true,
+              // ✅ Count cells assigned to user's clients
+              clientCellAssignments: {
+                where: {
+                  is_active: true,
+                  client: {
+                    clientUsers: {
+                      some: {
+                        user_id: userId,
+                        is_active: true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        orderBy: { name: "asc" }
+      });
+      
+      return warehouses.map(warehouse => ({
+        ...warehouse,
+        user_assigned_cells: warehouse._count.clientCellAssignments,
+        is_client_filtered: true
+      }));
+      
+    } catch (error) {
+      console.error("Error fetching client warehouses:", error);
+      return [];
+    }
+  }
+  
+  // ✅ For ADMIN and WAREHOUSE_INCHARGE, return all warehouses
+  const warehouses = await prisma.warehouse.findMany({
     select: { 
       warehouse_id: true, 
       name: true,
@@ -182,12 +338,21 @@ async function fetchWarehouses() {
       _count: {
         select: {
           cells: true,
-          inventory: true
+          inventory: true,
+          clientCellAssignments: {
+            where: { is_active: true }
+          }
         }
       }
     },
     orderBy: { name: "asc" }
   });
+  
+  return warehouses.map(warehouse => ({
+    ...warehouse,
+    total_assigned_cells: warehouse._count.clientCellAssignments,
+    is_client_filtered: false
+  }));
 }
 
 module.exports = { assignPallets, getAllWarehouseCells, fetchWarehouses };
