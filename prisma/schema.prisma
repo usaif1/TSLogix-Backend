@@ -94,11 +94,12 @@ enum OrderStatusEntry {
 }
 
 enum OrderStatusDeparture {
-  PENDING       // Pendiente
-  PROCESSING    // En Proceso
-  READY         // Listo
-  SHIPPED       // Enviado
-  DELIVERED     // Entregado
+  PENDING       // Created by client/warehouse, waiting for approval
+  APPROVED      // Approved by warehouse_incharge/admin, ready for dispatch
+  REVISION      // Needs changes, can be edited
+  REJECTED      // Rejected by warehouse_incharge/admin
+  DISPATCHED    // Actually dispatched from warehouse
+  COMPLETED     // Fully completed
 }
 
 enum PresentationType {
@@ -425,6 +426,7 @@ model User {
   // Departure order relations
   createdDepartureOrders DepartureOrder[]    @relation("DepartureOrderCreator")
   reviewedDepartureOrders DepartureOrder[]   @relation("DepartureOrderReviewer")
+  dispatchedDepartureOrders DepartureOrder[] @relation("DepartureOrderDispatcher")
   departureAllocations  DepartureAllocation[] @relation("DepartureAllocator")
   
   // Inventory relations
@@ -504,7 +506,6 @@ model DepartureDocumentType {
   name             String                @unique
   type             DocumentTypeDeparture
   description      String?
-  DepartureOrder   DepartureOrder[]
 
   @@map("departure_document_types")
 }
@@ -1082,10 +1083,10 @@ model DepartureOrder {
   // Basic order info
   customer_id                 String?  // ✅ Made optional to support both Customer and Client
   client_id                   String?  // ✅ NEW: Support for new Client model
-  document_type_id            String?
+  document_type_ids           String[]            @default([]) // ✅ NEW: Multi-select document types
   registration_date           DateTime            @default(now())
   document_date               DateTime?
-  departure_date_time         DateTime?
+  departure_date_time         DateTime?           // ✅ MANDATORY: Dispatch date and time
   created_by                  String
   
   // Order details
@@ -1096,17 +1097,26 @@ model DepartureOrder {
   total_volume                Decimal?            @db.Decimal(10, 2)
   total_weight                Decimal?            @db.Decimal(10, 2)
   total_value                 Decimal?            @db.Decimal(10, 2)
-  total_pallets               Int?
+  total_pallets               Int?                // ✅ MANDATORY: Pallet/Position quantity
   observation                 String?
   
+  // ✅ NEW: Mandatory document fields
+  dispatch_document_number    String?             // ✅ MANDATORY: Dispatch document number
+  
   // Document uploads
-  uploaded_documents          Json?
+  uploaded_documents          Json?               // ✅ MANDATORY: Document upload
   
   // Review status
   review_status               ReviewStatus        @default(PENDING)
   review_comments             String?
   reviewed_by                 String?
   reviewed_at                 DateTime?
+  
+  // ✅ NEW: Dispatch tracking (separate from approval)
+  dispatch_status             String              @default("NOT_DISPATCHED") // NOT_DISPATCHED, DISPATCHING, DISPATCHED
+  dispatched_by               String?
+  dispatched_at               DateTime?
+  dispatch_notes              String?
   
   // Warehouse assignment
   warehouse_id                String?
@@ -1116,10 +1126,10 @@ model DepartureOrder {
   // Relations
   customer                    Customer?           @relation(fields: [customer_id], references: [customer_id])
   client                      Client?             @relation("ClientDepartureOrders", fields: [client_id], references: [client_id])
-  documentType                DepartureDocumentType? @relation(fields: [document_type_id], references: [document_type_id])
   order                       Order               @relation(fields: [order_id], references: [order_id])
   creator                     User                @relation("DepartureOrderCreator", fields: [created_by], references: [id])
   reviewer                    User?               @relation("DepartureOrderReviewer", fields: [reviewed_by], references: [id])
+  dispatcher                  User?               @relation("DepartureOrderDispatcher", fields: [dispatched_by], references: [id])
   warehouse                   Warehouse?          @relation(fields: [warehouse_id], references: [warehouse_id])
   label                       Label?              @relation(fields: [label_id], references: [label_id])
   exitOption                  ExitOption?         @relation(fields: [exit_option_id], references: [exit_option_id]) // ✅ FIXED: Add missing relation

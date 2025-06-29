@@ -5,6 +5,8 @@ const {
   CellStatus,
   PackagingType,
   PackagingStatus,
+  OrderStatusDeparture,
+  ReviewStatus,
 } = require("@prisma/client");
 const { toUTC } = require("../../utils/index");
 const prisma = new PrismaClient();
@@ -66,20 +68,83 @@ function getPackagingCodes() {
   return packagingCodes;
 }
 
-// Dropdown data for Departure form
-async function getDepartureFormFields() {
+// ✅ ENHANCED: Dropdown data for Departure form with document types
+async function getDepartureFormFields(userRole = null, userId = null) {
   try {
-    const [customers, documentTypes, users, warehouses, labels] =
+    // ✅ NEW: Build client-specific filtering for users (same as entry order)
+    let usersPromise;
+
+    if (userRole === "CLIENT" && userId) {
+      // For CLIENT users, get client_users_data from their client record
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { 
+          user_id: userId,
+          is_active: true
+        },
+        include: {
+          client: true
+        }
+      });
+
+      if (clientUser?.client) {
+        const clientId = clientUser.client.client_id;
+        
+        // ✅ NEW: Get simple client_users_data from the client record (as provided during creation)
+        usersPromise = prisma.client.findUnique({
+          where: { client_id: clientId },
+          select: {
+            client_users_data: true
+          }
+        }).then(client => {
+          // Return the simple client_users_data as provided during creation
+          // This will be the array like [{"name": "user 1"}, {"name": "user 2"}]
+          return client?.client_users_data || [];
+        });
+      } else {
+        // Client user account not found, return empty array
+        usersPromise = Promise.resolve([]);
+      }
+    } else {
+      // For non-CLIENT users (ADMIN, WAREHOUSE_INCHARGE, etc.), get all users
+      usersPromise = prisma.user.findMany({
+        where: {
+          active_state: { name: "Active" },
+        },
+        select: {
+          id: true,
+          user_id: true,
+          first_name: true,
+          last_name: true,
+          email: true,
+          role: { select: { name: true } },
+        },
+      });
+    }
+
+    const [clients, documentTypes, users, warehouses, labels] =
       await Promise.all([
-        prisma.customer.findMany({
-          select: { customer_id: true, name: true },
+        prisma.client.findMany({
+          select: { 
+            client_id: true,
+            client_type: true,
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            email: true,
+            phone: true,
+            cell_phone: true
+          },
         }),
+        // ✅ FIXED: Use same document types as entry order (DocumentType table, not DepartureDocumentType)
         prisma.documentType.findMany({
-          select: { document_type_id: true, name: true },
+          select: {
+            document_type_id: true,
+            name: true,
+            type: true,
+            description: true,
+          },
         }),
-        prisma.user.findMany({
-          select: { id: true, first_name: true, last_name: true },
-        }),
+        usersPromise,
         prisma.warehouse.findMany({
           select: { warehouse_id: true, name: true },
         }),
@@ -88,15 +153,47 @@ async function getDepartureFormFields() {
         }),
       ]);
 
+    // ✅ FIXED: Use same document type options as entry order
+    const documentTypeOptions = Object.values({
+      PACKING_LIST: "Packing List",
+      FACTURA: "Factura",
+      CERTIFICADO_ANALISIS: "Certificado de Análisis",
+      RRSS: "RRSS",
+      PERMISO_ESPECIAL: "Permiso Especial",
+      OTRO: "Otro",
+    }).map((label, index) => ({
+      value: Object.keys({
+        PACKING_LIST: "Packing List",
+        FACTURA: "Factura",
+        CERTIFICADO_ANALISIS: "Certificado de Análisis",
+        RRSS: "RRSS",
+        PERMISO_ESPECIAL: "Permiso Especial",
+        OTRO: "Otro",
+      })[index],
+      label,
+    }));
+
     return {
-      customers,
-      documentTypes,
-      users,
+      // ✅ REMOVED: customers (as requested)
+      clients, // ✅ Support for new Client model
+      documentTypes, // ✅ FIXED: Same as entry order
+      users, // ✅ FIXED: Client users for CLIENT role, all users for others
       warehouses,
       labels,
       packagingTypes: getPackagingTypesFromEnum(),
       packagingStatuses: getPackagingStatusFromEnum(),
       packagingCodes: getPackagingCodes(),
+      // ✅ FIXED: Same document type options as entry order
+      documentTypeOptions,
+      // ✅ NEW: Departure order statuses for workflow
+      departureStatuses: [
+        { value: 'PENDING', label: 'Pending Approval' },
+        { value: 'APPROVED', label: 'Approved' },
+        { value: 'REVISION', label: 'Needs Revision' },
+        { value: 'REJECTED', label: 'Rejected' },
+        { value: 'DISPATCHED', label: 'Dispatched' },
+        { value: 'COMPLETED', label: 'Completed' },
+      ],
     };
   } catch (error) {
     console.error("Error in getDepartureFormFields:", error);
@@ -114,8 +211,8 @@ async function getDepartureExitOptions() {
   }
 }
 
-// Get all departure orders
-async function getAllDepartureOrders(searchQuery = "", organisationId = null, userRole = null, userOrgId = null) {
+// ✅ ENHANCED: Get all departure orders with approval workflow filtering
+async function getAllDepartureOrders(searchQuery = "", organisationId = null, userRole = null, userOrgId = null, status = null) {
   try {
     const whereClause = {};
     
@@ -123,10 +220,15 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
     if (searchQuery) {
       whereClause.departure_order_no = { contains: searchQuery, mode: "insensitive" };
     }
+
+    // ✅ NEW: Filter by status if provided
+    if (status) {
+      whereClause.order_status = status;
+    }
     
     // ✅ ROLE-BASED ACCESS CONTROL
     // WAREHOUSE and ADMIN users can see all departure orders
-    // Other users (like CUSTOMER) only see orders from their organization
+    // Other users (like CLIENT) only see orders from their organization or their own orders
     if (userRole && (userRole === 'WAREHOUSE_INCHARGE' || userRole === 'ADMIN')) {
       // ✅ NEW LOGIC: ADMIN and WAREHOUSE users ALWAYS see all orders
       // They ignore any organizationId filter - they get full system visibility
@@ -153,8 +255,18 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
         total_weight: true,
         total_pallets: true,
         order_status: true,
-        documentType: { select: { name: true } },
+        review_status: true,
+        review_comments: true,
+        reviewed_by: true,
+        reviewed_at: true,
+        dispatch_status: true,
+        dispatched_by: true,
+        dispatched_at: true,
+        dispatch_document_number: true, // ✅ NEW: Mandatory field
+        document_type_ids: true, // ✅ NEW: Multi-select document types
+        uploaded_documents: true, // ✅ NEW: Document upload status
         customer: { select: { name: true } },
+        client: { select: { company_name: true, first_names: true, last_name: true, client_type: true } }, // ✅ NEW: Client support
         order: { 
           select: { 
             created_at: true,
@@ -163,6 +275,9 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
           } 
         },
         warehouse: { select: { name: true } },
+        creator: { select: { first_name: true, last_name: true } },
+        reviewer: { select: { first_name: true, last_name: true } },
+        dispatcher: { select: { first_name: true, last_name: true } },
         products: {
           select: {
             departure_order_product_id: true,
@@ -196,7 +311,7 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
   }
 }
 
-// ✅ UPDATED: Get products with available inventory from approved allocations (FIFO approach)
+// ✅ NEW: Get products with available inventory from approved allocations (EXPIRY-BASED FIFO)
 async function getProductsWithInventory(warehouseId = null) {
   try {
     // ✅ NEW: Query from InventoryAllocation with quality_status = APROBADO
@@ -229,7 +344,7 @@ async function getProductsWithInventory(warehouseId = null) {
             entry_order: {
               select: {
                 entry_order_no: true,
-                entry_date_time: true, // ✅ FIFO: Sort by entry date
+                entry_date_time: true, // Secondary sort for FIFO
                 registration_date: true,
                 creator: {
                   select: {
@@ -284,7 +399,8 @@ async function getProductsWithInventory(warehouseId = null) {
         },
       },
       orderBy: [
-        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ FIFO: Oldest first
+        { entry_order_product: { expiration_date: "asc" } }, // ✅ PRIMARY: EXPIRY-BASED FIFO (earliest expiry first)
+        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ SECONDARY: Oldest entry first
         { entry_order_product: { product: { product_code: "asc" } } },
         { cell: { row: "asc" } },
         { cell: { bay: "asc" } },
@@ -300,7 +416,7 @@ async function getProductsWithInventory(warehouseId = null) {
              inventory.current_quantity > 0;
     });
 
-    // ✅ NEW: Group by product (not entry order) with FIFO locations
+    // ✅ NEW: Group by product (not entry order) with EXPIRY-BASED FIFO locations
     const groupedInventory = availableAllocations.reduce((acc, allocation) => {
       const inventory = allocation.inventory[0];
       const product = allocation.entry_order_product.product;
@@ -321,7 +437,9 @@ async function getProductsWithInventory(warehouseId = null) {
           entry_orders: new Set(),
           suppliers: new Set(),
           warehouses: new Set(),
-          fifo_locations: [], // ✅ FIFO sorted locations
+          fifo_locations: [], // ✅ EXPIRY-BASED FIFO sorted locations
+          earliest_expiry: null, // ✅ NEW: Track earliest expiry
+          latest_expiry: null, // ✅ NEW: Track latest expiry
         };
       }
 
@@ -331,11 +449,21 @@ async function getProductsWithInventory(warehouseId = null) {
       acc[key].total_weight += parseFloat(inventory.current_weight || 0);
       acc[key].total_volume += parseFloat(inventory.current_volume || 0);
       acc[key].entry_orders.add(allocation.entry_order_product.entry_order.entry_order_no);
-      // ✅ NEW: Support both old and new supplier fields
-      acc[key].suppliers.add(allocation.entry_order_product.supplier?.company_name || allocation.entry_order_product.supplier?.name || 'N/A');
+      acc[key].suppliers.add(allocation.entry_order_product.supplier?.name || 'N/A');
       acc[key].warehouses.add(allocation.cell.warehouse.name);
 
-      // ✅ Add location with FIFO data (already sorted by entry_date_time)
+      // ✅ NEW: Track expiry dates for FIFO priority
+      const expiryDate = allocation.entry_order_product.expiration_date;
+      if (expiryDate) {
+        if (!acc[key].earliest_expiry || expiryDate < acc[key].earliest_expiry) {
+          acc[key].earliest_expiry = expiryDate;
+        }
+        if (!acc[key].latest_expiry || expiryDate > acc[key].latest_expiry) {
+          acc[key].latest_expiry = expiryDate;
+        }
+      }
+
+      // ✅ Add location with EXPIRY-BASED FIFO data (already sorted by expiration_date)
       acc[key].fifo_locations.push({
         allocation_id: allocation.allocation_id,
         inventory_id: inventory.inventory_id,
@@ -346,9 +474,11 @@ async function getProductsWithInventory(warehouseId = null) {
         warehouse_location: allocation.cell.warehouse.location,
         warehouse_id: allocation.cell.warehouse.warehouse_id,
         entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
-        entry_date_time: allocation.entry_order_product.entry_order.entry_date_time, // ✅ FIFO key
-        // ✅ NEW: Support both old and new supplier fields
-        supplier_name: allocation.entry_order_product.supplier?.company_name || allocation.entry_order_product.supplier?.name,
+        entry_date_time: allocation.entry_order_product.entry_order.entry_date_time, // ✅ SECONDARY FIFO key
+        expiration_date: allocation.entry_order_product.expiration_date, // ✅ PRIMARY FIFO key
+        manufacturing_date: allocation.entry_order_product.manufacturing_date,
+        lot_series: allocation.entry_order_product.lot_series, // ✅ MANDATORY: Lot number
+        supplier_name: allocation.entry_order_product.supplier?.name,
         presentation: allocation.presentation,
         available_quantity: inventory.current_quantity,
         available_packages: inventory.current_package_quantity,
@@ -360,6 +490,10 @@ async function getProductsWithInventory(warehouseId = null) {
         observations: allocation.observations,
         allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
         allocated_at: allocation.allocated_at,
+        // ✅ NEW: Expiry urgency calculation
+        days_to_expiry: expiryDate ? Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) : null,
+        is_near_expiry: expiryDate ? Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) <= 30 : false,
+        is_expired: expiryDate ? expiryDate < new Date() : false,
       });
 
       return acc;
@@ -371,8 +505,15 @@ async function getProductsWithInventory(warehouseId = null) {
       suppliers: Array.from(item.suppliers),
       warehouses: Array.from(item.warehouses),
       location_count: item.fifo_locations.length,
-      oldest_entry_date: item.fifo_locations[0]?.entry_date_time, // ✅ FIFO: Oldest entry
-      newest_entry_date: item.fifo_locations[item.fifo_locations.length - 1]?.entry_date_time,
+      earliest_entry_date: item.fifo_locations[0]?.entry_date_time, // ✅ SECONDARY: Oldest entry
+      latest_entry_date: item.fifo_locations[item.fifo_locations.length - 1]?.entry_date_time,
+      // ✅ NEW: Expiry-based prioritization
+      days_to_earliest_expiry: item.earliest_expiry 
+        ? Math.ceil((item.earliest_expiry - new Date()) / (1000 * 60 * 60 * 24)) 
+        : null,
+      has_near_expiry: item.fifo_locations.some(loc => loc.is_near_expiry),
+      has_expired: item.fifo_locations.some(loc => loc.is_expired),
+      urgent_dispatch_needed: item.fifo_locations.some(loc => loc.days_to_expiry <= 7), // ✅ Urgent if expires in 7 days
       can_depart: item.total_quantity > 0,
     }));
   } catch (error) {
@@ -383,7 +524,7 @@ async function getProductsWithInventory(warehouseId = null) {
   }
 }
 
-// ✅ NEW: Get FIFO locations for a specific product
+// ✅ NEW: Get EXPIRY-BASED FIFO locations for a specific product
 async function getFifoLocationsForProduct(productId, warehouseId = null) {
   try {
     const whereClause = {
@@ -417,7 +558,7 @@ async function getFifoLocationsForProduct(productId, warehouseId = null) {
               select: {
                 entry_order_id: true,
                 entry_order_no: true,
-                entry_date_time: true, // ✅ FIFO key
+                entry_date_time: true, // ✅ SECONDARY FIFO key
                 registration_date: true,
                 document_date: true,
               },
@@ -464,14 +605,15 @@ async function getFifoLocationsForProduct(productId, warehouseId = null) {
         },
       },
       orderBy: [
-        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ FIFO: Oldest first
+        { entry_order_product: { expiration_date: "asc" } }, // ✅ PRIMARY: EXPIRY-BASED FIFO (earliest expiry first)
+        { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ SECONDARY: Oldest entry first
         { cell: { row: "asc" } },
         { cell: { bay: "asc" } },
         { cell: { position: "asc" } },
       ],
     });
 
-    // ✅ Filter allocations that have available inventory and return FIFO sorted
+    // ✅ Filter allocations that have available inventory and return EXPIRY-BASED FIFO sorted
     return allocations
       .filter(allocation => {
         const inventory = allocation.inventory[0];
@@ -482,6 +624,7 @@ async function getFifoLocationsForProduct(productId, warehouseId = null) {
       .map((allocation) => {
         const inventory = allocation.inventory[0];
         const entryOrder = allocation.entry_order_product.entry_order;
+        const expiryDate = allocation.entry_order_product.expiration_date;
         
         return {
           allocation_id: allocation.allocation_id,
@@ -503,12 +646,15 @@ async function getFifoLocationsForProduct(productId, warehouseId = null) {
           status_code: allocation.status_code,
           quality_status: allocation.quality_status,
           
-          // ✅ FIFO details
+          // ✅ EXPIRY-BASED FIFO details
           entry_order_no: entryOrder.entry_order_no,
-          entry_date_time: entryOrder.entry_date_time, // ✅ FIFO sort key
+          entry_date_time: entryOrder.entry_date_time, // ✅ SECONDARY FIFO sort key
+          expiration_date: expiryDate, // ✅ PRIMARY FIFO sort key
+          manufacturing_date: allocation.entry_order_product.manufacturing_date,
+          lot_series: allocation.entry_order_product.lot_series, // ✅ MANDATORY: Lot number
           registration_date: entryOrder.registration_date,
           document_date: entryOrder.document_date,
-          fifo_rank: allocation.entry_order_product.entry_order.entry_date_time, // For sorting
+          fifo_rank: expiryDate || entryOrder.entry_date_time, // For sorting
           
           // Available quantities (current inventory)
           available_quantity: inventory.current_quantity,
@@ -524,15 +670,25 @@ async function getFifoLocationsForProduct(productId, warehouseId = null) {
           observations: allocation.observations,
           allocated_at: allocation.allocated_at,
           allocated_by: `${allocation.allocator.first_name || ""} ${allocation.allocator.last_name || ""}`.trim(),
+          
+          // ✅ NEW: Expiry urgency calculation
+          days_to_expiry: expiryDate ? Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) : null,
+          is_near_expiry: expiryDate ? Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) <= 30 : false,
+          is_expired: expiryDate ? expiryDate < new Date() : false,
+          urgency_level: expiryDate ? (
+            expiryDate < new Date() ? 'EXPIRED' :
+            Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) <= 7 ? 'URGENT' :
+            Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) <= 30 ? 'WARNING' : 'NORMAL'
+          ) : 'UNKNOWN',
         };
       });
   } catch (error) {
     console.error("Error in getFifoLocationsForProduct:", error);
-    throw new Error(`Failed to fetch FIFO locations: ${error.message}`);
+    throw new Error(`Failed to fetch EXPIRY-BASED FIFO locations: ${error.message}`);
   }
 }
 
-// ✅ NEW: Get suggested FIFO allocation for a product (automatic FIFO selection)
+// ✅ NEW: Get suggested EXPIRY-BASED FIFO allocation for a product (automatic FIFO selection)
 async function getSuggestedFifoAllocation(productId, requestedQuantity, requestedWeight = null, warehouseId = null) {
   try {
     const fifoLocations = await getFifoLocationsForProduct(productId, warehouseId);
@@ -545,7 +701,7 @@ async function getSuggestedFifoAllocation(productId, requestedQuantity, requeste
     let remainingQuantity = requestedQuantity;
     let remainingWeight = requestedWeight;
 
-    // ✅ FIFO allocation logic
+    // ✅ EXPIRY-BASED FIFO allocation logic (already sorted by expiration_date)
     for (const location of fifoLocations) {
       if (remainingQuantity <= 0) break;
 
@@ -563,14 +719,22 @@ async function getSuggestedFifoAllocation(productId, requestedQuantity, requeste
         warehouse_name: location.warehouse_name,
         entry_order_no: location.entry_order_no,
         entry_date_time: location.entry_date_time,
+        expiration_date: location.expiration_date, // ✅ PRIMARY FIFO key
+        manufacturing_date: location.manufacturing_date,
+        lot_series: location.lot_series, // ✅ MANDATORY: Lot number
         product_code: location.product_code,
         product_name: location.product_name,
         requested_qty: allocateQty,
         requested_weight: allocateWeight,
         available_qty: location.available_packages,
         available_weight: location.available_weight,
-        fifo_rank: location.entry_date_time,
+        fifo_rank: location.expiration_date || location.entry_date_time,
         will_be_empty: allocateQty >= location.available_packages,
+        // ✅ NEW: Expiry urgency information
+        days_to_expiry: location.days_to_expiry,
+        urgency_level: location.urgency_level,
+        is_near_expiry: location.is_near_expiry,
+        is_expired: location.is_expired,
       });
 
       remainingQuantity -= allocateQty;
@@ -579,6 +743,15 @@ async function getSuggestedFifoAllocation(productId, requestedQuantity, requeste
 
     const totalAllocated = suggestions.reduce((sum, s) => sum + s.requested_qty, 0);
     const totalWeightAllocated = suggestions.reduce((sum, s) => sum + s.requested_weight, 0);
+
+    // ✅ NEW: Expiry analysis
+    const hasExpiredItems = suggestions.some(s => s.is_expired);
+    const hasNearExpiryItems = suggestions.some(s => s.is_near_expiry);
+    const earliestExpiry = suggestions.reduce((earliest, s) => {
+      if (!s.expiration_date) return earliest;
+      if (!earliest || s.expiration_date < earliest) return s.expiration_date;
+      return earliest;
+    }, null);
 
     return {
       product_id: productId,
@@ -591,12 +764,18 @@ async function getSuggestedFifoAllocation(productId, requestedQuantity, requeste
       remaining_weight: requestedWeight ? Math.max(0, remainingWeight) : null,
       suggestions: suggestions,
       locations_used: suggestions.length,
-      oldest_entry_date: suggestions[0]?.entry_date_time,
-      newest_entry_date: suggestions[suggestions.length - 1]?.entry_date_time,
+      earliest_entry_date: suggestions[0]?.entry_date_time,
+      latest_entry_date: suggestions[suggestions.length - 1]?.entry_date_time,
+      // ✅ NEW: Expiry-based analysis
+      earliest_expiry_date: earliestExpiry,
+      has_expired_items: hasExpiredItems,
+      has_near_expiry_items: hasNearExpiryItems,
+      urgent_dispatch_recommended: hasExpiredItems || hasNearExpiryItems,
+      expiry_priority: hasExpiredItems ? 'CRITICAL' : hasNearExpiryItems ? 'HIGH' : 'NORMAL',
     };
   } catch (error) {
     console.error("Error in getSuggestedFifoAllocation:", error);
-    throw new Error(`Failed to generate FIFO allocation: ${error.message}`);
+    throw new Error(`Failed to generate EXPIRY-BASED FIFO allocation: ${error.message}`);
   }
 }
 
@@ -944,469 +1123,290 @@ async function getAvailableCellsForProduct(
   }
 }
 
-// Create Departure order with product-based inventory tracking
+// ✅ ENHANCED: Create Departure order with approval workflow and mandatory fields
 async function createDepartureOrder(departureData) {
-  const { inventory_selections, ...orderData } = departureData;
-
-  // ✅ MANDATORY FIELD VALIDATION
+  // ✅ MANDATORY FIELD VALIDATION for new workflow
   const requiredFields = {
-    departure_order_no: "Dispatch Order Number",
-    customer_id: "Customer",
-    warehouse_id: "Warehouse", 
-    departure_date: "Dispatch Date & Time",
+    departure_order_no: "Departure Order Number", // ✅ MANDATORY
+    departure_date_time: "Dispatch Date & Time", // ✅ MANDATORY
     created_by: "Created By User",
     organisation_id: "Organisation",
-    document_number: "Dispatch Document Number", // ✅ NEW: Make mandatory
-    document_date: "Document Date", // ✅ NEW: Make mandatory
+    dispatch_document_number: "Dispatch Document Number", // ✅ MANDATORY
+    document_date: "Document Date",
+    total_pallets: "Pallet/Position Quantity", // ✅ MANDATORY
+    document_type_ids: "Document Types", // ✅ MANDATORY: Multi-select
+    uploaded_documents: "Document Upload", // ✅ MANDATORY
   };
 
   // Validate required main fields
   for (const [field, displayName] of Object.entries(requiredFields)) {
-    if (!orderData[field]) {
-      throw new Error(`${displayName} is required and cannot be empty`);
-    }
-  }
-
-  if (!inventory_selections || inventory_selections.length === 0) {
-    throw new Error("At least one inventory selection is required");
-  }
-
-  // ✅ VALIDATE EACH INVENTORY SELECTION has required fields
-  for (let i = 0; i < inventory_selections.length; i++) {
-    const selection = inventory_selections[i];
-    const selectionRequiredFields = {
-      inventory_id: "Inventory ID",
-      requested_qty: "Quantity Inventory units", // ✅ FIXED: Use requested_qty not requested_quantity
-      requested_weight: "Weight",
-      // packaging_code is optional - will be derived from product status if not provided
-    };
-
-    for (const [field, displayName] of Object.entries(selectionRequiredFields)) {
-      if (!selection[field] && selection[field] !== 0) {
-        throw new Error(`Selection ${i + 1}: ${displayName} is required`);
+    if (!departureData[field]) {
+      // Special handling for arrays
+      if (field === 'document_type_ids' && (!departureData[field] || departureData[field].length === 0)) {
+        throw new Error(`${displayName} is required - at least one document type must be selected`);
+      } else if (field !== 'document_type_ids' && (!departureData[field] || departureData[field] === '')) {
+        throw new Error(`${displayName} is required and cannot be empty`);
       }
     }
-
-    // ✅ VALIDATE numeric fields
-    // ✅ FIXED: Use correct field names from frontend payload
-    if (parseInt(selection.requested_qty) <= 0) {
-      throw new Error(`Selection ${i + 1}: Quantity must be greater than 0`);
-    }
-    if (parseFloat(selection.requested_weight) <= 0) {
-      throw new Error(`Selection ${i + 1}: Weight must be greater than 0`);
-    }
   }
 
-  // ✅ FIXED: Enhanced validation to include packaging_code
-  const validatedCells = [];
-  for (const selection of inventory_selections) {
-    const validated = await validateSelectedCell(
-      selection.inventory_id,
-      parseInt(selection.requested_qty), // ✅ FIXED: Use requested_qty not requested_quantity
-      parseFloat(selection.requested_weight)
-    );
-
-    // ✅ PACKAGING CODE: Use from selection if provided, otherwise derive from inventory
-    if (selection.packaging_code) {
-      validated.packaging_code = parseInt(selection.packaging_code);
-    } else {
-      // ✅ DERIVE packaging code from product status and presentation
-      const statusMapping = {
-        'PAL_NORMAL': 30, 'CAJ_NORMAL': 31, 'SAC_NORMAL': 32, 'UNI_NORMAL': 33,
-        'PAQ_NORMAL': 34, 'TAM_NORMAL': 35, 'BUL_NORMAL': 36, 'OTR_NORMAL': 37,
-        'PAL_DANADA': 40, 'CAJ_DANADA': 41, 'SAC_DANADO': 42, 'UNI_DANADA': 43,
-        'PAQ_DANADO': 44, 'TAM_DANADO': 45, 'BUL_DANADO': 46, 'OTR_DANADO': 47,
-      };
-      validated.packaging_code = statusMapping[validated.product_status] || 31; // Default to CAJ_NORMAL
-    }
-    
-    // ✅ CAPTURE ADDITIONAL MANDATORY INFO from inventory/allocation
-    const allocationInfo = await prisma.inventoryAllocation.findUnique({
-      where: { allocation_id: validated.allocation_id },
-      include: {
-        entry_order_product: {
-          include: {
-            entry_order: {
-              select: {
-                entry_order_no: true,
-                entry_date_time: true,
-                document_date: true,
-              }
-            },
-            product: {
-              select: {
-                product_code: true,
-                name: true,
-              }
-            }
-          }
-        },
-        cell: {
-          select: {
-            row: true,
-            bay: true,
-            position: true,
-          }
-        }
-      }
-    });
-
-    if (!allocationInfo) {
-      throw new Error(`Allocation not found for inventory ${selection.inventory_id}`);
-    }
-
-    // ✅ ADD MANDATORY TRACEABILITY INFO
-    validated.entry_order_no = allocationInfo.entry_order_product.entry_order.entry_order_no;
-    validated.entry_date_time = allocationInfo.entry_order_product.entry_order.entry_date_time;
-    validated.entry_document_date = allocationInfo.entry_order_product.entry_order.document_date;
-    validated.product_code = allocationInfo.entry_order_product.product.product_code;
-    validated.product_name = allocationInfo.entry_order_product.product.name;
-    validated.lot_series = allocationInfo.entry_order_product.lot_series || "N/A";
-    validated.presentation = allocationInfo.presentation;
-    validated.pallets_position = `${allocationInfo.cell.row}.${String(allocationInfo.cell.bay).padStart(2, "0")}.${String(allocationInfo.cell.position).padStart(2, "0")}`;
-    
-    validatedCells.push(validated);
+  // ✅ NEW: Validate either customer_id or client_id is provided
+  if (!departureData.customer_id && !departureData.client_id) {
+    throw new Error("Either Customer or Client must be selected");
   }
+
+  // ✅ NEW: Validate warehouse assignment
+  if (!departureData.warehouse_id) {
+    throw new Error("Warehouse assignment is required");
+  }
+
+  // ✅ NEW: For creation, we don't require inventory selections yet - they're selected during dispatch
+  // This allows for the approval workflow before actual inventory allocation
 
   return await prisma.$transaction(async (tx) => {
-    // 1. ✅ FIXED: Validate organisation exists BEFORE creating order
+    // 1. Validate organisation exists
     const organisation = await tx.organisation.findUnique({
-      where: { organisation_id: String(orderData.organisation_id) }
+      where: { organisation_id: String(departureData.organisation_id) }
     });
     if (!organisation) {
-      throw new Error(`Organisation with ID ${orderData.organisation_id} not found`);
+      throw new Error(`Organisation with ID ${departureData.organisation_id} not found`);
     }
 
     // 2. Create base order
     const newOrder = await tx.order.create({
       data: {
-        order_type: orderData.order_type || "DEPARTURE",
-        status: orderData.order_status || "PENDING",
-        organisation_id: orderData.organisation_id,
-        created_by: orderData.created_by,
+        order_type: "DEPARTURE",
+        status: "PENDING", // ✅ NEW: Start in PENDING for approval workflow
+        organisation_id: departureData.organisation_id,
+        created_by: departureData.created_by,
       },
     });
 
-    // 3. Calculate totals from selections
-    const totalQty = validatedCells.reduce(
-      (sum, cell) => sum + cell.requested_qty,
-      0
-    );
-    const totalWeight = validatedCells.reduce(
-      (sum, cell) => sum + cell.requested_weight,
-      0
-    );
-    const totalPackages = validatedCells.reduce(
-      (sum, cell) => sum + cell.requested_qty, // Assuming packages = quantity
-      0
-    );
+    // 3. Validate foreign key references
+    let customerId = null;
+    let clientId = null;
 
-    // 4. Validate foreign key references before creating departure order
-    let validDocumentTypeId = null;
-    if (orderData.document_type_id) {
-      const documentType = await tx.departureDocumentType.findUnique({
-        where: { document_type_id: String(orderData.document_type_id) }
+    if (departureData.customer_id) {
+      const customer = await tx.customer.findUnique({
+        where: { customer_id: String(departureData.customer_id) }
       });
-      if (documentType) {
-        validDocumentTypeId = String(orderData.document_type_id);
+      if (!customer) {
+        throw new Error(`Customer with ID ${departureData.customer_id} not found`);
       }
+      customerId = String(departureData.customer_id);
     }
 
-    // Validate customer exists
-    const customer = await tx.customer.findUnique({
-      where: { customer_id: String(orderData.customer_id) }
-    });
-    if (!customer) {
-      throw new Error(`Customer with ID ${orderData.customer_id} not found`);
+    if (departureData.client_id) {
+      const client = await tx.client.findUnique({
+        where: { client_id: String(departureData.client_id) }
+      });
+      if (!client) {
+        throw new Error(`Client with ID ${departureData.client_id} not found`);
+      }
+      clientId = String(departureData.client_id);
     }
 
     // Validate warehouse exists
     const warehouse = await tx.warehouse.findUnique({
-      where: { warehouse_id: String(orderData.warehouse_id) }
+      where: { warehouse_id: String(departureData.warehouse_id) }
     });
     if (!warehouse) {
-      throw new Error(`Warehouse with ID ${orderData.warehouse_id} not found`);
+      throw new Error(`Warehouse with ID ${departureData.warehouse_id} not found`);
     }
 
     // Validate user exists
     const user = await tx.user.findUnique({
-      where: { id: String(orderData.created_by) }
+      where: { id: String(departureData.created_by) }
     });
     if (!user) {
-      throw new Error(`User with ID ${orderData.created_by} not found`);
+      throw new Error(`User with ID ${departureData.created_by} not found`);
     }
 
-    // ✅ ENHANCED: Create departure order with ALL MANDATORY FIELDS
+    // ✅ Validate document types exist
+    for (const docTypeId of departureData.document_type_ids) {
+      const docType = await tx.departureDocumentType.findUnique({
+        where: { document_type_id: String(docTypeId) }
+      });
+      if (!docType) {
+        throw new Error(`Document type with ID ${docTypeId} not found`);
+      }
+    }
+
+    // ✅ ENHANCED: Create departure order with ALL MANDATORY FIELDS and approval workflow
     const newDepartureOrder = await tx.departureOrder.create({
       data: {
-        departure_order_no: orderData.departure_order_no, // ✅ MANDATORY: Dispatch Order Number
-        registration_date: toUTC(orderData.registration_date) || new Date(),
-        document_date: toUTC(orderData.document_date), // ✅ MANDATORY: Document Date
-        departure_date_time: toUTC(orderData.departure_date), // ✅ MANDATORY: Dispatch Date & Time
-        destination_point: orderData.arrival_point || null,
-        transport_type: orderData.transport_type || null,
-        carrier_name: orderData.carrier_name || null,
-        total_volume: orderData.total_volume ? parseFloat(orderData.total_volume) : null,
-        total_weight: totalWeight, // ✅ CALCULATED: Total weight from selections
-        total_pallets: orderData.total_pallets ? parseInt(orderData.total_pallets) : null, // ✅ MANDATORY: Pallets/Position Quantity
-        observation: orderData.observations || null,
-        order_status: "PENDING",
+        departure_order_no: departureData.departure_order_no, // ✅ MANDATORY
+        registration_date: new Date(),
+        document_date: toUTC(departureData.document_date),
+        departure_date_time: toUTC(departureData.departure_date_time), // ✅ MANDATORY
+        created_by: departureData.created_by,
         
-        // ✅ MANDATORY: Documents Upload - store as JSON
-        uploaded_documents: orderData.uploaded_documents ? {
-          dispatch_document_number: orderData.document_number, // ✅ MANDATORY: Dispatch Document Number
-          documents: orderData.uploaded_documents,
+        // ✅ NEW: Approval workflow status
+        order_status: OrderStatusDeparture.PENDING, // ✅ Start in PENDING for approval
+        review_status: ReviewStatus.PENDING,
+        
+        // Basic order details
+        destination_point: departureData.destination_point || null,
+        transport_type: departureData.transport_type || null,
+        carrier_name: departureData.carrier_name || null,
+        total_volume: departureData.total_volume ? parseFloat(departureData.total_volume) : null,
+        total_weight: departureData.total_weight ? parseFloat(departureData.total_weight) : null,
+        total_pallets: parseInt(departureData.total_pallets), // ✅ MANDATORY
+        observation: departureData.observations || null,
+        
+        // ✅ MANDATORY: Document fields
+        dispatch_document_number: departureData.dispatch_document_number, // ✅ MANDATORY
+        document_type_ids: departureData.document_type_ids, // ✅ MANDATORY: Multi-select
+        
+        // ✅ MANDATORY: Document uploads
+        uploaded_documents: {
+          dispatch_document_number: departureData.dispatch_document_number,
+          document_types: departureData.document_type_ids,
+          documents: departureData.uploaded_documents || [],
           uploaded_at: new Date().toISOString(),
-          uploaded_by: orderData.created_by
-        } : {
-          dispatch_document_number: orderData.document_number, // ✅ MANDATORY: Even if no files
-          documents: [],
-          uploaded_at: new Date().toISOString(),
-          uploaded_by: orderData.created_by
+          uploaded_by: departureData.created_by
         },
         
-        // ✅ FIXED: Use explicit connect syntax for relations
-        customer: { 
-          connect: { customer_id: String(orderData.customer_id) }
+        // ✅ NEW: Dispatch tracking (separate from approval)
+        dispatch_status: "NOT_DISPATCHED", // Will be updated when actually dispatched
+        
+        // Relations
+        customer_id: customerId,
+        client_id: clientId,
+        warehouse_id: String(departureData.warehouse_id),
+        label_id: departureData.label_id ? String(departureData.label_id) : null,
+        exit_option_id: departureData.exit_option_id ? String(departureData.exit_option_id) : null,
+        order_id: newOrder.order_id,
+      },
+      include: {
+        customer: {
+          select: {
+            customer_id: true,
+            name: true,
+          }
         },
-        documentType: validDocumentTypeId ? {
-          connect: { document_type_id: validDocumentTypeId }
-        } : undefined,
-        creator: {
-          connect: { id: String(orderData.created_by) }
-        },
-        order: {
-          connect: { order_id: newOrder.order_id }
+        client: {
+          select: {
+            client_id: true,
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            client_type: true,
+            email: true,
+          }
         },
         warehouse: {
-          connect: { warehouse_id: String(orderData.warehouse_id) }
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true,
+          }
         },
-      },
+        creator: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: true,
+          }
+        },
+        order: {
+          select: {
+            order_id: true,
+            order_type: true,
+            status: true,
+            created_at: true,
+            organisation: {
+              select: {
+                organisation_id: true,
+                name: true,
+              }
+            }
+          }
+        }
+      }
     });
 
-    // 5. Create departure products for each unique PRODUCT (not entry order product) WITH ALL MANDATORY FIELDS
-    const productGroups = validatedCells.reduce((groups, cell) => {
-      const key = cell.product_code; // ✅ FIXED: Group by product_code to avoid constraint violation
-      if (!groups[key]) {
-        groups[key] = {
-          product_code: cell.product_code, // ✅ MANDATORY: Product Code
-          product_id: cell.product_id,
-          product_name: cell.product_name, // ✅ MANDATORY: Product Name
-          lot_series: cell.lot_series, // ✅ MANDATORY: Lot Number (use first one found)
-          presentation: cell.presentation, // ✅ MANDATORY: Packaging type
-          entry_order_nos: [cell.entry_order_no], // ✅ MANDATORY: Entry Order Numbers (multiple possible)
-          entry_date_times: [cell.entry_date_time], // ✅ MANDATORY: Entry Dates (multiple possible)
-          entry_order_product_ids: [cell.entry_order_product_id], // Track all source entry products
-          pallets_positions: [], // ✅ MANDATORY: Pallets / Position Quantity
-          total_qty: 0,
-          total_weight: 0,
-          cells: [],
-        };
-      } else {
-        // ✅ FIXED: For additional cells of same product, merge data
-        if (!groups[key].entry_order_nos.includes(cell.entry_order_no)) {
-          groups[key].entry_order_nos.push(cell.entry_order_no);
-        }
-        if (!groups[key].entry_date_times.some(dt => dt?.getTime() === cell.entry_date_time?.getTime())) {
-          groups[key].entry_date_times.push(cell.entry_date_time);
-        }
-        if (!groups[key].entry_order_product_ids.includes(cell.entry_order_product_id)) {
-          groups[key].entry_order_product_ids.push(cell.entry_order_product_id);
-        }
-      }
-      groups[key].total_qty += cell.requested_qty; // ✅ MANDATORY: Quantity Inventory units
-      groups[key].total_weight += cell.requested_weight;
-      groups[key].pallets_positions.push(cell.pallets_position); // ✅ MANDATORY: Position info
-      groups[key].cells.push(cell);
-      return groups;
-    }, {});
-
-    // ✅ UPDATED: Create departure products with ALL MANDATORY TRACEABILITY
+    // ✅ NEW: Create departure products from provided product list (no inventory allocation yet)
     const departureProducts = [];
-    const entryToDepartureProductMap = {}; // Map entry_order_product_id to departure_order_product_id
-
-    for (const [productCode, group] of Object.entries(productGroups)) {
-      const departureProduct = await tx.departureOrderProduct.create({
-        data: {
-          departure_order_id: newDepartureOrder.departure_order_id,
-          product_code: group.product_code, // ✅ MANDATORY: Product Code
-          product_id: group.product_id,
-          lot_series: group.lot_series, // ✅ MANDATORY: Lot Number (first one)
-          requested_quantity: group.total_qty, // ✅ MANDATORY: Quantity Inventory units
-          requested_packages: group.total_qty, // ✅ MANDATORY: Packaging Quantity
-          requested_pallets: Math.ceil(group.total_qty / 200), // ✅ CALCULATED: Pallets from quantity
-          presentation: group.presentation, // ✅ MANDATORY: Packaging type
-          requested_weight: group.total_weight,
-          requested_volume: parseFloat(orderData.total_volume) || null,
-          unit_price: orderData.unit_price ? parseFloat(orderData.unit_price) : null,
-          total_value: orderData.unit_price ? parseFloat(orderData.unit_price) * group.total_qty : null,
-          temperature_requirement: "AMBIENTE",
-          special_handling: orderData.special_handling || null,
-          delivery_instructions: orderData.delivery_instructions || null,
-        },
-      });
-
-      departureProducts.push({
-        ...departureProduct,
-        // ✅ ADD MANDATORY TRACEABILITY INFO to response (merged from multiple sources)
-        product_name: group.product_name, // ✅ MANDATORY: Product Name
-        entry_order_nos: group.entry_order_nos.join(', '), // ✅ MANDATORY: Entry Order Numbers (multiple)
-        entry_date_times: group.entry_date_times.map(dt => dt?.toISOString()).join(', '), // ✅ MANDATORY: Entry Dates
-        dispatch_date_time: newDepartureOrder.departure_date_time, // ✅ MANDATORY: Dispatch Date & Time
-        dispatch_document_number: orderData.document_number, // ✅ MANDATORY: Dispatch Document Number
-        pallets_positions: group.pallets_positions.join(', '), // ✅ MANDATORY: Pallets / Position Quantity
-      });
-
-      // ✅ FIXED: Store mapping for ALL entry order products in this group
-      for (const entryOrderProductId of group.entry_order_product_ids) {
-        entryToDepartureProductMap[entryOrderProductId] =
-          departureProduct.departure_order_product_id;
-      }
-    }
-
-    // 6. ✅ UPDATED: Update inventory using the new allocation-based system with proper synchronization
-    const cellAllocations = [];
-    for (const cell of validatedCells) {
-      // ✅ FIXED: Calculate proportional package quantity based on actual package to quantity ratio
-      const originalPackageRatio = cell.available_package_qty > 0 ? 
-        cell.available_package_qty / cell.available_qty : 1;
-      const requestedPackageQty = Math.ceil(cell.requested_qty * originalPackageRatio);
-      
-      // ✅ FIXED: Calculate proportional volume if available
-      const originalVolumeRatio = cell.available_volume > 0 ? 
-        cell.available_volume / cell.available_qty : 0;
-      const requestedVolume = cell.requested_qty * originalVolumeRatio;
-
-      // Update inventory (DECREMENT - removing from warehouse) with proper synchronization
-      await tx.inventory.update({
-        where: { inventory_id: cell.inventory_id },
-        data: {
-          current_quantity: { decrement: cell.requested_qty },
-          current_package_quantity: { decrement: requestedPackageQty }, // ✅ FIXED: Use calculated package qty
-          current_weight: { decrement: cell.requested_weight },
-          current_volume: requestedVolume > 0 ? { decrement: requestedVolume } : undefined,
-          status: cell.will_be_empty ? "DEPLETED" : "AVAILABLE",
-        },
-      });
-
-      // Create cell assignment with packaging_code
-      await tx.cellAssignment.create({
-        data: {
-          departure_order_id: newDepartureOrder.departure_order_id,
-          cell_id: cell.cell_id,
-          assigned_by: orderData.created_by,
-          packaging_quantity: requestedPackageQty, // ✅ FIXED: Use calculated package qty
-          weight: cell.requested_weight,
-          packaging_code: cell.packaging_code, // ✅ MANDATORY: From validated selection
-          status: "COMPLETED",
-        },
-      });
-
-      // ✅ FIXED: Update cell status with proper synchronization
-      if (cell.will_be_empty) {
-        await tx.warehouseCell.update({
-          where: { id: cell.cell_id },
-          data: {
-            status: CellStatus.AVAILABLE,
-            currentUsage: 0,
-            current_packaging_qty: 0,
-            current_weight: 0,
-          },
+    if (departureData.products && departureData.products.length > 0) {
+      for (const productData of departureData.products) {
+        // Validate product exists
+        const product = await tx.product.findUnique({
+          where: { product_id: String(productData.product_id) }
         });
-      } else {
-        await tx.warehouseCell.update({
-          where: { id: cell.cell_id },
+        if (!product) {
+          throw new Error(`Product with ID ${productData.product_id} not found`);
+        }
+
+        const departureProduct = await tx.departureOrderProduct.create({
           data: {
-            current_packaging_qty: { decrement: requestedPackageQty }, // ✅ FIXED: Use calculated package qty
-            current_weight: { decrement: cell.requested_weight },
-            currentUsage: requestedVolume > 0 ? { decrement: requestedVolume } : undefined,
+            departure_order_id: newDepartureOrder.departure_order_id,
+            product_code: productData.product_code, // ✅ MANDATORY
+            product_id: String(productData.product_id),
+            lot_series: productData.lot_series, // ✅ MANDATORY
+            requested_quantity: parseInt(productData.requested_quantity), // ✅ MANDATORY
+            requested_packages: parseInt(productData.requested_packages || productData.requested_quantity),
+            requested_pallets: parseInt(productData.requested_pallets) || Math.ceil(productData.requested_quantity / 200),
+            presentation: productData.presentation || "CAJA", // ✅ MANDATORY: Packaging type
+            requested_weight: parseFloat(productData.requested_weight),
+            requested_volume: productData.requested_volume ? parseFloat(productData.requested_volume) : null,
+            unit_price: productData.unit_price ? parseFloat(productData.unit_price) : null,
+            total_value: productData.unit_price ? parseFloat(productData.unit_price) * parseInt(productData.requested_quantity) : null,
+            temperature_requirement: productData.temperature_requirement || "AMBIENTE",
+            special_handling: productData.special_handling || null,
+            delivery_instructions: productData.delivery_instructions || null,
           },
+          include: {
+            product: {
+              select: {
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              }
+            }
+          }
+        });
+
+        departureProducts.push({
+          ...departureProduct,
+          product_name: departureProduct.product.name, // ✅ MANDATORY
         });
       }
-
-      // ✅ ENHANCED: Create inventory log with proper synchronization
-      await tx.inventoryLog.create({
-        data: {
-          user_id: orderData.created_by,
-          product_id: cell.product_id,
-          movement_type: MovementType.DEPARTURE,
-          quantity_change: -cell.requested_qty,
-          package_change: -requestedPackageQty, // ✅ FIXED: Use calculated package qty
-          weight_change: -cell.requested_weight,
-          volume_change: requestedVolume > 0 ? -requestedVolume : null,
-          departure_order_id: newDepartureOrder.departure_order_id,
-          departure_order_product_id:
-            entryToDepartureProductMap[cell.entry_order_product_id],
-          entry_order_product_id: cell.entry_order_product_id,
-          warehouse_id: cell.warehouse_id,
-          cell_id: cell.cell_id,
-          product_status: cell.product_status || "PAL_NORMAL",
-          status_code: cell.status_code || 37,
-          // ✅ ENHANCED: Complete traceability notes with ALL MANDATORY INFO including sync details
-          notes: `DEPARTURE: ${cell.requested_qty} units (${requestedPackageQty} packages, ${cell.requested_weight} kg) of ${cell.product_code} (${cell.product_name}) | ` +
-                 `Lot: ${cell.lot_series} | Entry Order: ${cell.entry_order_no} | ` +
-                 `Entry Date: ${cell.entry_date_time} | Dispatch Date: ${newDepartureOrder.departure_date_time} | ` +
-                 `Position: ${cell.pallets_position} | Document: ${orderData.document_number} | ` +
-                 `Dispatch Order: ${newDepartureOrder.departure_order_no}`,
-        },
-      });
-
-      cellAllocations.push({
-        cell_reference: cell.cell_reference,
-        warehouse_name: cell.warehouse_name,
-        entry_order_no: cell.entry_order_no,
-        product_code: cell.product_code,
-        product_name: cell.product_name, // ✅ ADD: Product Name
-        lot_series: cell.lot_series, // ✅ ADD: Lot Number
-        departed_qty: cell.requested_qty,
-        departed_packages: requestedPackageQty, // ✅ FIXED: Add calculated package qty
-        departed_weight: cell.requested_weight,
-        departed_volume: requestedVolume, // ✅ ADD: Volume tracking
-        remaining_qty: cell.remaining_qty,
-        remaining_weight: cell.remaining_weight,
-        cell_depleted: cell.will_be_empty,
-        packaging_code: cell.packaging_code, // ✅ ADD: Packaging Code
-        pallets_position: cell.pallets_position, // ✅ ADD: Position info
-        entry_date_time: cell.entry_date_time, // ✅ ADD: Entry Date & Time
-        dispatch_date_time: newDepartureOrder.departure_date_time, // ✅ ADD: Dispatch Date & Time
-      });
     }
 
     return {
-      departureOrder: {
+      success: true,
+      message: "Departure order created successfully and is pending approval",
+      departure_order: {
         ...newDepartureOrder,
-        // ✅ ADD MANDATORY FIELDS to response for verification
-        dispatch_order_number: newDepartureOrder.departure_order_no, // ✅ MANDATORY
-        dispatch_document_number: orderData.document_number, // ✅ MANDATORY
-        dispatch_date_time: newDepartureOrder.departure_date_time, // ✅ MANDATORY
-        has_documents_upload: !!orderData.uploaded_documents, // ✅ MANDATORY check
-        total_products: departureProducts.length,
-        total_packaging_quantity: totalPackages, // ✅ MANDATORY
+        // ✅ WORKFLOW STATUS
+        workflow_status: "PENDING_APPROVAL",
+        can_be_edited: newDepartureOrder.order_status === 'REVISION',
+        can_be_approved: newDepartureOrder.order_status === 'PENDING',
+        can_be_dispatched: newDepartureOrder.order_status === 'APPROVED',
+        
+        // ✅ MANDATORY FIELDS SUMMARY
+        mandatory_fields_captured: {
+          departure_order_number: newDepartureOrder.departure_order_no,
+          dispatch_date_time: newDepartureOrder.departure_date_time,
+          dispatch_document_number: newDepartureOrder.dispatch_document_number,
+          pallet_position_quantity: newDepartureOrder.total_pallets,
+          document_types_count: newDepartureOrder.document_type_ids.length,
+          documents_uploaded: !!departureData.uploaded_documents,
+          has_products: departureProducts.length > 0,
+        }
       },
-      departureProducts, // ✅ Already enhanced with mandatory fields
-      cellAllocations, // ✅ Already enhanced with mandatory fields
-      totals: {
-        total_qty: totalQty,
-        total_weight: totalWeight,
-        total_packages: totalPackages, // ✅ ADD: Packaging Quantity
-        cells_affected: validatedCells.length,
-        cells_depleted: validatedCells.filter((c) => c.will_be_empty).length,
-      },
-      // ✅ MANDATORY COMPLIANCE SUMMARY
-      mandatory_fields_captured: {
-        dispatch_order_number: newDepartureOrder.departure_order_no,
-        product_codes: [...new Set(validatedCells.map(c => c.product_code))],
-        product_names: [...new Set(validatedCells.map(c => c.product_name))],
-        lot_numbers: [...new Set(validatedCells.map(c => c.lot_series))],
-        quantity_inventory_units: totalQty,
-        packaging_quantities: totalPackages,
-        packaging_types: [...new Set(validatedCells.map(c => c.presentation))],
-        dispatch_document_number: orderData.document_number,
-        pallets_positions: [...new Set(validatedCells.map(c => c.pallets_position))],
-        entry_date_times: [...new Set(validatedCells.map(c => c.entry_date_time))],
-        dispatch_date_time: newDepartureOrder.departure_date_time,
-        entry_order_numbers: [...new Set(validatedCells.map(c => c.entry_order_no))],
-        documents_uploaded: !!orderData.uploaded_documents,
+      departure_products: departureProducts,
+      next_steps: [
+        "Departure order is now pending approval by warehouse incharge or admin",
+        "Once approved, inventory can be allocated and dispatched",
+        "If revision is requested, the order can be edited and resubmitted"
+      ],
+      approval_workflow: {
+        current_status: "PENDING",
+        required_approvers: ["WAREHOUSE_INCHARGE", "ADMIN"],
+        possible_actions: ["APPROVE", "REJECT", "REQUEST_REVISION"]
       }
     };
   }, {
@@ -1624,6 +1624,1250 @@ async function getCurrentDepartureOrderNo() {
   return `${yearPrefix}${String(nextCount).padStart(2, "0")}`;
 }
 
+// ✅ NEW: Approve departure order (WAREHOUSE_INCHARGE/ADMIN only)
+async function approveDepartureOrder(departureOrderId, userId, userRole, comments = null) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can approve departure orders');
+    }
+
+    // Check if departure order exists and is in correct status
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+      include: {
+        products: true,
+        order: true,
+      }
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (departureOrder.order_status !== 'PENDING') {
+      throw new Error(`Cannot approve departure order with status: ${departureOrder.order_status}`);
+    }
+
+    // Update departure order status
+    const updatedOrder = await prisma.departureOrder.update({
+      where: { departure_order_id: departureOrderId },
+      data: {
+        order_status: 'APPROVED',
+        review_status: 'APPROVED',
+        review_comments: comments,
+        reviewed_by: userId,
+        reviewed_at: new Date(),
+      },
+      include: {
+        products: {
+          include: {
+            product: {
+              select: {
+                product_code: true,
+                name: true,
+              }
+            }
+          }
+        },
+        creator: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        },
+        client: {
+          select: {
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            client_type: true,
+          }
+        },
+        customer: {
+          select: {
+            name: true,
+          }
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Departure order approved successfully',
+      departure_order: updatedOrder,
+      approved_by: userId,
+      approved_at: new Date(),
+      comments: comments,
+    };
+  } catch (error) {
+    console.error("Error in approveDepartureOrder:", error);
+    throw new Error(`Failed to approve departure order: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Reject departure order (WAREHOUSE_INCHARGE/ADMIN only)
+async function rejectDepartureOrder(departureOrderId, userId, userRole, comments) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can reject departure orders');
+    }
+
+    if (!comments || comments.trim().length === 0) {
+      throw new Error('Rejection comments are required');
+    }
+
+    // Check if departure order exists and is in correct status
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (!['PENDING', 'REVISION'].includes(departureOrder.order_status)) {
+      throw new Error(`Cannot reject departure order with status: ${departureOrder.order_status}`);
+    }
+
+    // Update departure order status
+    const updatedOrder = await prisma.departureOrder.update({
+      where: { departure_order_id: departureOrderId },
+      data: {
+        order_status: 'REJECTED',
+        review_status: 'REJECTED',
+        review_comments: comments,
+        reviewed_by: userId,
+        reviewed_at: new Date(),
+      },
+      include: {
+        products: true,
+        creator: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Departure order rejected',
+      departure_order: updatedOrder,
+      rejected_by: userId,
+      rejected_at: new Date(),
+      rejection_reason: comments,
+    };
+  } catch (error) {
+    console.error("Error in rejectDepartureOrder:", error);
+    throw new Error(`Failed to reject departure order: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Request revision for departure order (WAREHOUSE_INCHARGE/ADMIN only)
+async function requestRevisionDepartureOrder(departureOrderId, userId, userRole, comments) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can request revisions');
+    }
+
+    if (!comments || comments.trim().length === 0) {
+      throw new Error('Revision comments are required');
+    }
+
+    // Check if departure order exists and is in correct status
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (departureOrder.order_status !== 'PENDING') {
+      throw new Error(`Cannot request revision for departure order with status: ${departureOrder.order_status}`);
+    }
+
+    // Update departure order status
+    const updatedOrder = await prisma.departureOrder.update({
+      where: { departure_order_id: departureOrderId },
+      data: {
+        order_status: 'REVISION',
+        review_status: 'NEEDS_REVISION',
+        review_comments: comments,
+        reviewed_by: userId,
+        reviewed_at: new Date(),
+      },
+      include: {
+        products: true,
+        creator: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Revision requested for departure order',
+      departure_order: updatedOrder,
+      requested_by: userId,
+      requested_at: new Date(),
+      revision_notes: comments,
+    };
+  } catch (error) {
+    console.error("Error in requestRevisionDepartureOrder:", error);
+    throw new Error(`Failed to request revision: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Dispatch approved departure order (WAREHOUSE_INCHARGE/ADMIN only)
+async function dispatchDepartureOrder(departureOrderId, userId, userRole, dispatchData = {}) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can dispatch departure orders');
+    }
+
+    // Check if departure order exists and is approved
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+      include: {
+        products: {
+          include: {
+            product: true,
+          }
+        },
+      }
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (departureOrder.order_status !== 'APPROVED') {
+      throw new Error(`Cannot dispatch departure order with status: ${departureOrder.order_status}. Order must be approved first.`);
+    }
+
+    if (departureOrder.dispatch_status === 'DISPATCHED') {
+      throw new Error('Departure order has already been dispatched');
+    }
+
+    // ✅ MANDATORY: Validate that inventory selections are provided for dispatch
+    if (!dispatchData.inventory_selections || dispatchData.inventory_selections.length === 0) {
+      throw new Error('Inventory selections are required for dispatch');
+    }
+
+    // ✅ Validate each inventory selection
+    const validatedCells = [];
+    for (const selection of dispatchData.inventory_selections) {
+      const validated = await validateSelectedCell(
+        selection.inventory_id,
+        parseInt(selection.requested_qty),
+        parseFloat(selection.requested_weight)
+      );
+      validatedCells.push(validated);
+    }
+
+    // ✅ Process the actual dispatch (remove from inventory)
+    const dispatchResult = await processInventoryDispatch(
+      departureOrderId,
+      validatedCells,
+      userId,
+      dispatchData
+    );
+
+    // Update departure order with dispatch information
+    const updatedOrder = await prisma.departureOrder.update({
+      where: { departure_order_id: departureOrderId },
+      data: {
+        order_status: 'DISPATCHED',
+        dispatch_status: 'DISPATCHED',
+        dispatched_by: userId,
+        dispatched_at: new Date(),
+        dispatch_notes: dispatchData.dispatch_notes || null,
+      },
+      include: {
+        products: true,
+        dispatcher: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: 'Departure order dispatched successfully',
+      departure_order: updatedOrder,
+      dispatch_result: dispatchResult,
+      dispatched_by: userId,
+      dispatched_at: new Date(),
+    };
+  } catch (error) {
+    console.error("Error in dispatchDepartureOrder:", error);
+    throw new Error(`Failed to dispatch departure order: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Batch dispatch multiple approved departure orders
+async function batchDispatchDepartureOrders(departureOrderIds, userId, userRole, batchDispatchData = {}) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can dispatch departure orders');
+    }
+
+    if (!departureOrderIds || departureOrderIds.length === 0) {
+      throw new Error('At least one departure order ID is required');
+    }
+
+    const results = [];
+    const errors = [];
+
+    // Process each departure order
+    for (const departureOrderId of departureOrderIds) {
+      try {
+        const dispatchData = batchDispatchData[departureOrderId] || {};
+        const result = await dispatchDepartureOrder(departureOrderId, userId, userRole, dispatchData);
+        results.push({
+          departure_order_id: departureOrderId,
+          success: true,
+          result: result,
+        });
+      } catch (error) {
+        errors.push({
+          departure_order_id: departureOrderId,
+          success: false,
+          error: error.message,
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message: `Batch dispatch completed. ${results.length} successful, ${errors.length} failed.`,
+      successful_dispatches: results,
+      failed_dispatches: errors,
+      total_processed: departureOrderIds.length,
+      dispatched_by: userId,
+      dispatched_at: new Date(),
+    };
+  } catch (error) {
+    console.error("Error in batchDispatchDepartureOrders:", error);
+    throw new Error(`Failed to batch dispatch departure orders: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Process inventory dispatch (remove from inventory cells)
+async function processInventoryDispatch(departureOrderId, validatedCells, userId, dispatchData) {
+  return await prisma.$transaction(async (tx) => {
+    const cellAllocations = [];
+    
+    for (const cell of validatedCells) {
+      // ✅ Calculate proportional package quantity
+      const originalPackageRatio = cell.available_package_qty > 0 ? 
+        cell.available_package_qty / cell.available_qty : 1;
+      const requestedPackageQty = Math.ceil(cell.requested_qty * originalPackageRatio);
+      
+      // ✅ Calculate proportional volume if available
+      const originalVolumeRatio = cell.available_volume > 0 ? 
+        cell.available_volume / cell.available_qty : 0;
+      const requestedVolume = cell.requested_qty * originalVolumeRatio;
+
+      // Update inventory (DECREMENT - removing from warehouse)
+      await tx.inventory.update({
+        where: { inventory_id: cell.inventory_id },
+        data: {
+          current_quantity: { decrement: cell.requested_qty },
+          current_package_quantity: { decrement: requestedPackageQty },
+          current_weight: { decrement: cell.requested_weight },
+          current_volume: requestedVolume > 0 ? { decrement: requestedVolume } : undefined,
+          status: cell.will_be_empty ? "DEPLETED" : "AVAILABLE",
+        },
+      });
+
+      // Create cell assignment with packaging_code
+      await tx.cellAssignment.create({
+        data: {
+          departure_order_id: departureOrderId,
+          cell_id: cell.cell_id,
+          assigned_by: userId,
+          packaging_quantity: requestedPackageQty,
+          weight: cell.requested_weight,
+          packaging_code: cell.packaging_code || 31, // Default packaging code
+          status: "COMPLETED",
+        },
+      });
+
+      // ✅ Update cell status
+      if (cell.will_be_empty) {
+        await tx.warehouseCell.update({
+          where: { id: cell.cell_id },
+          data: {
+            status: CellStatus.AVAILABLE,
+            currentUsage: 0,
+            current_packaging_qty: 0,
+            current_weight: 0,
+          },
+        });
+      } else {
+        await tx.warehouseCell.update({
+          where: { id: cell.cell_id },
+          data: {
+            current_packaging_qty: { decrement: requestedPackageQty },
+            current_weight: { decrement: cell.requested_weight },
+            currentUsage: requestedVolume > 0 ? { decrement: requestedVolume } : undefined,
+          },
+        });
+      }
+
+      // ✅ Create inventory log for traceability
+      await tx.inventoryLog.create({
+        data: {
+          user_id: userId,
+          product_id: cell.product_id,
+          movement_type: MovementType.DEPARTURE,
+          quantity_change: -cell.requested_qty,
+          package_change: -requestedPackageQty,
+          weight_change: -cell.requested_weight,
+          volume_change: requestedVolume > 0 ? -requestedVolume : null,
+          departure_order_id: departureOrderId,
+          warehouse_id: cell.warehouse_id,
+          cell_id: cell.cell_id,
+          product_status: cell.product_status || "PAL_NORMAL",
+          status_code: cell.status_code || 37,
+          notes: `DISPATCH: ${cell.requested_qty} units (${requestedPackageQty} packages, ${cell.requested_weight} kg) of ${cell.product_code} (${cell.product_name}) | ` +
+                 `Lot: ${cell.lot_series} | Entry Order: ${cell.entry_order_no} | ` +
+                 `Expiry: ${cell.expiration_date} | Position: ${cell.cell_reference} | ` +
+                 `Dispatch Notes: ${dispatchData.dispatch_notes || 'N/A'}`,
+        },
+      });
+
+      cellAllocations.push({
+        cell_reference: cell.cell_reference,
+        warehouse_name: cell.warehouse_name,
+        entry_order_no: cell.entry_order_no,
+        product_code: cell.product_code,
+        product_name: cell.product_name,
+        lot_series: cell.lot_series,
+        expiration_date: cell.expiration_date,
+        dispatched_qty: cell.requested_qty,
+        dispatched_packages: requestedPackageQty,
+        dispatched_weight: cell.requested_weight,
+        dispatched_volume: requestedVolume,
+        remaining_qty: cell.remaining_qty,
+        remaining_weight: cell.remaining_weight,
+        cell_depleted: cell.will_be_empty,
+        packaging_code: cell.packaging_code || 31,
+      });
+    }
+
+    return {
+      cellAllocations,
+      totals: {
+        total_qty: validatedCells.reduce((sum, c) => sum + c.requested_qty, 0),
+        total_weight: validatedCells.reduce((sum, c) => sum + c.requested_weight, 0),
+        total_packages: cellAllocations.reduce((sum, c) => sum + c.dispatched_packages, 0),
+        cells_affected: validatedCells.length,
+        cells_depleted: validatedCells.filter((c) => c.will_be_empty).length,
+      },
+    };
+  }, {
+    maxWait: 30000, // 30 seconds
+    timeout: 30000, // 30 seconds
+  });
+}
+
+// ✅ NEW: Get expiry urgency dashboard data for departure planning
+async function getExpiryUrgencyDashboard(warehouseId = null) {
+  try {
+    const whereClause = {
+      quality_status: "APROBADO", // Only approved inventory for departure
+      status: "ACTIVE",
+    };
+
+    if (warehouseId) {
+      whereClause.cell = {
+        warehouse_id: String(warehouseId)
+      };
+    }
+
+    const allocations = await prisma.inventoryAllocation.findMany({
+      where: whereClause,
+      include: {
+        entry_order_product: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              },
+            },
+            entry_order: {
+              select: {
+                entry_order_no: true,
+                entry_date_time: true,
+              },
+            },
+            supplier: {
+              select: {
+                supplier_id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        cell: {
+          select: {
+            id: true,
+            row: true,
+            bay: true,
+            position: true,
+            warehouse: {
+              select: {
+                warehouse_id: true,
+                name: true,
+                location: true,
+              },
+            },
+          },
+        },
+        inventory: {
+          select: {
+            inventory_id: true,
+            current_quantity: true,
+            current_package_quantity: true,
+            current_weight: true,
+            current_volume: true,
+            status: true,
+            quality_status: true,
+          },
+        },
+      },
+      orderBy: [
+        { entry_order_product: { expiration_date: "asc" } }, // ✅ PRIMARY: EXPIRY-BASED sorting
+        { entry_order_product: { entry_order: { entry_date_time: "asc" } } },
+      ],
+    });
+
+    // ✅ Filter allocations with available inventory
+    const availableAllocations = allocations.filter(allocation => {
+      const inventory = allocation.inventory[0];
+      return inventory && 
+             inventory.status === "AVAILABLE" && 
+             inventory.current_quantity > 0;
+    });
+
+    const currentDate = new Date();
+    
+    // ✅ Categorize by expiry urgency
+    const urgencyCategories = {
+      EXPIRED: [],
+      URGENT: [],     // ≤ 7 days
+      WARNING: [],    // ≤ 30 days
+      NORMAL: []      // > 30 days or no expiry
+    };
+
+    let totalQuantity = 0;
+    let totalWeight = 0;
+    let totalProducts = new Set();
+    let totalSuppliers = new Set();
+    let totalWarehouses = new Set();
+
+    availableAllocations.forEach(allocation => {
+      const inventory = allocation.inventory[0];
+      const expiryDate = allocation.entry_order_product.expiration_date;
+      
+      let daysToExpiry = null;
+      let urgencyLevel = 'NORMAL';
+      
+      if (expiryDate) {
+        daysToExpiry = Math.ceil((expiryDate - currentDate) / (1000 * 60 * 60 * 24));
+        
+        if (daysToExpiry < 0) {
+          urgencyLevel = 'EXPIRED';
+        } else if (daysToExpiry <= 7) {
+          urgencyLevel = 'URGENT';
+        } else if (daysToExpiry <= 30) {
+          urgencyLevel = 'WARNING';
+        } else {
+          urgencyLevel = 'NORMAL';
+        }
+      }
+
+      const itemData = {
+        allocation_id: allocation.allocation_id,
+        inventory_id: inventory.inventory_id,
+        product_id: allocation.entry_order_product.product.product_id,
+        product_code: allocation.entry_order_product.product.product_code,
+        product_name: allocation.entry_order_product.product.name,
+        manufacturer: allocation.entry_order_product.product.manufacturer,
+        supplier_name: allocation.entry_order_product.supplier?.name,
+        entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
+        entry_date_time: allocation.entry_order_product.entry_order.entry_date_time,
+        manufacturing_date: allocation.entry_order_product.manufacturing_date,
+        expiration_date: allocation.entry_order_product.expiration_date,
+        lot_series: allocation.entry_order_product.lot_series,
+        cell_reference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+        warehouse_name: allocation.cell.warehouse.name,
+        warehouse_id: allocation.cell.warehouse.warehouse_id,
+        available_quantity: inventory.current_quantity,
+        available_packages: inventory.current_package_quantity,
+        available_weight: parseFloat(inventory.current_weight),
+        available_volume: inventory.current_volume ? parseFloat(inventory.current_volume) : null,
+        presentation: allocation.presentation,
+        product_status: allocation.product_status,
+        status_code: allocation.status_code,
+        days_to_expiry: daysToExpiry,
+        urgency_level: urgencyLevel,
+        is_expired: urgencyLevel === 'EXPIRED',
+        is_urgent: urgencyLevel === 'URGENT',
+        is_warning: urgencyLevel === 'WARNING',
+        is_normal: urgencyLevel === 'NORMAL',
+        dispatch_priority: urgencyLevel === 'EXPIRED' ? 1 : 
+                          urgencyLevel === 'URGENT' ? 2 : 
+                          urgencyLevel === 'WARNING' ? 3 : 4,
+      };
+
+      urgencyCategories[urgencyLevel].push(itemData);
+
+      // Accumulate totals
+      totalQuantity += inventory.current_quantity;
+      totalWeight += parseFloat(inventory.current_weight);
+      totalProducts.add(allocation.entry_order_product.product.product_id);
+      totalSuppliers.add(allocation.entry_order_product.supplier?.supplier_id);
+      totalWarehouses.add(allocation.cell.warehouse.warehouse_id);
+    });
+
+    // ✅ Calculate summary statistics
+    const summary = {
+      total_items: availableAllocations.length,
+      total_products: totalProducts.size,
+      total_suppliers: totalSuppliers.size,
+      total_warehouses: totalWarehouses.size,
+      total_quantity: totalQuantity,
+      total_weight: totalWeight,
+      
+      // Urgency breakdown
+      expired_items: urgencyCategories.EXPIRED.length,
+      urgent_items: urgencyCategories.URGENT.length,
+      warning_items: urgencyCategories.WARNING.length,
+      normal_items: urgencyCategories.NORMAL.length,
+      
+      // Urgency percentages
+      expired_percentage: availableAllocations.length > 0 ? 
+        ((urgencyCategories.EXPIRED.length / availableAllocations.length) * 100).toFixed(1) : 0,
+      urgent_percentage: availableAllocations.length > 0 ? 
+        ((urgencyCategories.URGENT.length / availableAllocations.length) * 100).toFixed(1) : 0,
+      warning_percentage: availableAllocations.length > 0 ? 
+        ((urgencyCategories.WARNING.length / availableAllocations.length) * 100).toFixed(1) : 0,
+      normal_percentage: availableAllocations.length > 0 ? 
+        ((urgencyCategories.NORMAL.length / availableAllocations.length) * 100).toFixed(1) : 0,
+
+      // Action recommendations
+      requires_immediate_action: urgencyCategories.EXPIRED.length > 0,
+      requires_urgent_planning: urgencyCategories.URGENT.length > 0,
+      requires_attention: urgencyCategories.WARNING.length > 0,
+      
+      // Top priority items (expired + urgent)
+      high_priority_count: urgencyCategories.EXPIRED.length + urgencyCategories.URGENT.length,
+    };
+
+    // ✅ Top products by urgency (most expired/urgent first)
+    const topUrgentProducts = [...urgencyCategories.EXPIRED, ...urgencyCategories.URGENT]
+      .slice(0, 10)
+      .map(item => ({
+        product_code: item.product_code,
+        product_name: item.product_name,
+        days_to_expiry: item.days_to_expiry,
+        urgency_level: item.urgency_level,
+        available_quantity: item.available_quantity,
+        cell_reference: item.cell_reference,
+        warehouse_name: item.warehouse_name,
+      }));
+
+    return {
+      success: true,
+      message: "Expiry urgency dashboard data retrieved successfully",
+      summary,
+      urgency_categories: {
+        expired: urgencyCategories.EXPIRED,
+        urgent: urgencyCategories.URGENT,
+        warning: urgencyCategories.WARNING,
+        normal: urgencyCategories.NORMAL.slice(0, 50), // Limit normal items for performance
+      },
+      top_urgent_products: topUrgentProducts,
+      fifo_method: "EXPIRY_DATE_PRIORITY",
+      dashboard_generated_at: new Date().toISOString(),
+      warehouse_filter: warehouseId || "ALL_WAREHOUSES",
+    };
+  } catch (error) {
+    console.error("Error in getExpiryUrgencyDashboard:", error);
+    throw new Error(`Failed to fetch expiry urgency dashboard: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Create comprehensive departure order (enhanced version with all fields)
+async function createComprehensiveDepartureOrder(comprehensiveData) {
+  return await prisma.$transaction(async (tx) => {
+    // 1. Create base order
+    const newOrder = await tx.order.create({
+      data: {
+        order_type: "DEPARTURE",
+        status: comprehensiveData.status || "PENDING",
+        organisation_id: comprehensiveData.organisation_id,
+        created_by: comprehensiveData.created_by,
+        priority: comprehensiveData.priority_level || "NORMAL",
+      },
+    });
+
+    // 2. Generate departure order number if not provided
+    let departureOrderNo = comprehensiveData.departure_order_code;
+    if (!departureOrderNo) {
+      departureOrderNo = await getCurrentDepartureOrderNo();
+    }
+
+    // 3. Create comprehensive departure order
+    const departureOrderData = {
+      order_id: newOrder.order_id,
+      departure_order_no: departureOrderNo,
+
+      // Document info
+      document_type_ids: comprehensiveData.document_type_id ? [comprehensiveData.document_type_id] : [],
+      registration_date: new Date(),
+      document_date: comprehensiveData.document_date ? new Date(comprehensiveData.document_date) : null,
+      departure_date_time: comprehensiveData.departure_date ? new Date(comprehensiveData.departure_date) : null,
+      created_by: comprehensiveData.created_by,
+
+      // Order details
+      order_status: comprehensiveData.status || "PENDING",
+      destination_point: comprehensiveData.arrival_point || null,
+      transport_type: comprehensiveData.transport_type || null,
+      carrier_name: comprehensiveData.carrier_name || null,
+      observation: comprehensiveData.observations || null,
+
+      // Document fields
+      dispatch_document_number: comprehensiveData.dispatch_document_number || null,
+      uploaded_documents: comprehensiveData.uploaded_documents || null,
+
+      // Review status
+      review_status: "PENDING",
+
+      // Warehouse assignment
+      warehouse_id: comprehensiveData.warehouse_id || null,
+    };
+
+    // Add customer_id or client_id dynamically based on what's provided
+    if (comprehensiveData.client_id) {
+      departureOrderData.client_id = comprehensiveData.client_id;
+    } else if (comprehensiveData.customer_id && comprehensiveData.customer_id !== "Monish Testing 1") {
+      departureOrderData.customer_id = comprehensiveData.customer_id;
+    }
+
+    const newDepartureOrder = await tx.departureOrder.create({
+      data: departureOrderData,
+      include: {
+        customer: {
+          select: {
+            customer_id: true,
+            name: true,
+          }
+        },
+        client: {
+          select: {
+            client_id: true,
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            client_type: true,
+          }
+        },
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true,
+          }
+        },
+        creator: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: true,
+          }
+        },
+        order: {
+          select: {
+            order_id: true,
+            order_type: true,
+            status: true,
+            created_at: true,
+            organisation: {
+              select: {
+                organisation_id: true,
+                name: true,
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // 4. Create comprehensive departure products
+    const departureProducts = [];
+    if (comprehensiveData.products && comprehensiveData.products.length > 0) {
+      for (const productData of comprehensiveData.products) {
+        // Validate product exists
+        const product = await tx.product.findUnique({
+          where: { product_id: String(productData.product_id) }
+        });
+        if (!product) {
+          throw new Error(`Product with ID ${productData.product_id} not found`);
+        }
+
+        const departureProduct = await tx.departureOrderProduct.create({
+          data: {
+            departure_order_id: newDepartureOrder.departure_order_id,
+            product_code: productData.product_code,
+            product_id: String(productData.product_id),
+            lot_series: productData.lot_number || null,
+            requested_quantity: parseInt(productData.requested_quantity),
+            requested_packages: parseInt(productData.packaging_quantity || productData.requested_quantity),
+            requested_pallets: parseInt(productData.pallet_quantity) || Math.ceil(productData.requested_quantity / 200),
+            presentation: productData.presentation || "CAJA",
+            requested_weight: parseFloat(productData.requested_weight),
+            requested_volume: productData.requested_volume ? parseFloat(productData.requested_volume) : null,
+            unit_price: productData.unit_price ? parseFloat(productData.unit_price) : null,
+            total_value: productData.unit_price ? parseFloat(productData.unit_price) * parseInt(productData.requested_quantity) : null,
+            temperature_requirement: productData.temperature_requirement || "AMBIENTE",
+            special_handling: comprehensiveData.special_instructions || null,
+            delivery_instructions: productData.delivery_instructions || null,
+          },
+          include: {
+            product: {
+              select: {
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              }
+            }
+          }
+        });
+
+        departureProducts.push({
+          ...departureProduct,
+          product_name: departureProduct.product.name,
+          entry_order_no: productData.entry_order_no,
+          guide_number: productData.guide_number,
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message: "Comprehensive departure order created successfully",
+      departure_order: {
+        ...newDepartureOrder,
+        // Workflow status
+        workflow_status: "PENDING_APPROVAL",
+        can_be_edited: newDepartureOrder.order_status === 'REVISION',
+        can_be_approved: newDepartureOrder.order_status === 'PENDING',
+        can_be_dispatched: newDepartureOrder.order_status === 'APPROVED',
+        
+        // Comprehensive fields summary
+        comprehensive_fields_captured: {
+          departure_order_number: newDepartureOrder.departure_order_no,
+          customer_or_client: comprehensiveData.customer_id || comprehensiveData.client_id,
+          warehouse_assigned: !!comprehensiveData.warehouse_id,
+          document_type_provided: !!comprehensiveData.document_type_id,
+          dispatch_document_number: !!comprehensiveData.dispatch_document_number,
+          departure_date: !!comprehensiveData.departure_date,
+          transport_details: !!comprehensiveData.transport_type,
+          destination_provided: !!comprehensiveData.arrival_point,
+          has_products: departureProducts.length > 0,
+          special_instructions: !!comprehensiveData.special_instructions,
+        }
+      },
+      departure_products: departureProducts,
+      comprehensive_data: {
+        total_products: departureProducts.length,
+        total_requested_quantity: departureProducts.reduce((sum, p) => sum + p.requested_quantity, 0),
+        total_requested_weight: departureProducts.reduce((sum, p) => sum + parseFloat(p.requested_weight || 0), 0),
+        priority_level: comprehensiveData.priority_level || "NORMAL",
+        creation_source: "COMPREHENSIVE_API",
+      },
+      next_steps: [
+        "Comprehensive departure order created and pending approval",
+        "Warehouse incharge or admin can approve, reject, or request revision",
+        "Once approved, inventory can be allocated and dispatched"
+      ],
+      approval_workflow: {
+        current_status: "PENDING",
+        required_approvers: ["WAREHOUSE_INCHARGE", "ADMIN"],
+        possible_actions: ["APPROVE", "REJECT", "REQUEST_REVISION"]
+      }
+    };
+  }, {
+    maxWait: 30000,
+    timeout: 30000,
+  });
+}
+
+// ✅ NEW: Get comprehensive departure orders with enhanced data
+async function getComprehensiveDepartureOrders(organisationId = null, userRole = null, userId = null, filters = {}) {
+  try {
+    const whereClause = {};
+
+    // Organisation filter
+    if (organisationId) {
+      whereClause.order = {
+        organisation_id: organisationId
+      };
+    }
+
+    // Role-based filtering
+    if (userRole === 'CLIENT') {
+      // CLIENT users can only see their own orders
+      whereClause.created_by = userId;
+    }
+
+    // Status filtering
+    if (filters.status) {
+      whereClause.order_status = filters.status;
+    }
+
+    // Date range filtering
+    if (filters.startDate || filters.endDate) {
+      whereClause.registration_date = {};
+      if (filters.startDate) {
+        whereClause.registration_date.gte = new Date(filters.startDate);
+      }
+      if (filters.endDate) {
+        whereClause.registration_date.lte = new Date(filters.endDate);
+      }
+    }
+
+    const departureOrders = await prisma.departureOrder.findMany({
+      where: whereClause,
+      include: {
+        customer: {
+          select: {
+            customer_id: true,
+            name: true,
+          }
+        },
+        client: {
+          select: {
+            client_id: true,
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            client_type: true,
+          }
+        },
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true,
+          }
+        },
+        creator: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        reviewer: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        dispatcher: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        order: {
+          select: {
+            order_id: true,
+            order_type: true,
+            status: true,
+            created_at: true,
+            organisation: {
+              select: {
+                organisation_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        products: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              }
+            }
+          }
+        },
+        departureAllocations: {
+          include: {
+            cell: {
+              select: {
+                id: true,
+                row: true,
+                bay: true,
+                position: true,
+                warehouse: {
+                  select: {
+                    warehouse_id: true,
+                    name: true,
+                  }
+                }
+              }
+            },
+            source_allocation: {
+              select: {
+                allocation_id: true,
+                entry_order_product: {
+                  select: {
+                    entry_order: {
+                      select: {
+                        entry_order_no: true,
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      orderBy: [
+        { registration_date: 'desc' },
+        { departure_order_no: 'desc' }
+      ]
+    });
+
+    // Transform data to comprehensive format
+    const comprehensiveOrders = departureOrders.map(order => {
+      // Calculate totals
+      const totalQuantity = order.products.reduce((sum, p) => sum + p.requested_quantity, 0);
+      const totalWeight = order.products.reduce((sum, p) => sum + parseFloat(p.requested_weight || 0), 0);
+      const totalValue = order.products.reduce((sum, p) => sum + parseFloat(p.total_value || 0), 0);
+      const totalProducts = order.products.length;
+
+      // Calculate allocation status
+      const totalAllocated = order.departureAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0);
+      const allocationPercentage = totalQuantity > 0 ? ((totalAllocated / totalQuantity) * 100).toFixed(1) : 0;
+
+      // Workflow status
+      const workflowStatus = getWorkflowStatus(order.order_status, order.review_status, order.dispatch_status);
+
+      return {
+        ...order,
+        // Comprehensive summary
+        comprehensive_summary: {
+          total_products: totalProducts,
+          total_quantity: totalQuantity,
+          total_weight: totalWeight,
+          total_value: totalValue,
+          total_allocated: totalAllocated,
+          allocation_percentage: parseFloat(allocationPercentage),
+          is_fully_allocated: allocationPercentage >= 100,
+          days_since_creation: Math.ceil((new Date() - new Date(order.registration_date)) / (1000 * 60 * 60 * 24)),
+        },
+
+        // Workflow information
+        workflow_info: {
+          current_status: workflowStatus.status,
+          can_be_edited: workflowStatus.canEdit,
+          can_be_approved: workflowStatus.canApprove,
+          can_be_rejected: workflowStatus.canReject,
+          can_be_dispatched: workflowStatus.canDispatch,
+          next_possible_actions: workflowStatus.nextActions,
+          required_approvers: workflowStatus.requiredApprovers,
+        },
+
+        // Enhanced product information
+        products_summary: order.products.map(product => ({
+          ...product,
+          allocation_status: {
+            allocated_quantity: order.departureAllocations
+              .filter(a => a.departure_order_product_id === product.departure_order_product_id)
+              .reduce((sum, a) => sum + a.allocated_quantity, 0),
+            allocation_percentage: product.requested_quantity > 0 ? 
+              ((order.departureAllocations
+                .filter(a => a.departure_order_product_id === product.departure_order_product_id)
+                .reduce((sum, a) => sum + a.allocated_quantity, 0) / product.requested_quantity) * 100).toFixed(1) : 0,
+          }
+        })),
+
+        // Cell allocation summary
+        cell_allocations_summary: order.departureAllocations.map(allocation => ({
+          allocation_id: allocation.allocation_id,
+          cell_reference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+          warehouse_name: allocation.cell.warehouse.name,
+          allocated_quantity: allocation.allocated_quantity,
+          allocated_weight: parseFloat(allocation.allocated_weight),
+          source_entry_order: allocation.source_allocation?.entry_order_product?.entry_order?.entry_order_no,
+          product_status: allocation.product_status,
+          status_code: allocation.status_code,
+        })),
+
+        // Time tracking
+        time_tracking: {
+          created_at: order.registration_date,
+          reviewed_at: order.reviewed_at,
+          dispatched_at: order.dispatched_at,
+          days_in_current_status: calculateDaysInStatus(order),
+          estimated_dispatch_date: estimateDispatchDate(order),
+        }
+      };
+    });
+
+    return {
+      success: true,
+      message: "Comprehensive departure orders retrieved successfully",
+      data: comprehensiveOrders,
+      summary: {
+        total_orders: comprehensiveOrders.length,
+        status_breakdown: getStatusBreakdown(comprehensiveOrders),
+        total_value: comprehensiveOrders.reduce((sum, o) => sum + o.comprehensive_summary.total_value, 0),
+        total_products: comprehensiveOrders.reduce((sum, o) => sum + o.comprehensive_summary.total_products, 0),
+        average_allocation_percentage: comprehensiveOrders.length > 0 ? 
+          (comprehensiveOrders.reduce((sum, o) => sum + o.comprehensive_summary.allocation_percentage, 0) / comprehensiveOrders.length).toFixed(1) : 0,
+      },
+      filters_applied: {
+        organisation_id: organisationId,
+        user_role: userRole,
+        user_id: userRole === 'CLIENT' ? userId : null,
+        additional_filters: filters,
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in getComprehensiveDepartureOrders:", error);
+    throw new Error(`Failed to fetch comprehensive departure orders: ${error.message}`);
+  }
+}
+
+// Helper function to determine workflow status
+function getWorkflowStatus(orderStatus, reviewStatus, dispatchStatus) {
+  const status = {
+    status: orderStatus,
+    canEdit: orderStatus === 'REVISION',
+    canApprove: orderStatus === 'PENDING' && reviewStatus === 'PENDING',
+    canReject: orderStatus === 'PENDING' && reviewStatus === 'PENDING',
+    canDispatch: orderStatus === 'APPROVED' && dispatchStatus === 'NOT_DISPATCHED',
+    nextActions: [],
+    requiredApprovers: [],
+  };
+
+  switch (orderStatus) {
+    case 'PENDING':
+      status.nextActions = ['APPROVE', 'REJECT', 'REQUEST_REVISION'];
+      status.requiredApprovers = ['WAREHOUSE_INCHARGE', 'ADMIN'];
+      break;
+    case 'APPROVED':
+      status.nextActions = ['DISPATCH'];
+      status.requiredApprovers = ['WAREHOUSE_INCHARGE', 'ADMIN'];
+      break;
+    case 'REVISION':
+      status.nextActions = ['EDIT', 'RESUBMIT'];
+      break;
+    case 'DISPATCHED':
+      status.nextActions = ['VIEW_DISPATCH_DETAILS'];
+      break;
+    case 'REJECTED':
+      status.nextActions = ['VIEW_REJECTION_REASON'];
+      break;
+  }
+
+  return status;
+}
+
+// Helper function to get status breakdown
+function getStatusBreakdown(orders) {
+  const breakdown = {};
+  orders.forEach(order => {
+    const status = order.order_status;
+    breakdown[status] = (breakdown[status] || 0) + 1;
+  });
+  return breakdown;
+}
+
+// Helper function to calculate days in current status
+function calculateDaysInStatus(order) {
+  let statusDate = order.registration_date;
+  
+  if (order.reviewed_at) {
+    statusDate = order.reviewed_at;
+  }
+  if (order.dispatched_at) {
+    statusDate = order.dispatched_at;
+  }
+  
+  return Math.ceil((new Date() - new Date(statusDate)) / (1000 * 60 * 60 * 24));
+}
+
+// Helper function to estimate dispatch date
+function estimateDispatchDate(order) {
+  if (order.order_status === 'DISPATCHED') {
+    return order.dispatched_at;
+  }
+  
+  if (order.departure_date_time) {
+    return order.departure_date_time;
+  }
+  
+  // Estimate based on current status
+  const daysToAdd = order.order_status === 'PENDING' ? 3 : 
+                   order.order_status === 'APPROVED' ? 1 : 7;
+  
+  const estimatedDate = new Date();
+  estimatedDate.setDate(estimatedDate.getDate() + daysToAdd);
+  return estimatedDate;
+}
+
 module.exports = {
   getDepartureFormFields,
   getDepartureExitOptions,
@@ -1635,7 +2879,15 @@ module.exports = {
   getDepartureOrderById,
   getDepartureInventorySummary,
   getCurrentDepartureOrderNo,
-  // ✅ NEW: FIFO Product-wise functions
   getFifoLocationsForProduct,
   getSuggestedFifoAllocation,
+  approveDepartureOrder,
+  rejectDepartureOrder,
+  requestRevisionDepartureOrder,
+  dispatchDepartureOrder,
+  batchDispatchDepartureOrders,
+  processInventoryDispatch,
+  getExpiryUrgencyDashboard,
+  createComprehensiveDepartureOrder,
+  getComprehensiveDepartureOrders, // ✅ NEW: Get comprehensive orders
 };
