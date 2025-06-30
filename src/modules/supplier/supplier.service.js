@@ -43,7 +43,7 @@ async function createSupplier(supplierData, userRole = null, userId = null) {
             user_id: userId,
             is_active: true
           },
-          include: {
+          include: { 
             client: {
               select: { client_id: true }
             }
@@ -97,7 +97,7 @@ async function getAllSuppliers(search, userRole = null, userId = null) {
           user_id: userId,
           is_active: true
         },
-        include: {
+        include: { 
           client: {
             include: {
               supplierAssignments: {

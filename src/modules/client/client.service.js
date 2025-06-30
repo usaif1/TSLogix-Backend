@@ -916,7 +916,7 @@ async function assignCellsToClient(assignmentData) {
         if (warehouse_id) {
           throw new Error(`Some cells are not available or don't exist in the specified warehouse: ${missingCells.join(', ')}`);
         } else {
-          throw new Error(`Some cells are not available or don't exist: ${missingCells.join(', ')}`);
+        throw new Error(`Some cells are not available or don't exist: ${missingCells.join(', ')}`);
         }
       }
 
@@ -1457,15 +1457,15 @@ async function getClientByUserId(userId) {
       },
       include: {
         client: {
-          select: {
-            client_id: true,
-            client_type: true,
-            company_name: true,
-            first_names: true,
-            last_name: true,
-            email: true,
-            active_state: {
-              select: { name: true }
+      select: {
+        client_id: true,
+        client_type: true,
+        company_name: true,
+        first_names: true,
+        last_name: true,
+        email: true,
+        active_state: {
+          select: { name: true }
             }
           }
         }

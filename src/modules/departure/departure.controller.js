@@ -54,12 +54,20 @@ async function getAllDepartureOrders(req, res) {
 async function getProductsWithInventory(req, res) {
   try {
     const { warehouseId } = req.query;
-    const data = await departureService.getProductsWithInventory(warehouseId || null);
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    const data = await departureService.getProductsWithInventory(warehouseId || null, userRole, userId);
+    
     return res.status(200).json({ 
       success: true,
-      message: "Products with inventory fetched successfully", 
+      message: userRole === "CLIENT" 
+        ? "Products assigned to your client account with inventory fetched successfully"
+        : "Products with inventory fetched successfully", 
       count: data.length,
-      data 
+      data,
+      user_role: userRole,
+      filtered_by_client_assignments: userRole === "CLIENT"
     });
   } catch (error) {
     return res.status(500).json({ 
@@ -194,89 +202,158 @@ async function validateMultipleCells(req, res) {
   }
 }
 
-// ✅ ENHANCED: Create new Departure Order with approval workflow
+// ✅ ENHANCED: Create new Departure Order with Spanish tracking
 async function createDepartureOrder(req, res) {
   try {
     const departureData = req.body;
     const userId = req.user?.id;
     const userRole = req.user?.role;
 
-    // ✅ LOG: Departure order creation process started
+    // ✅ SPANISH TRACKING: Inicio de creación de orden
     await req.logEvent(
-      'DEPARTURE_ORDER_CREATION_STARTED',
-      'DepartureOrder',
-      'NEW_DEPARTURE_ORDER',
-      `Started creating new departure order for ${departureData.client_id ? 'client' : 'customer'}: ${departureData.client_id || departureData.customer_id}`,
+      'CREACION_ORDEN_SALIDA_INICIADA',
+      'OrdenDeSalida',
+      'NUEVA_ORDEN_SALIDA',
+      `Iniciando creación de nueva orden de salida para ${departureData.client_id ? 'cliente' : 'customer'}: ${departureData.client_id || departureData.customer_id}`,
       null,
       {
-        client_id: departureData.client_id,
+        cliente_id: departureData.client_id,
         customer_id: departureData.customer_id,
-        warehouse_id: departureData.warehouse_id,
-        departure_date_time: departureData.departure_date_time,
-        transport_type: departureData.transport_type,
-        destination: departureData.destination_point,
-        created_by: userId,
-        creator_role: userRole,
-        creation_timestamp: new Date().toISOString(),
-        products_count: departureData.products ? departureData.products.length : 0,
-        has_special_instructions: !!departureData.special_handling,
-        has_temperature_requirements: !!departureData.temperature_requirement,
-        total_estimated_weight: departureData.total_weight,
-        total_estimated_volume: departureData.total_volume,
-        // ✅ NEW: Approval workflow tracking
-        workflow_type: 'APPROVAL_REQUIRED',
-        initial_status: 'PENDING',
-        mandatory_fields_provided: {
-          departure_order_no: !!departureData.departure_order_no,
-          dispatch_document_number: !!departureData.dispatch_document_number,
-          document_types: !!departureData.document_type_ids,
-          documents_uploaded: !!departureData.uploaded_documents,
-          pallet_quantity: !!departureData.total_pallets,
+        almacen_id: departureData.warehouse_id,
+        fecha_salida: departureData.departure_date_time,
+        tipo_transporte: departureData.transport_type,
+        destino: departureData.destination_point,
+        creado_por: userId,
+        rol_creador: userRole,
+        timestamp_creacion: new Date().toISOString(),
+        cantidad_productos: departureData.products ? departureData.products.length : 0,
+        tiene_instrucciones_especiales: !!departureData.special_handling,
+        tiene_requerimientos_temperatura: !!departureData.temperature_requirement,
+        peso_total_estimado: departureData.total_weight,
+        volumen_total_estimado: departureData.total_volume,
+        // ✅ NUEVO: Seguimiento de flujo de aprobación
+        tipo_workflow: 'REQUIERE_APROBACION',
+        estado_inicial: 'PENDIENTE',
+        campos_obligatorios_provistos: {
+          numero_orden_salida: !!departureData.departure_order_no,
+          numero_documento_despacho: !!departureData.dispatch_document_number,
+          tipos_documento: !!departureData.document_type_ids,
+          documentos_subidos: !!departureData.uploaded_documents,
+          cantidad_pallets: !!departureData.total_pallets,
         }
       },
-      { operation_type: 'DEPARTURE_ORDER_MANAGEMENT', action_type: 'CREATION_START' }
+      { tipo_operacion: 'GESTION_ORDEN_SALIDA', tipo_accion: 'INICIO_CREACION' }
     );
 
     const result = await departureService.createDepartureOrder(departureData);
 
-    // ✅ LOG: Successful departure order creation with approval workflow
+    // ✅ SPANISH TRACKING: Orden creada exitosamente
     await req.logEvent(
-      'DEPARTURE_ORDER_CREATED',
-      'DepartureOrder',
+      'ORDEN_SALIDA_CREADA',
+      'OrdenDeSalida',
       result.departure_order.departure_order_id,
-      `Successfully created departure order ${result.departure_order.departure_order_no} - pending approval`,
+      `Orden de salida ${result.departure_order.departure_order_no} creada exitosamente - pendiente de aprobación`,
       null,
       {
-        departure_order_id: result.departure_order.departure_order_id,
-        departure_order_no: result.departure_order.departure_order_no,
-        client_id: result.departure_order.client_id,
+        orden_salida_id: result.departure_order.departure_order_id,
+        numero_orden_salida: result.departure_order.departure_order_no,
+        cliente_id: result.departure_order.client_id,
         customer_id: result.departure_order.customer_id,
-        warehouse_id: result.departure_order.warehouse_id,
-        departure_date_time: result.departure_order.departure_date_time,
-        transport_type: result.departure_order.transport_type,
-        destination: result.departure_order.destination_point,
-        status: result.departure_order.order_status,
-        review_status: result.departure_order.review_status,
-        dispatch_status: result.departure_order.dispatch_status,
-        created_by: userId,
-        creator_role: userRole,
-        created_at: result.departure_order.registration_date,
-        products_defined: result.departure_products ? result.departure_products.length : 0,
-        total_weight: result.departure_order.total_weight,
-        total_volume: result.departure_order.total_volume,
+        almacen_id: result.departure_order.warehouse_id,
+        fecha_salida: result.departure_order.departure_date_time,
+        tipo_transporte: result.departure_order.transport_type,
+        destino: result.departure_order.destination_point,
+        estado: result.departure_order.order_status,
+        estado_revision: result.departure_order.review_status,
+        estado_despacho: result.departure_order.dispatch_status,
+        creado_por: userId,
+        rol_creador: userRole,
+        fecha_creacion: result.departure_order.registration_date,
+        productos_definidos: result.departure_products ? result.departure_products.length : 0,
+        peso_total: result.departure_order.total_weight,
+        volumen_total: result.departure_order.total_volume,
         total_pallets: result.departure_order.total_pallets,
-        // ✅ NEW: Workflow and mandatory field tracking
-        workflow_status: result.departure_order.workflow_status,
-        mandatory_fields_captured: result.departure_order.mandatory_fields_captured,
-        next_steps: result.next_steps,
-        approval_workflow: result.approval_workflow,
-        business_impact: 'DEPARTURE_ORDER_PENDING_APPROVAL'
+        // ✅ NUEVO: Seguimiento de workflow y campos obligatorios
+        estado_workflow: result.departure_order.workflow_status,
+        campos_obligatorios_capturados: result.departure_order.mandatory_fields_captured,
+        proximos_pasos: result.next_steps,
+        workflow_aprobacion: result.approval_workflow,
+        impacto_negocio: 'ORDEN_SALIDA_PENDIENTE_APROBACION'
       },
       { 
-        operation_type: 'DEPARTURE_ORDER_MANAGEMENT', 
-        action_type: 'CREATION_SUCCESS',
-        business_impact: 'DEPARTURE_ORDER_AWAITING_APPROVAL',
-        next_steps: 'WAREHOUSE_INCHARGE_OR_ADMIN_APPROVAL_REQUIRED'
+        tipo_operacion: 'GESTION_ORDEN_SALIDA', 
+        tipo_accion: 'CREACION_EXITOSA',
+        impacto_negocio: 'ORDEN_SALIDA_ESPERANDO_APROBACION',
+        proximos_pasos: 'REQUIERE_APROBACION_ENCARGADO_ALMACEN_O_ADMIN'
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Productos registrados en orden
+    if (result.departure_products && result.departure_products.length > 0) {
+      await req.logEvent(
+        'PRODUCTOS_REGISTRADOS_ORDEN',
+        'ProductosOrdenSalida',
+        result.departure_order.departure_order_id,
+        `${result.departure_products.length} productos registrados en orden de salida`,
+        null,
+        {
+          orden_salida_id: result.departure_order.departure_order_id,
+          numero_orden: result.departure_order.departure_order_no,
+          productos_registrados: result.departure_products.map(product => ({
+            producto_id: product.product_id,
+            codigo_producto: product.product?.product_code,
+            nombre_producto: product.product?.name,
+            cantidad_solicitada: product.requested_quantity,
+            peso_solicitado: product.requested_weight,
+            tipo_empaque: product.packaging_type,
+            numero_lote: product.lot_number,
+            orden_entrada_numero: product.entry_order_number
+          })),
+          resumen_productos: {
+            total_productos: result.departure_products.length,
+            cantidad_total_solicitada: result.departure_products.reduce((sum, p) => sum + p.requested_quantity, 0),
+            peso_total_solicitado: result.departure_products.reduce((sum, p) => sum + parseFloat(p.requested_weight || 0), 0)
+          }
+        },
+        { 
+          tipo_operacion: 'GESTION_PRODUCTOS_ORDEN', 
+          tipo_accion: 'PRODUCTOS_REGISTRADOS',
+          impacto_negocio: 'PRODUCTOS_ASOCIADOS_ORDEN'
+        }
+      );
+    }
+
+    // ✅ SPANISH TRACKING: Documentación de orden
+    await req.logEvent(
+      'DOCUMENTACION_ORDEN_REGISTRADA',
+      'DocumentacionOrden',
+      result.departure_order.departure_order_id,
+      `Documentación y datos obligatorios registrados para orden de salida`,
+      null,
+      {
+        orden_salida_id: result.departure_order.departure_order_id,
+        numero_orden: result.departure_order.departure_order_no,
+        documentacion: {
+          numero_documento_despacho: departureData.dispatch_document_number,
+          tipos_documento_seleccionados: departureData.document_type_ids,
+          documentos_adjuntos: !!departureData.uploaded_documents,
+          observaciones: departureData.observation
+        },
+        datos_transporte: {
+          tipo_transporte: departureData.transport_type,
+          transportista: departureData.carrier_name,
+          punto_destino: departureData.destination_point
+        },
+        datos_empaque: {
+          total_pallets: departureData.total_pallets,
+          peso_estimado: departureData.total_weight,
+          volumen_estimado: departureData.total_volume
+        }
+      },
+      { 
+        tipo_operacion: 'DOCUMENTACION_ORDEN', 
+        tipo_accion: 'DOCUMENTACION_CAPTURADA',
+        impacto_negocio: 'DOCUMENTACION_COMPLETA'
       }
     );
 
@@ -284,23 +361,36 @@ async function createDepartureOrder(req, res) {
   } catch (error) {
     console.error("Error creating departure order:", error);
     
-    // ✅ LOG: Departure order creation failure
-    await req.logError(error, {
-      controller: 'departure',
-      action: 'createDepartureOrder',
-      departure_data: {
-        client_id: req.body.client_id,
-        customer_id: req.body.customer_id,
-        warehouse_id: req.body.warehouse_id,
-        departure_date_time: req.body.departure_date_time,
-        transport_type: req.body.transport_type,
-        destination: req.body.destination_point,
-        products_count: req.body.products ? req.body.products.length : 0
+    // ✅ SPANISH TRACKING: Error en creación de orden
+    await req.logEvent(
+      'ERROR_CREACION_ORDEN_SALIDA',
+      'OrdenDeSalida',
+      'ERROR_CREACION',
+      `Error durante creación de orden de salida: ${error.message}`,
+      null,
+      {
+        datos_orden: {
+          cliente_id: req.body.client_id,
+          customer_id: req.body.customer_id,
+          almacen_id: req.body.warehouse_id,
+          fecha_salida: req.body.departure_date_time,
+          tipo_transporte: req.body.transport_type,
+          destino: req.body.destination_point,
+          cantidad_productos: req.body.products ? req.body.products.length : 0
+        },
+        usuario_id: req.user?.id,
+        rol_usuario: req.user?.role,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        fecha_error: new Date().toISOString(),
+        contexto_error: 'CREACION_ORDEN_SALIDA_FALLIDA'
       },
-      user_id: req.user?.id,
-      user_role: req.user?.role,
-      error_context: 'DEPARTURE_ORDER_CREATION_FAILED'
-    });
+      { 
+        tipo_operacion: 'GESTION_ORDEN_SALIDA', 
+        tipo_accion: 'ERROR_CREACION',
+        impacto_negocio: 'CREACION_ORDEN_FALLIDA'
+      }
+    );
     
     return res.status(500).json({ 
       success: false,
@@ -310,7 +400,7 @@ async function createDepartureOrder(req, res) {
 }
 
 /**
- * ✅ NEW: Approve departure order (WAREHOUSE_INCHARGE/ADMIN only)
+ * ✅ ENHANCED: Approve departure order with Spanish tracking
  */
 async function approveDepartureOrder(req, res) {
   try {
@@ -325,38 +415,113 @@ async function approveDepartureOrder(req, res) {
         message: "Departure Order ID is required",
       });
     }
+
+    // ✅ SPANISH TRACKING: Inicio de proceso de aprobación
+    await req.logEvent(
+      'PROCESO_APROBACION_INICIADO',
+      'OrdenDeSalida',
+      departureOrderId,
+      `Iniciando proceso de aprobación de orden de salida por ${userRole}`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        aprobador: userId,
+        rol_aprobador: userRole,
+        comentarios_aprobacion: comments || 'Sin comentarios adicionales',
+        fecha_inicio_aprobacion: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'INICIO_APROBACION',
+        impacto_negocio: 'PROCESO_APROBACION_INICIADO'
+      }
+    );
     
     const result = await departureService.approveDepartureOrder(departureOrderId, userId, userRole, comments);
     
-    // ✅ LOG: Departure order approval
+    // ✅ SPANISH TRACKING: Orden aprobada exitosamente
     await req.logEvent(
-      'DEPARTURE_ORDER_APPROVED',
-      'DepartureOrder',
+      'ORDEN_SALIDA_APROBADA',
+      'OrdenDeSalida',
       departureOrderId,
-      `Departure order ${result.departure_order.departure_order_no} approved by ${userRole}`,
+      `Orden de salida ${result.departure_order.departure_order_no} aprobada exitosamente por ${userRole}`,
       null,
       {
-        departure_order_id: departureOrderId,
-        departure_order_no: result.departure_order.departure_order_no,
-        approved_by: userId,
-        approver_role: userRole,
-        approved_at: result.approved_at,
-        approval_comments: comments,
-        previous_status: 'PENDING',
-        new_status: 'APPROVED',
-        business_impact: 'DEPARTURE_ORDER_READY_FOR_DISPATCH'
+        orden_salida_id: departureOrderId,
+        numero_orden_salida: result.departure_order.departure_order_no,
+        aprobado_por: userId,
+        rol_aprobador: userRole,
+        fecha_aprobacion: result.approved_at,
+        comentarios_aprobacion: comments,
+        estado_anterior: 'PENDIENTE',
+        estado_nuevo: 'APROBADO',
+        proximos_pasos: 'LISTA_PARA_ASIGNACION_INVENTARIO_Y_DESPACHO'
       },
       { 
-        operation_type: 'DEPARTURE_ORDER_APPROVAL', 
-        action_type: 'APPROVAL_SUCCESS',
-        business_impact: 'DEPARTURE_ORDER_APPROVED',
-        next_steps: 'INVENTORY_ALLOCATION_AND_DISPATCH_AVAILABLE'
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'APROBACION_EXITOSA',
+        impacto_negocio: 'ORDEN_APROBADA_LISTA_DESPACHO',
+        proximos_pasos: 'ASIGNACION_INVENTARIO_Y_DESPACHO_DISPONIBLE'
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Cambio de estado de workflow
+    await req.logEvent(
+      'CAMBIO_ESTADO_WORKFLOW',
+      'WorkflowOrdenSalida',
+      departureOrderId,
+      `Estado de workflow cambiado: PENDIENTE → APROBADO`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden: result.departure_order.departure_order_no,
+        flujo_workflow: {
+          estado_anterior: 'PENDIENTE',
+          estado_nuevo: 'APROBADO',
+          accion_ejecutada: 'APROBACION',
+          autorizado_por: userId,
+          rol_autorizador: userRole
+        },
+        impacto_operacional: {
+          puede_asignar_inventario: true,
+          puede_despachar: true,
+          requiere_autorizacion_adicional: false
+        }
+      },
+      { 
+        tipo_operacion: 'GESTION_WORKFLOW', 
+        tipo_accion: 'CAMBIO_ESTADO',
+        impacto_negocio: 'WORKFLOW_PROGRESADO'
       }
     );
     
     return res.status(200).json(result);
   } catch (error) {
     console.error("Error approving departure order:", error);
+
+    // ✅ SPANISH TRACKING: Error en aprobación
+    await req.logEvent(
+      'ERROR_APROBACION_ORDEN',
+      'OrdenDeSalida',
+      req.params.departureOrderId,
+      `Error durante aprobación de orden de salida: ${error.message}`,
+      null,
+      {
+        orden_salida_id: req.params.departureOrderId,
+        usuario_aprobador: req.user?.id,
+        rol_usuario: req.user?.role,
+        comentarios_intento: req.body.comments,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        fecha_error: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'ERROR_APROBACION',
+        impacto_negocio: 'APROBACION_FALLIDA'
+      }
+    );
+
     return res.status(500).json({ 
       success: false,
       message: error.message 
@@ -365,7 +530,7 @@ async function approveDepartureOrder(req, res) {
 }
 
 /**
- * ✅ NEW: Reject departure order (WAREHOUSE_INCHARGE/ADMIN only)
+ * ✅ ENHANCED: Reject departure order with Spanish tracking
  */
 async function rejectDepartureOrder(req, res) {
   try {
@@ -387,38 +552,108 @@ async function rejectDepartureOrder(req, res) {
         message: "Rejection comments are required",
       });
     }
+
+    // ✅ SPANISH TRACKING: Inicio de proceso de rechazo
+    await req.logEvent(
+      'PROCESO_RECHAZO_INICIADO',
+      'OrdenDeSalida',
+      departureOrderId,
+      `Iniciando proceso de rechazo de orden de salida por ${userRole}`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        rechazado_por: userId,
+        rol_rechazador: userRole,
+        motivo_rechazo: comments,
+        fecha_inicio_rechazo: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'INICIO_RECHAZO',
+        impacto_negocio: 'PROCESO_RECHAZO_INICIADO'
+      }
+    );
     
     const result = await departureService.rejectDepartureOrder(departureOrderId, userId, userRole, comments);
     
-    // ✅ LOG: Departure order rejection
+    // ✅ SPANISH TRACKING: Orden rechazada
     await req.logEvent(
-      'DEPARTURE_ORDER_REJECTED',
-      'DepartureOrder',
+      'ORDEN_SALIDA_RECHAZADA',
+      'OrdenDeSalida',
       departureOrderId,
-      `Departure order ${result.departure_order.departure_order_no} rejected by ${userRole}`,
+      `Orden de salida ${result.departure_order.departure_order_no} rechazada por ${userRole}`,
       null,
       {
-        departure_order_id: departureOrderId,
-        departure_order_no: result.departure_order.departure_order_no,
-        rejected_by: userId,
-        rejector_role: userRole,
-        rejected_at: result.rejected_at,
-        rejection_reason: comments,
-        previous_status: 'PENDING',
-        new_status: 'REJECTED',
-        business_impact: 'DEPARTURE_ORDER_REJECTED'
+        orden_salida_id: departureOrderId,
+        numero_orden_salida: result.departure_order.departure_order_no,
+        rechazado_por: userId,
+        rol_rechazador: userRole,
+        fecha_rechazo: result.rejected_at,
+        motivo_rechazo: comments,
+        estado_anterior: 'PENDIENTE',
+        estado_nuevo: 'RECHAZADO',
+        impacto_operacional: 'ORDEN_CANCELADA'
       },
       { 
-        operation_type: 'DEPARTURE_ORDER_APPROVAL', 
-        action_type: 'REJECTION',
-        business_impact: 'DEPARTURE_ORDER_REJECTED',
-        next_steps: 'ORDER_CREATOR_NOTIFIED_OF_REJECTION'
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'RECHAZO_COMPLETADO',
+        impacto_negocio: 'ORDEN_RECHAZADA',
+        proximos_pasos: 'CREADOR_ORDEN_NOTIFICADO_RECHAZO'
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Notificación al creador
+    await req.logEvent(
+      'NOTIFICACION_RECHAZO_ENVIADA',
+      'NotificacionOrden',
+      departureOrderId,
+      `Notificación de rechazo enviada al creador de la orden`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden: result.departure_order.departure_order_no,
+        notificacion: {
+          tipo: 'RECHAZO_ORDEN',
+          destinatario_rol: 'CREADOR_ORDEN',
+          motivo_rechazo: comments,
+          accion_requerida: 'REVISAR_Y_CREAR_NUEVA_ORDEN',
+          rechazado_por: userRole
+        }
+      },
+      { 
+        tipo_operacion: 'NOTIFICACIONES', 
+        tipo_accion: 'NOTIFICACION_ENVIADA',
+        impacto_negocio: 'COMUNICACION_RECHAZO'
       }
     );
     
     return res.status(200).json(result);
   } catch (error) {
     console.error("Error rejecting departure order:", error);
+
+    // ✅ SPANISH TRACKING: Error en rechazo
+    await req.logEvent(
+      'ERROR_RECHAZO_ORDEN',
+      'OrdenDeSalida',
+      req.params.departureOrderId,
+      `Error durante rechazo de orden de salida: ${error.message}`,
+      null,
+      {
+        orden_salida_id: req.params.departureOrderId,
+        usuario_rechazador: req.user?.id,
+        rol_usuario: req.user?.role,
+        motivo_rechazo_intento: req.body.comments,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        fecha_error: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'ERROR_RECHAZO',
+        impacto_negocio: 'RECHAZO_FALLIDO'
+      }
+    );
+
     return res.status(500).json({ 
       success: false,
       message: error.message 
@@ -427,7 +662,7 @@ async function rejectDepartureOrder(req, res) {
 }
 
 /**
- * ✅ NEW: Request revision for departure order (WAREHOUSE_INCHARGE/ADMIN only)
+ * ✅ ENHANCED: Request revision for departure order with Spanish tracking
  */
 async function requestRevisionDepartureOrder(req, res) {
   try {
@@ -449,38 +684,109 @@ async function requestRevisionDepartureOrder(req, res) {
         message: "Revision comments are required",
       });
     }
+
+    // ✅ SPANISH TRACKING: Inicio de solicitud de revisión
+    await req.logEvent(
+      'SOLICITUD_REVISION_INICIADA',
+      'OrdenDeSalida',
+      departureOrderId,
+      `Iniciando solicitud de revisión de orden de salida por ${userRole}`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        solicitado_por: userId,
+        rol_solicitante: userRole,
+        comentarios_revision: comments,
+        fecha_solicitud: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'INICIO_SOLICITUD_REVISION',
+        impacto_negocio: 'PROCESO_REVISION_INICIADO'
+      }
+    );
     
     const result = await departureService.requestRevisionDepartureOrder(departureOrderId, userId, userRole, comments);
     
-    // ✅ LOG: Departure order revision request
+    // ✅ SPANISH TRACKING: Revisión solicitada exitosamente
     await req.logEvent(
-      'DEPARTURE_ORDER_REVISION_REQUESTED',
-      'DepartureOrder',
+      'REVISION_ORDEN_SOLICITADA',
+      'OrdenDeSalida',
       departureOrderId,
-      `Revision requested for departure order ${result.departure_order.departure_order_no} by ${userRole}`,
+      `Revisión solicitada para orden de salida ${result.departure_order.departure_order_no} por ${userRole}`,
       null,
       {
-        departure_order_id: departureOrderId,
-        departure_order_no: result.departure_order.departure_order_no,
-        requested_by: userId,
-        requester_role: userRole,
-        requested_at: result.requested_at,
-        revision_notes: comments,
-        previous_status: 'PENDING',
-        new_status: 'REVISION',
-        business_impact: 'DEPARTURE_ORDER_NEEDS_REVISION'
+        orden_salida_id: departureOrderId,
+        numero_orden_salida: result.departure_order.departure_order_no,
+        solicitado_por: userId,
+        rol_solicitante: userRole,
+        fecha_solicitud: result.requested_at,
+        notas_revision: comments,
+        estado_anterior: 'PENDIENTE',
+        estado_nuevo: 'REVISION',
+        accion_disponible: 'EDITAR_Y_REENVIAR'
       },
       { 
-        operation_type: 'DEPARTURE_ORDER_APPROVAL', 
-        action_type: 'REVISION_REQUEST',
-        business_impact: 'DEPARTURE_ORDER_REVISION_REQUIRED',
-        next_steps: 'ORDER_CREATOR_CAN_EDIT_AND_RESUBMIT'
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'REVISION_SOLICITADA',
+        impacto_negocio: 'ORDEN_REQUIERE_REVISION',
+        proximos_pasos: 'CREADOR_PUEDE_EDITAR_Y_REENVIAR'
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Habilitación de edición
+    await req.logEvent(
+      'EDICION_ORDEN_HABILITADA',
+      'PermisoOrden',
+      departureOrderId,
+      `Orden habilitada para edición tras solicitud de revisión`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden: result.departure_order.departure_order_no,
+        permisos_habilitados: {
+          puede_editar: true,
+          puede_reenviar: true,
+          puede_cancelar: true
+        },
+        revision_solicitada_por: userId,
+        comentarios_para_revision: comments,
+        tiempo_limite_revision: null // Sin límite de tiempo definido
+      },
+      { 
+        tipo_operacion: 'GESTION_PERMISOS', 
+        tipo_accion: 'PERMISOS_EDICION_HABILITADOS',
+        impacto_negocio: 'ORDEN_EDITABLE'
       }
     );
     
     return res.status(200).json(result);
   } catch (error) {
     console.error("Error requesting revision for departure order:", error);
+
+    // ✅ SPANISH TRACKING: Error en solicitud de revisión
+    await req.logEvent(
+      'ERROR_SOLICITUD_REVISION',
+      'OrdenDeSalida',
+      req.params.departureOrderId,
+      `Error durante solicitud de revisión: ${error.message}`,
+      null,
+      {
+        orden_salida_id: req.params.departureOrderId,
+        usuario_solicitante: req.user?.id,
+        rol_usuario: req.user?.role,
+        comentarios_revision: req.body.comments,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        fecha_error: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'FLUJO_APROBACION', 
+        tipo_accion: 'ERROR_SOLICITUD_REVISION',
+        impacto_negocio: 'SOLICITUD_REVISION_FALLIDA'
+      }
+    );
+
     return res.status(500).json({ 
       success: false,
       message: error.message 
@@ -822,7 +1128,7 @@ async function getDeparturePermissions(req, res) {
       role: role,
       permissions: rolePermissions,
       workflow_info: {
-        status_flow: "PENDING → APPROVED/REVISION/REJECTED → DISPATCHED → COMPLETED",
+        status_flow: "PENDIENTE → APROBADO/REVISION/RECHAZADO → DESPACHO → COMPLETADO",
         approval_required_roles: ["WAREHOUSE_INCHARGE", "ADMIN"],
         dispatch_required_roles: ["WAREHOUSE_INCHARGE", "ADMIN"],
         fifo_method: "EXPIRY_DATE_PRIORITY"
@@ -912,20 +1218,103 @@ async function createComprehensiveDepartureOrder(req, res) {
       });
     }
 
-    // Special handling for CLIENT role - validate customer_id and convert to client_id
+    // Special handling for CLIENT role - map customer_id (client user name) to client_id
     if (userRole === 'CLIENT') {
-      if (!req.body.customer_id) {
-        return res.status(400).json({
-          success: false,
-          message: "Customer ID is required for client users",
-          error: "CLIENT role must specify customer_id"
+      try {
+        // Get the client associated with this authenticated user
+        const { PrismaClient } = require('@prisma/client');
+        const prisma = new PrismaClient();
+        
+        const clientUser = await prisma.clientUser.findFirst({
+          where: { 
+            user_id: userId,
+            is_active: true
+          },
+          include: {
+            client: {
+              select: {
+                client_id: true,
+                company_name: true,
+                client_users_data: true
+              }
+            }
+          }
         });
-      }
-      
-      // For CLIENT users, convert customer_id to client_id if it's a name and remove customer_id
-      if (req.body.customer_id === "Monish Testing 1") {
-        req.body.client_id = "96ef7f43-4773-4fa8-883b-ea6b17eba43a";
-        delete req.body.customer_id; // Remove customer_id to avoid foreign key constraint
+
+        if (!clientUser?.client) {
+          return res.status(403).json({
+            success: false,
+            message: "Client account not found for this user",
+            error: "User is not associated with any client account"
+          });
+        }
+
+        const client = clientUser.client;
+        
+        // If client_id is already provided, validate it matches the user's client
+        if (req.body.client_id) {
+          if (req.body.client_id !== client.client_id) {
+            return res.status(403).json({
+              success: false,
+              message: "Access denied: Cannot create orders for different client",
+              error: "Provided client_id does not match user's client account"
+            });
+          }
+          // client_id is valid, continue
+        } 
+        // If customer_id is provided (client user name), map it to client_id
+        else if (req.body.customer_id) {
+          const clientUsersData = client.client_users_data || [];
+          
+          // Check if the customer_id matches any client user name
+          const matchingUser = clientUsersData.find(user => 
+            user.name === req.body.customer_id
+          );
+          
+          if (!matchingUser) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid client user name provided",
+              error: `Client user "${req.body.customer_id}" not found`,
+              available_client_users: clientUsersData.map(user => user.name),
+              client_info: {
+                client_id: client.client_id,
+                company_name: client.company_name
+              }
+            });
+          }
+          
+          // Map customer_id (client user name) to client_id
+          const originalCustomerId = req.body.customer_id;
+          req.body.client_id = client.client_id;
+          delete req.body.customer_id; // Remove customer_id to avoid conflicts
+          
+          console.log(`✅ Mapped client user "${originalCustomerId}" to client_id: ${client.client_id}`);
+        } 
+        // Neither client_id nor customer_id provided
+        else {
+          return res.status(400).json({
+            success: false,
+            message: "Client identification required",
+            error: "Please provide either client_id or customer_id (client user name)",
+            available_client_users: client.client_users_data?.map(user => user.name) || [],
+            client_info: {
+              client_id: client.client_id,
+              company_name: client.company_name,
+              auto_assign_note: "You can omit both fields to auto-assign to your client account"
+            }
+          });
+        }
+
+        await prisma.$disconnect();
+        
+      } catch (error) {
+        console.error("Error mapping client user to client_id:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to process client information",
+          error: error.message
+        });
       }
     }
 
@@ -1089,6 +1478,466 @@ async function getComprehensiveDepartureOrders(req, res) {
   }
 }
 
+// ✅ NEW: Get comprehensive departure order by order number
+async function getComprehensiveDepartureOrderByNumber(req, res) {
+  try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const organisationId = req.user?.organisation_id;
+    
+    const { orderNumber } = req.params;
+
+    if (!orderNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Order number is required",
+        error: "Missing order number parameter"
+      });
+    }
+
+    // Call service to get comprehensive departure order by number
+    const result = await departureService.getComprehensiveDepartureOrderByNumber(
+      orderNumber,
+      userRole,
+      userId,
+      organisationId
+    );
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "Departure order not found",
+        error: `No departure order found with number: ${orderNumber}`
+      });
+    }
+
+    // Success response
+    res.status(200).json({
+      ...result,
+      metadata: {
+        user_role: userRole,
+        organisation_id: organisationId,
+        request_timestamp: new Date().toISOString(),
+        api_endpoint: `/departure/comprehensive-orders/${orderNumber}`,
+        request_method: 'GET',
+        order_number: orderNumber
+      }
+    });
+
+  } catch (error) {
+    console.error("Error getting comprehensive departure order by number:", error);
+    
+    // Handle specific error types
+    if (error.message.includes('Invalid order number')) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order number format",
+        error: error.message
+      });
+    }
+
+    if (error.message.includes('Access denied')) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+        error: error.message
+      });
+    }
+
+    // Generic error response
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve comprehensive departure order",
+      error: error.message || "Internal server error"
+    });
+  }
+}
+
+// ✅ NEW: Get audit trail for departure order
+async function getDepartureOrderAuditTrail(req, res) {
+  try {
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const organisationId = req.user?.organisation_id;
+    
+    const { departureOrderId } = req.params;
+
+    if (!departureOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure order ID is required",
+        error: "Missing departureOrderId parameter"
+      });
+    }
+
+    // Call service to get audit trail
+    const result = await departureService.getDepartureOrderAuditTrail(
+      departureOrderId,
+      userRole,
+      userId,
+      organisationId
+    );
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "Departure order not found or access denied",
+        error: `No departure order found with ID: ${departureOrderId} or insufficient permissions`
+      });
+    }
+
+    // Success response
+    res.status(200).json({
+      ...result,
+      metadata: {
+        user_role: userRole,
+        organisation_id: organisationId,
+        request_timestamp: new Date().toISOString(),
+        api_endpoint: `/departure/departure-orders/${departureOrderId}/audit-trail`,
+        request_method: 'GET',
+        departure_order_id: departureOrderId
+      }
+    });
+
+  } catch (error) {
+    console.error("Error getting departure order audit trail:", error);
+    
+    // Handle specific error types
+    if (error.message.includes('Invalid departure order ID')) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid departure order ID format",
+        error: error.message
+      });
+    }
+
+    if (error.message.includes('Access denied')) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+        error: error.message
+      });
+    }
+
+    // Generic error response
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve departure order audit trail",
+      error: error.message || "Internal server error"
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Create departure allocations for a departure order
+ */
+async function createDepartureAllocations(req, res) {
+  try {
+    const { departureOrderId } = req.params;
+    const allocationData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    if (!departureOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure Order ID is required",
+      });
+    }
+    
+    if (!allocationData.allocations || allocationData.allocations.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Allocation data is required",
+      });
+    }
+    
+    const result = await departureService.createDepartureAllocations(departureOrderId, allocationData, userId, userRole);
+    
+    // ✅ LOG: Departure allocation creation
+    await req.logEvent(
+      'DEPARTURE_ALLOCATED',
+      'DepartureOrder',
+      departureOrderId,
+      `Departure order allocated with ${result.total_allocations} inventory allocations by ${userRole}`,
+      null,
+      {
+        departure_order_id: departureOrderId,
+        total_allocations: result.total_allocations,
+        allocated_by: userId,
+        allocator_role: userRole,
+        allocated_at: result.allocated_at,
+        business_impact: 'DEPARTURE_ORDER_READY_FOR_DISPATCH'
+      },
+      { 
+        operation_type: 'DEPARTURE_ALLOCATION', 
+        action_type: 'ALLOCATION_SUCCESS',
+        business_impact: 'INVENTORY_ALLOCATED_FOR_DEPARTURE',
+        next_steps: 'DISPATCH_AVAILABLE'
+      }
+    );
+    
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error creating departure allocations:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get available inventory for departure allocation
+ */
+async function getAvailableInventoryForDeparture(req, res) {
+  try {
+    const { departureOrderId } = req.params;
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    if (!departureOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure Order ID is required",
+      });
+    }
+    
+    const data = await departureService.getAvailableInventoryForDeparture(departureOrderId, userRole, userId);
+    
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error("Error getting available inventory for departure:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ ENHANCED: Auto-dispatch departure order with comprehensive Spanish tracking
+ */
+async function autoDispatchDepartureOrder(req, res) {
+  try {
+    const { departureOrderId } = req.params;
+    const dispatchData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    if (!departureOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure Order ID is required",
+      });
+    }
+
+    // ✅ SPANISH TRACKING: Inicio del proceso de despacho automático
+    await req.logEvent(
+      'DESPACHO_AUTOMATICO_INICIADO',
+      'OrdenDeSalida',
+      departureOrderId,
+      `Iniciando despacho automático de orden de salida con lógica FIFO+Vencimiento por ${userRole}`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        usuario_despachador: userId,
+        rol_despachador: userRole,
+        metodo_despacho: 'AUTO_FIFO_VENCIMIENTO',
+        notas_despacho: dispatchData.dispatch_notes || 'Sin notas adicionales',
+        fecha_inicio_proceso: new Date().toISOString()
+      },
+      { 
+        tipo_operacion: 'DESPACHO_AUTOMATICO', 
+        tipo_accion: 'INICIO_PROCESO',
+        impacto_negocio: 'PROCESO_DESPACHO_INICIADO'
+      }
+    );
+    
+    const result = await departureService.autoDispatchDepartureOrder(departureOrderId, userId, userRole, dispatchData);
+    
+    // ✅ SPANISH TRACKING: Despacho automático exitoso
+    await req.logEvent(
+      'DESPACHO_AUTOMATICO_COMPLETADO',
+      'OrdenDeSalida',
+      departureOrderId,
+      `Orden de salida despachada automáticamente con éxito usando lógica FIFO+Vencimiento por ${userRole}`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden_salida: result.departure_order?.departure_order_no,
+        despachado_por: userId,
+        rol_despachador: userRole,
+        fecha_despacho: result.dispatched_at,
+        metodo_despacho: 'AUTO_FIFO_VENCIMIENTO',
+        celdas_procesadas: result.allocated_cells_dispatched,
+        logica_fifo_aplicada: result.fifo_logic_applied,
+        prioridad_vencimiento_aplicada: result.expiry_priority_applied,
+        paso_asignacion_omitido: result.allocation_bypassed,
+        resumen_despacho: {
+          total_productos: result.dispatch_result?.totals?.total_qty || 0,
+          peso_total: result.dispatch_result?.totals?.total_weight || 0,
+          celdas_afectadas: result.dispatch_result?.totals?.cells_affected || 0,
+          celdas_agotadas: result.dispatch_result?.totals?.cells_depleted || 0
+        }
+      },
+      { 
+        tipo_operacion: 'DESPACHO_AUTOMATICO', 
+        tipo_accion: 'DESPACHO_EXITOSO',
+        impacto_negocio: 'INVENTARIO_DESPACHADO_AUTOMATICAMENTE',
+        metodo_fifo: 'PRIORIDAD_FECHA_VENCIMIENTO_CON_FECHA_ENTRADA_SECUNDARIA'
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Inventario actualizado
+    await req.logEvent(
+      'INVENTARIO_ACTUALIZADO_DESPACHO',
+      'Inventario',
+      departureOrderId,
+      `Inventario actualizado tras despacho automático - ${result.dispatch_result?.totals?.cells_affected || 0} celdas procesadas`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden: result.departure_order?.departure_order_no,
+        celdas_procesadas: result.dispatch_result?.cellAllocations?.map(cell => ({
+          referencia_celda: cell.cell_reference,
+          codigo_producto: cell.product_code,
+          nombre_producto: cell.product_name,
+          lote: cell.lot_series,
+          cantidad_despachada: cell.dispatched_qty,
+          peso_despachado: cell.dispatched_weight,
+          celda_agotada: cell.cell_depleted,
+          fecha_vencimiento: cell.expiration_date,
+          numero_orden_entrada: cell.entry_order_no
+        })) || [],
+        resumen_inventario: {
+          total_productos_removidos: result.dispatch_result?.totals?.total_qty || 0,
+          peso_total_removido: result.dispatch_result?.totals?.total_weight || 0,
+          celdas_completamente_vaciadas: result.dispatch_result?.totals?.cells_depleted || 0
+        }
+      },
+      { 
+        tipo_operacion: 'ACTUALIZACION_INVENTARIO', 
+        tipo_accion: 'INVENTARIO_REDUCIDO',
+        impacto_negocio: 'INVENTARIO_ACTUALIZADO_POR_DESPACHO'
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Proceso FIFO aplicado
+    if (result.fifo_logic_applied) {
+      await req.logEvent(
+        'LOGICA_FIFO_APLICADA',
+        'ProcesoInventario',
+        departureOrderId,
+        `Lógica FIFO aplicada exitosamente - productos despachados por fecha de vencimiento`,
+        null,
+        {
+          orden_salida_id: departureOrderId,
+          metodo_fifo: 'FECHA_VENCIMIENTO_PRIMERO',
+          prioridad_aplicada: 'VENCIMIENTO_MAS_PROXIMO',
+          criterio_secundario: 'FECHA_ENTRADA_MAS_ANTIGUA',
+          productos_priorizados: result.dispatch_result?.cellAllocations?.map(cell => ({
+            producto: cell.product_code,
+            lote: cell.lot_series,
+            fecha_vencimiento: cell.expiration_date,
+            dias_hasta_vencimiento: cell.expiration_date ? 
+              Math.ceil((new Date(cell.expiration_date) - new Date()) / (1000 * 60 * 60 * 24)) : 'N/A',
+            prioridad_fifo: 'ALTA_PROXIMIDAD_VENCIMIENTO'
+          })) || []
+        },
+        { 
+          tipo_operacion: 'GESTION_FIFO', 
+          tipo_accion: 'FIFO_APLICADO',
+          impacto_negocio: 'ROTACION_INVENTARIO_OPTIMIZADA'
+        }
+      );
+    }
+
+    // ✅ SPANISH TRACKING: Trazabilidad completa
+    await req.logEvent(
+      'TRAZABILIDAD_DESPACHO_REGISTRADA',
+      'Trazabilidad',
+      departureOrderId,
+      `Trazabilidad completa registrada para despacho automático`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden: result.departure_order?.departure_order_no,
+        cadena_trazabilidad: {
+          orden_creada: result.departure_order?.registration_date,
+          orden_aprobada: result.departure_order?.approved_at,
+          despacho_iniciado: new Date().toISOString(),
+          despacho_completado: result.dispatched_at,
+          productos_rastreados: result.dispatch_result?.cellAllocations?.map(cell => ({
+            producto: cell.product_code,
+            lote: cell.lot_series,
+            orden_entrada_origen: cell.entry_order_no,
+            celda_origen: cell.cell_reference,
+            almacen: cell.warehouse_name,
+            fecha_fabricacion: cell.manufacturing_date,
+            fecha_vencimiento: cell.expiration_date
+          })) || []
+        },
+        documentacion: {
+          numero_guia_despacho: dispatchData.dispatch_document_number,
+          transportista: result.departure_order?.carrier_name,
+          destino: result.departure_order?.destination_point,
+          fecha_salida_programada: result.departure_order?.departure_date_time
+        }
+      },
+      { 
+        tipo_operacion: 'TRAZABILIDAD', 
+        tipo_accion: 'REGISTRO_COMPLETO',
+        impacto_negocio: 'TRAZABILIDAD_DOCUMENTADA'
+      }
+    );
+    
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error auto-dispatching departure order:", error);
+    
+    // ✅ SPANISH TRACKING: Error en despacho automático
+    await req.logEvent(
+      'ERROR_DESPACHO_AUTOMATICO',
+      'OrdenDeSalida',
+      req.params.departureOrderId,
+      `Error durante despacho automático: ${error.message}`,
+      null,
+      {
+        orden_salida_id: req.params.departureOrderId,
+        usuario_intento: req.user?.id,
+        rol_usuario: req.user?.role,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        datos_despacho: req.body,
+        fecha_error: new Date().toISOString(),
+        contexto_error: 'DESPACHO_AUTOMATICO_FALLIDO'
+      },
+      { 
+        tipo_operacion: 'DESPACHO_AUTOMATICO', 
+        tipo_accion: 'ERROR',
+        impacto_negocio: 'DESPACHO_FALLIDO'
+      }
+    );
+    
+    // ✅ LOG: Auto-dispatch failure (English for system)
+    await req.logError(error, {
+      controller: 'departure',
+      action: 'autoDispatchDepartureOrder',
+      departure_order_id: req.params.departureOrderId,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      dispatch_data: req.body,
+      error_context: 'AUTO_DISPATCH_FAILED'
+    });
+    
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
 module.exports = {
   getDepartureFormFields,
   getDepartureExitOptions,
@@ -1115,6 +1964,11 @@ module.exports = {
   // ✅ NEW: Expiry urgency dashboard
   getExpiryUrgencyDashboard,
   createComprehensiveDepartureOrder,
-  getComprehensiveDepartureOrders, // ✅ NEW: Get comprehensive orders
+  getComprehensiveDepartureOrders,
+  getComprehensiveDepartureOrderByNumber,
+  getDepartureOrderAuditTrail, // ✅ NEW: Get audit trail for departure order
+  createDepartureAllocations,
+  getAvailableInventoryForDeparture,
+  autoDispatchDepartureOrder,
 };
 

@@ -887,20 +887,36 @@ async function getInventoryAuditTrail(req, res) {
     // Only admin and warehouse can view audit trails
     if (userRole !== "WAREHOUSE_INCHARGE" && userRole !== "ADMIN") {
       return res.status(403).json({ 
+        success: false,
         message: "Access denied. Only admin and warehouse staff can view audit trails." 
       });
     }
 
-    const auditTrail = await inventoryService.getInventoryAuditTrail(req.query);
+    // ✅ ENHANCED: Get inventory logs with comprehensive filtering
+    const result = await inventoryService.getInventoryAuditTrail(req.query);
     
     return res.json({
       success: true,
-      count: auditTrail.length,
-      data: auditTrail.map(log => ({
-        ...log,
-        user_name: `${log.user.first_name || ""} ${log.user.last_name || ""}`.trim(),
-      })),
-      message: "Inventory audit trail retrieved successfully",
+      message: "Inventory movement logs retrieved successfully",
+      data: result.logs,
+      pagination: result.pagination,
+      summary: result.summary,
+      filters_applied: result.filters_applied,
+      available_filters: {
+        movement_type: ["ENTRY", "DEPARTURE", "ADJUSTMENT", "TRANSFER"],
+        filter_examples: {
+          dispatch_only: "?movement_type=DEPARTURE",
+          entry_only: "?movement_type=ENTRY", 
+          specific_departure_order: "?departure_order_id=uuid",
+          specific_entry_order: "?entry_order_id=uuid",
+          specific_product: "?product_id=uuid",
+          specific_warehouse: "?warehouse_id=uuid",
+          specific_cell: "?cell_id=uuid",
+          specific_user: "?user_id=uuid",
+          date_range: "?date_from=2025-06-01&date_to=2025-06-30",
+          pagination: "?limit=20&offset=0"
+        }
+      }
     });
   } catch (err) {
     console.error("Error fetching inventory audit trail:", err);

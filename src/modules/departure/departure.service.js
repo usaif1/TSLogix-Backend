@@ -279,30 +279,65 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
         reviewer: { select: { first_name: true, last_name: true } },
         dispatcher: { select: { first_name: true, last_name: true } },
         products: {
-          select: {
-            departure_order_product_id: true,
-            product_code: true,
-            lot_series: true,
-            requested_quantity: true,
-            requested_packages: true,
-            requested_pallets: true,
-            presentation: true,
-            requested_weight: true,
-            requested_volume: true,
-            unit_price: true,
-            total_value: true,
-            temperature_requirement: true,
-            special_handling: true,
-            delivery_instructions: true,
+          include: {
             product: {
               select: {
+                product_id: true,
                 product_code: true,
                 name: true,
                 manufacturer: true,
-              },
-            },
-          },
+              }
+            }
+          }
         },
+        departureAllocations: {
+          include: {
+            cell: {
+              select: {
+                id: true,
+                row: true,
+                bay: true,
+                position: true,
+                warehouse: {
+                  select: {
+                    warehouse_id: true,
+                    name: true,
+                  }
+                }
+              }
+            },
+            source_allocation: {
+              include: {
+                entry_order_product: {
+                  include: {
+                    entry_order: {
+                      select: {
+                        entry_order_no: true,
+                        entry_date_time: true,
+                      }
+                    },
+                    product: {
+                      select: {
+                        product_code: true,
+                        name: true,
+                      }
+                    },
+                    supplier: {
+                      select: {
+                        supplier_id: true,
+                        company_name: true,
+                        name: true,
+                        contact_person: true,
+                        phone: true,
+                        email: true,
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       },
     });
   } catch (error) {
@@ -312,7 +347,7 @@ async function getAllDepartureOrders(searchQuery = "", organisationId = null, us
 }
 
 // ✅ NEW: Get products with available inventory from approved allocations (EXPIRY-BASED FIFO)
-async function getProductsWithInventory(warehouseId = null) {
+async function getProductsWithInventory(warehouseId = null, userRole = null, userId = null) {
   try {
     // ✅ NEW: Query from InventoryAllocation with quality_status = APROBADO
     const whereClause = {
@@ -324,6 +359,39 @@ async function getProductsWithInventory(warehouseId = null) {
       whereClause.cell = {
         warehouse_id: String(warehouseId)
       };
+    }
+
+    // ✅ NEW: Filter by client product assignments for CLIENT users
+    if (userRole === "CLIENT" && userId) {
+      // Find the client associated with this user
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { 
+          user_id: userId,
+          is_active: true
+        },
+        include: {
+          client: {
+            select: { client_id: true }
+          }
+        }
+      });
+
+      if (clientUser?.client) {
+        // Filter to only show products assigned to this client
+        whereClause.entry_order_product = {
+          product: {
+            clientAssignments: {
+              some: {
+                client_id: clientUser.client.client_id,
+                is_active: true
+              }
+            }
+          }
+        };
+      } else {
+        // If client user has no client account, return empty result
+        return [];
+      }
     }
 
     const allocations = await prisma.inventoryAllocation.findMany({
@@ -1145,9 +1213,9 @@ async function createDepartureOrder(departureData) {
       if (field === 'document_type_ids' && (!departureData[field] || departureData[field].length === 0)) {
         throw new Error(`${displayName} is required - at least one document type must be selected`);
       } else if (field !== 'document_type_ids' && (!departureData[field] || departureData[field] === '')) {
-        throw new Error(`${displayName} is required and cannot be empty`);
-      }
+      throw new Error(`${displayName} is required and cannot be empty`);
     }
+  }
   }
 
   // ✅ NEW: Validate either customer_id or client_id is provided
@@ -1279,7 +1347,7 @@ async function createDepartureOrder(departureData) {
         order_id: newOrder.order_id,
       },
       include: {
-        customer: {
+        customer: { 
           select: {
             customer_id: true,
             name: true,
@@ -1339,9 +1407,9 @@ async function createDepartureOrder(departureData) {
           throw new Error(`Product with ID ${productData.product_id} not found`);
         }
 
-        const departureProduct = await tx.departureOrderProduct.create({
-          data: {
-            departure_order_id: newDepartureOrder.departure_order_id,
+      const departureProduct = await tx.departureOrderProduct.create({
+        data: {
+          departure_order_id: newDepartureOrder.departure_order_id,
             product_code: productData.product_code, // ✅ MANDATORY
             product_id: String(productData.product_id),
             lot_series: productData.lot_series, // ✅ MANDATORY
@@ -1366,10 +1434,10 @@ async function createDepartureOrder(departureData) {
               }
             }
           }
-        });
+      });
 
-        departureProducts.push({
-          ...departureProduct,
+      departureProducts.push({
+        ...departureProduct,
           product_name: departureProduct.product.name, // ✅ MANDATORY
         });
       }
@@ -1387,9 +1455,9 @@ async function createDepartureOrder(departureData) {
         can_be_dispatched: newDepartureOrder.order_status === 'APPROVED',
         
         // ✅ MANDATORY FIELDS SUMMARY
-        mandatory_fields_captured: {
+      mandatory_fields_captured: {
           departure_order_number: newDepartureOrder.departure_order_no,
-          dispatch_date_time: newDepartureOrder.departure_date_time,
+        dispatch_date_time: newDepartureOrder.departure_date_time,
           dispatch_document_number: newDepartureOrder.dispatch_document_number,
           pallet_position_quantity: newDepartureOrder.total_pallets,
           document_types_count: newDepartureOrder.document_type_ids.length,
@@ -1605,23 +1673,50 @@ async function getCurrentDepartureOrderNo() {
   const currentYear = new Date().getFullYear().toString(); // Full 4-digit year
   const yearPrefix = `OS${currentYear}`;
   
-  const lastOrder = await prisma.departureOrder.findFirst({
-    where: {
-      departure_order_no: { startsWith: yearPrefix },
-    },
-    orderBy: { departure_date_time: "desc" },
-  });
+  try {
+    // ✅ ROBUST APPROACH: Get all orders for current year and sort them manually
+    const allOrders = await prisma.departureOrder.findMany({
+      where: {
+        departure_order_no: { startsWith: yearPrefix },
+      },
+      select: {
+        departure_order_no: true,
+      }
+    });
 
-  let nextCount = 1;
-  if (lastOrder?.departure_order_no) {
-    // Extract count from format like "OS202501" -> "01"
-    const countPart = lastOrder.departure_order_no.substring(yearPrefix.length);
-    if (!isNaN(countPart)) {
-      nextCount = parseInt(countPart) + 1;
+    if (allOrders.length === 0) {
+      // No orders for this year, start with 01
+      return `${yearPrefix}01`;
     }
-  }
 
-  return `${yearPrefix}${String(nextCount).padStart(2, "0")}`;
+    // Extract numeric parts and sort
+    const orderNumbers = allOrders
+      .map(order => {
+        const countPart = order.departure_order_no.substring(yearPrefix.length);
+        const numericPart = parseInt(countPart);
+        return !isNaN(numericPart) ? numericPart : 0;
+      })
+      .filter(num => num > 0) // Filter out invalid numbers
+      .sort((a, b) => b - a); // Sort descending to get highest first
+
+    if (orderNumbers.length === 0) {
+      // No valid numeric orders found, start with 01
+      return `${yearPrefix}01`;
+    }
+
+    // Get the highest number and increment
+    const highestNumber = orderNumbers[0];
+    const nextCount = highestNumber + 1;
+    
+    // Generate next order number with leading zeros
+    return `${yearPrefix}${String(nextCount).padStart(2, "0")}`;
+    
+  } catch (error) {
+    console.error("Error generating departure order number:", error);
+    // Fallback: return a timestamp-based number to avoid conflicts
+    const timestamp = new Date().getTime().toString().slice(-2);
+    return `${yearPrefix}${timestamp}`;
+  }
 }
 
 // ✅ NEW: Approve departure order (WAREHOUSE_INCHARGE/ADMIN only)
@@ -1843,6 +1938,25 @@ async function dispatchDepartureOrder(departureOrderId, userId, userRole, dispat
             product: true,
           }
         },
+        departureAllocations: {
+          include: {
+            source_allocation: {
+              include: {
+                inventory: {
+                  where: { status: 'AVAILABLE' },
+                  select: {
+                    inventory_id: true,
+                    current_quantity: true,
+                    current_package_quantity: true,
+                    current_weight: true,
+                    status: true,
+                    quality_status: true,
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     });
 
@@ -1858,20 +1972,157 @@ async function dispatchDepartureOrder(departureOrderId, userId, userRole, dispat
       throw new Error('Departure order has already been dispatched');
     }
 
-    // ✅ MANDATORY: Validate that inventory selections are provided for dispatch
-    if (!dispatchData.inventory_selections || dispatchData.inventory_selections.length === 0) {
-      throw new Error('Inventory selections are required for dispatch');
-    }
+    // ✅ MODIFIED: Auto-allocate if no departure allocations exist
+    if (!departureOrder.departureAllocations || departureOrder.departureAllocations.length === 0) {
+      console.log('🔄 No departure allocations found, performing auto-allocation using FIFO+Expiry logic...');
+      
+      // Auto-allocate using FIFO + Expiry logic
+      const autoAllocations = [];
+      
+      for (const departureProduct of departureOrder.products) {
+        // Get available inventory for this product using FIFO + Expiry
+        const availableInventory = await prisma.inventoryAllocation.findMany({
+          where: {
+            entry_order_product: {
+              product_id: departureProduct.product_id
+            },
+            quality_status: "APROBADO",
+            status: "ACTIVE",
+            inventory: {
+              some: {
+                status: "AVAILABLE",
+                current_quantity: { gt: 0 }
+              }
+            }
+          },
+          include: {
+            inventory: {
+              where: { status: "AVAILABLE" },
+              select: {
+                inventory_id: true,
+                current_quantity: true,
+                current_package_quantity: true,
+                current_weight: true,
+                status: true,
+                quality_status: true,
+              }
+            },
+            entry_order_product: {
+              select: {
+                expiration_date: true,
+                lot_series: true,
+                product: {
+                  select: {
+                    product_code: true,
+                    name: true
+                  }
+                },
+                entry_order: {
+                  select: {
+                    entry_order_no: true,
+                    entry_date_time: true
+                  }
+                }
+              }
+            },
+            cell: {
+              select: {
+                id: true,
+                row: true,
+                bay: true,
+                position: true,
+                warehouse: {
+                  select: {
+                    warehouse_id: true,
+                    name: true
+                  }
+                }
+              }
+            }
+          },
+          orderBy: [
+            { entry_order_product: { expiration_date: "asc" } }, // ✅ FIFO: Earliest expiry first
+            { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ FIFO: Oldest entry first
+          ]
+        });
 
-    // ✅ Validate each inventory selection
-    const validatedCells = [];
-    for (const selection of dispatchData.inventory_selections) {
-      const validated = await validateSelectedCell(
-        selection.inventory_id,
-        parseInt(selection.requested_qty),
-        parseFloat(selection.requested_weight)
-      );
-      validatedCells.push(validated);
+        let remainingQuantity = departureProduct.requested_quantity;
+        let remainingWeight = departureProduct.requested_weight;
+
+        // Allocate using FIFO + Expiry logic
+        for (const allocation of availableInventory) {
+          if (remainingQuantity <= 0) break;
+          
+          const inventory = allocation.inventory[0];
+          if (!inventory || inventory.current_quantity <= 0) continue;
+
+          const allocateQty = Math.min(remainingQuantity, inventory.current_quantity);
+          const allocateWeight = (remainingWeight / departureProduct.requested_quantity) * allocateQty;
+
+          // Create temporary departure allocation for this dispatch
+          const tempAllocation = {
+            allocation_id: allocation.allocation_id,
+            source_allocation: allocation,
+            allocated_quantity: allocateQty,
+            allocated_weight: allocateWeight,
+            product_status: allocation.product_status || "PAL_NORMAL",
+            status_code: allocation.status_code || 37
+          };
+
+          autoAllocations.push(tempAllocation);
+          remainingQuantity -= allocateQty;
+          remainingWeight -= allocateWeight;
+
+          console.log(`✅ Auto-allocated ${allocateQty} units of ${allocation.entry_order_product.product.product_code} from cell ${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")} (Expiry: ${allocation.entry_order_product.expiration_date})`);
+        }
+
+        if (remainingQuantity > 0) {
+          throw new Error(`Insufficient inventory for product ${departureProduct.product.product_code}. Required: ${departureProduct.requested_quantity}, Available: ${departureProduct.requested_quantity - remainingQuantity}`);
+        }
+      }
+
+      // Use auto-allocated inventory for dispatch
+      const validatedCells = [];
+      for (const allocation of autoAllocations) {
+        const sourceInventory = allocation.source_allocation.inventory[0];
+        
+        if (!sourceInventory) {
+          throw new Error(`No inventory found for allocation ${allocation.allocation_id}`);
+        }
+
+        // Validate the allocated inventory
+        const validated = await validateSelectedCell(
+          sourceInventory.inventory_id,
+          allocation.allocated_quantity,
+          allocation.allocated_weight
+        );
+        
+        validatedCells.push(validated);
+      }
+      
+      console.log(`🎯 Auto-allocation completed: ${autoAllocations.length} allocations using FIFO+Expiry logic`);
+      
+    } else {
+      // ✅ Use existing departure allocations
+      console.log('✅ Using existing departure allocations...');
+      const validatedCells = [];
+      
+      for (const allocation of departureOrder.departureAllocations) {
+        const sourceInventory = allocation.source_allocation.inventory[0];
+        
+        if (!sourceInventory) {
+          throw new Error(`No inventory found for allocation ${allocation.allocation_id}`);
+        }
+
+        // Validate the allocated inventory using existing validation
+        const validated = await validateSelectedCell(
+          sourceInventory.inventory_id,
+          allocation.allocated_quantity,
+          parseFloat(allocation.allocated_weight)
+        );
+        
+        validatedCells.push(validated);
+      }
     }
 
     // ✅ Process the actual dispatch (remove from inventory)
@@ -1910,6 +2161,7 @@ async function dispatchDepartureOrder(departureOrderId, userId, userRole, dispat
       dispatch_result: dispatchResult,
       dispatched_by: userId,
       dispatched_at: new Date(),
+      allocated_cells_dispatched: validatedCells.length,
     };
   } catch (error) {
     console.error("Error in dispatchDepartureOrder:", error);
@@ -2369,9 +2621,25 @@ async function createComprehensiveDepartureOrder(comprehensiveData) {
 
     // Add customer_id or client_id dynamically based on what's provided
     if (comprehensiveData.client_id) {
+      // Validate client exists
+      const client = await tx.client.findUnique({
+        where: { client_id: String(comprehensiveData.client_id) }
+      });
+      if (!client) {
+        throw new Error(`Client with ID ${comprehensiveData.client_id} not found`);
+      }
       departureOrderData.client_id = comprehensiveData.client_id;
-    } else if (comprehensiveData.customer_id && comprehensiveData.customer_id !== "Monish Testing 1") {
+    } else if (comprehensiveData.customer_id) {
+      // Validate customer exists
+      const customer = await tx.customer.findUnique({
+        where: { customer_id: String(comprehensiveData.customer_id) }
+      });
+      if (!customer) {
+        throw new Error(`Customer with ID ${comprehensiveData.customer_id} not found`);
+      }
       departureOrderData.customer_id = comprehensiveData.customer_id;
+    } else {
+      throw new Error("Either client_id or customer_id must be provided");
     }
 
     const newDepartureOrder = await tx.departureOrder.create({
@@ -2474,20 +2742,83 @@ async function createComprehensiveDepartureOrder(comprehensiveData) {
       }
     }
 
+    // 5. Calculate totals from products and update departure order
+    const totalWeight = departureProducts.reduce((sum, p) => sum + parseFloat(p.requested_weight || 0), 0);
+    const totalVolume = departureProducts.reduce((sum, p) => sum + parseFloat(p.requested_volume || 0), 0);
+    const totalPallets = departureProducts.reduce((sum, p) => sum + (p.requested_pallets || 0), 0);
+    const totalValue = departureProducts.reduce((sum, p) => sum + parseFloat(p.total_value || 0), 0);
+
+    // Update departure order with calculated totals
+    const updatedDepartureOrder = await tx.departureOrder.update({
+      where: { departure_order_id: newDepartureOrder.departure_order_id },
+      data: {
+        total_weight: totalWeight > 0 ? totalWeight : null,
+        total_volume: totalVolume > 0 ? totalVolume : null,
+        total_pallets: totalPallets > 0 ? totalPallets : null,
+        total_value: totalValue > 0 ? totalValue : null,
+      },
+      include: {
+        customer: {
+          select: {
+            customer_id: true,
+            name: true,
+          }
+        },
+        client: {
+          select: {
+            client_id: true,
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            client_type: true,
+          }
+        },
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true,
+          }
+        },
+        creator: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: true,
+          }
+        },
+        order: {
+          select: {
+            order_id: true,
+            order_type: true,
+            status: true,
+            created_at: true,
+            organisation: {
+              select: {
+                organisation_id: true,
+                name: true,
+              }
+            }
+          }
+        }
+      }
+    });
+
     return {
       success: true,
       message: "Comprehensive departure order created successfully",
       departure_order: {
-        ...newDepartureOrder,
+        ...updatedDepartureOrder,
         // Workflow status
         workflow_status: "PENDING_APPROVAL",
-        can_be_edited: newDepartureOrder.order_status === 'REVISION',
-        can_be_approved: newDepartureOrder.order_status === 'PENDING',
-        can_be_dispatched: newDepartureOrder.order_status === 'APPROVED',
+        can_be_edited: updatedDepartureOrder.order_status === 'REVISION',
+        can_be_approved: updatedDepartureOrder.order_status === 'PENDING',
+        can_be_dispatched: updatedDepartureOrder.order_status === 'APPROVED',
         
         // Comprehensive fields summary
         comprehensive_fields_captured: {
-          departure_order_number: newDepartureOrder.departure_order_no,
+          departure_order_number: updatedDepartureOrder.departure_order_no,
           customer_or_client: comprehensiveData.customer_id || comprehensiveData.client_id,
           warehouse_assigned: !!comprehensiveData.warehouse_id,
           document_type_provided: !!comprehensiveData.document_type_id,
@@ -2497,13 +2828,22 @@ async function createComprehensiveDepartureOrder(comprehensiveData) {
           destination_provided: !!comprehensiveData.arrival_point,
           has_products: departureProducts.length > 0,
           special_instructions: !!comprehensiveData.special_instructions,
+          totals_calculated: {
+            total_weight: totalWeight,
+            total_volume: totalVolume,
+            total_pallets: totalPallets,
+            total_value: totalValue,
+          }
         }
       },
       departure_products: departureProducts,
       comprehensive_data: {
         total_products: departureProducts.length,
         total_requested_quantity: departureProducts.reduce((sum, p) => sum + p.requested_quantity, 0),
-        total_requested_weight: departureProducts.reduce((sum, p) => sum + parseFloat(p.requested_weight || 0), 0),
+        total_requested_weight: totalWeight,
+        total_requested_volume: totalVolume,
+        total_requested_pallets: totalPallets,
+        total_requested_value: totalValue,
         priority_level: comprehensiveData.priority_level || "NORMAL",
         creation_source: "COMPREHENSIVE_API",
       },
@@ -2665,13 +3005,29 @@ async function getComprehensiveDepartureOrders(organisationId = null, userRole =
               }
             },
             source_allocation: {
-              select: {
-                allocation_id: true,
+              include: {
                 entry_order_product: {
-                  select: {
+                  include: {
                     entry_order: {
                       select: {
                         entry_order_no: true,
+                        entry_date_time: true,
+                      }
+                    },
+                    product: {
+                      select: {
+                        product_code: true,
+                        name: true,
+                      }
+                    },
+                    supplier: {
+                      select: {
+                        supplier_id: true,
+                        company_name: true,
+                        name: true,
+                        contact_person: true,
+                        phone: true,
+                        email: true,
                       }
                     }
                   }
@@ -2728,18 +3084,63 @@ async function getComprehensiveDepartureOrders(organisationId = null, userRole =
         },
 
         // Enhanced product information
-        products_summary: order.products.map(product => ({
-          ...product,
-          allocation_status: {
-            allocated_quantity: order.departureAllocations
-              .filter(a => a.departure_order_product_id === product.departure_order_product_id)
-              .reduce((sum, a) => sum + a.allocated_quantity, 0),
-            allocation_percentage: product.requested_quantity > 0 ? 
-              ((order.departureAllocations
-                .filter(a => a.departure_order_product_id === product.departure_order_product_id)
-                .reduce((sum, a) => sum + a.allocated_quantity, 0) / product.requested_quantity) * 100).toFixed(1) : 0,
-          }
-        })),
+        products_summary: order.products.map(product => {
+          // Get all allocations for this product
+          const productAllocations = order.departureAllocations.filter(
+            a => a.departure_order_product_id === product.departure_order_product_id
+          );
+
+          // Extract entry order information from allocations
+          const entryOrders = [...new Set(productAllocations.map(a => 
+            a.source_allocation?.entry_order_product?.entry_order?.entry_order_no
+          ).filter(Boolean))];
+
+          // Extract cell locations from allocations
+          const cellLocations = productAllocations.map(a => ({
+            cell_id: a.cell.id,
+            cell_reference: `${a.cell.row}.${String(a.cell.bay).padStart(2, "0")}.${String(a.cell.position).padStart(2, "0")}`,
+            warehouse_name: a.cell.warehouse.name,
+            warehouse_id: a.cell.warehouse.warehouse_id,
+            allocated_quantity: a.allocated_quantity,
+            allocated_weight: parseFloat(a.allocated_weight),
+            product_status: a.product_status,
+            status_code: a.status_code,
+          }));
+
+          return {
+            ...product,
+            // ✅ ENHANCED: Add entry order information
+            entry_order_info: {
+              source_entry_orders: entryOrders,
+              total_source_orders: entryOrders.length,
+              primary_entry_order: entryOrders[0] || null,
+            },
+            
+            // ✅ ENHANCED: Add cell location information
+            cell_locations: cellLocations,
+            cell_locations_summary: {
+              total_cells: cellLocations.length,
+              warehouses: [...new Set(cellLocations.map(c => c.warehouse_name))],
+              total_allocated_from_cells: cellLocations.reduce((sum, c) => sum + c.allocated_quantity, 0),
+            },
+
+            // ✅ ENHANCED: Add supplier information (from source allocations)
+            supplier_info: productAllocations.length > 0 && productAllocations[0].source_allocation?.entry_order_product?.supplier ? {
+              company_name: productAllocations[0].source_allocation.entry_order_product.supplier.company_name || productAllocations[0].source_allocation.entry_order_product.supplier.name,
+              contact_person: productAllocations[0].source_allocation.entry_order_product.supplier.contact_person,
+              phone: productAllocations[0].source_allocation.entry_order_product.supplier.phone,
+              email: productAllocations[0].source_allocation.entry_order_product.supplier.email,
+            } : null,
+
+            allocation_status: {
+              allocated_quantity: productAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0),
+              allocation_percentage: product.requested_quantity > 0 ? 
+                ((productAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0) / product.requested_quantity) * 100).toFixed(1) : 0,
+              total_allocations: productAllocations.length,
+              is_fully_allocated: productAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0) >= product.requested_quantity,
+            }
+          };
+        }),
 
         // Cell allocation summary
         cell_allocations_summary: order.departureAllocations.map(allocation => ({
@@ -2868,6 +3269,1335 @@ function estimateDispatchDate(order) {
   return estimatedDate;
 }
 
+// ✅ NEW: Get comprehensive departure order by order number
+async function getComprehensiveDepartureOrderByNumber(orderNumber, userRole = null, userId = null, organisationId = null) {
+  try {
+    const whereClause = {
+      departure_order_no: orderNumber
+    };
+
+    // Role-based filtering
+    if (userRole === 'CLIENT') {
+      // CLIENT users can only see their own orders
+      whereClause.created_by = userId;
+    }
+
+    // Organisation filtering
+    if (organisationId) {
+      whereClause.order = {
+        organisation_id: organisationId
+      };
+    }
+
+    const departureOrder = await prisma.departureOrder.findFirst({
+      where: whereClause,
+      include: {
+        customer: {
+          select: {
+            customer_id: true,
+            name: true,
+          }
+        },
+        client: {
+          select: {
+            client_id: true,
+            company_name: true,
+            first_names: true,
+            last_name: true,
+            client_type: true,
+          }
+        },
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+            location: true,
+          }
+        },
+        creator: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        reviewer: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        dispatcher: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        order: {
+          select: {
+            order_id: true,
+            order_type: true,
+            status: true,
+            created_at: true,
+            organisation: {
+              select: {
+                organisation_id: true,
+                name: true,
+              }
+            }
+          }
+        },
+        products: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              }
+            }
+          }
+        },
+        departureAllocations: {
+          include: {
+            cell: {
+              select: {
+                id: true,
+                row: true,
+                bay: true,
+                position: true,
+                warehouse: {
+                  select: {
+                    warehouse_id: true,
+                    name: true,
+                  }
+                }
+              }
+            },
+            source_allocation: {
+              include: {
+                entry_order_product: {
+                  include: {
+                    entry_order: {
+                      select: {
+                        entry_order_no: true,
+                        entry_date_time: true,
+                      }
+                    },
+                    product: {
+                      select: {
+                        product_code: true,
+                        name: true,
+                      }
+                    },
+                    supplier: {
+                      select: {
+                        supplier_id: true,
+                        company_name: true,
+                        name: true,
+                        contact_person: true,
+                        phone: true,
+                        email: true,
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!departureOrder) {
+      return null;
+    }
+
+    // Calculate comprehensive data
+    const totalQuantity = departureOrder.products.reduce((sum, p) => sum + p.requested_quantity, 0);
+    const totalWeight = departureOrder.products.reduce((sum, p) => sum + parseFloat(p.requested_weight || 0), 0);
+    const totalValue = departureOrder.products.reduce((sum, p) => sum + parseFloat(p.total_value || 0), 0);
+    const totalProducts = departureOrder.products.length;
+
+    // Calculate allocation status
+    const totalAllocated = departureOrder.departureAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0);
+    const allocationPercentage = totalQuantity > 0 ? ((totalAllocated / totalQuantity) * 100).toFixed(1) : 0;
+
+    // Workflow status
+    const workflowStatus = getWorkflowStatus(departureOrder.order_status, departureOrder.review_status, departureOrder.dispatch_status);
+
+    // Group allocations by source entry order
+    const entryOrderSources = {};
+    departureOrder.departureAllocations.forEach(allocation => {
+      const entryOrderNo = allocation.source_allocation?.entry_order_product?.entry_order?.entry_order_no;
+      if (entryOrderNo) {
+        if (!entryOrderSources[entryOrderNo]) {
+          entryOrderSources[entryOrderNo] = {
+            entry_order_no: entryOrderNo,
+            entry_date: allocation.source_allocation.entry_order_product.entry_order.entry_date_time,
+            total_allocated_quantity: 0,
+            total_allocated_weight: 0,
+            allocations: []
+          };
+        }
+        entryOrderSources[entryOrderNo].total_allocated_quantity += allocation.allocated_quantity;
+        entryOrderSources[entryOrderNo].total_allocated_weight += parseFloat(allocation.allocated_weight);
+        entryOrderSources[entryOrderNo].allocations.push(allocation);
+      }
+    });
+
+    return {
+      success: true,
+      message: "Comprehensive departure order retrieved successfully",
+      data: {
+        ...departureOrder,
+        // Comprehensive summary
+        comprehensive_summary: {
+          total_products: totalProducts,
+          total_quantity: totalQuantity,
+          total_weight: totalWeight,
+          total_value: totalValue,
+          total_allocated: totalAllocated,
+          allocation_percentage: parseFloat(allocationPercentage),
+          is_fully_allocated: allocationPercentage >= 100,
+          days_since_creation: Math.ceil((new Date() - new Date(departureOrder.registration_date)) / (1000 * 60 * 60 * 24)),
+        },
+
+        // Workflow information
+        workflow_info: {
+          current_status: workflowStatus.status,
+          can_be_edited: workflowStatus.canEdit,
+          can_be_approved: workflowStatus.canApprove,
+          can_be_rejected: workflowStatus.canReject,
+          can_be_dispatched: workflowStatus.canDispatch,
+          next_possible_actions: workflowStatus.nextActions,
+          required_approvers: workflowStatus.requiredApprovers,
+        },
+
+        // Enhanced product information with allocation details
+        products_summary: departureOrder.products.map(product => {
+          const productAllocations = departureOrder.departureAllocations.filter(
+            a => a.departure_order_product_id === product.departure_order_product_id
+          );
+
+          // Extract entry order information from allocations
+          const entryOrders = [...new Set(productAllocations.map(a => 
+            a.source_allocation?.entry_order_product?.entry_order?.entry_order_no
+          ).filter(Boolean))];
+
+          // Extract cell locations from allocations
+          const cellLocations = productAllocations.map(a => ({
+            cell_id: a.cell.id,
+            cell_reference: `${a.cell.row}.${String(a.cell.bay).padStart(2, "0")}.${String(a.cell.position).padStart(2, "0")}`,
+            warehouse_name: a.cell.warehouse.name,
+            warehouse_id: a.cell.warehouse.warehouse_id,
+            allocated_quantity: a.allocated_quantity,
+            allocated_weight: parseFloat(a.allocated_weight),
+            product_status: a.product_status,
+            status_code: a.status_code,
+          }));
+          
+          return {
+            ...product,
+            // ✅ ENHANCED: Add entry order information
+            entry_order_info: {
+              source_entry_orders: entryOrders,
+              total_source_orders: entryOrders.length,
+              primary_entry_order: entryOrders[0] || null,
+            },
+            
+            // ✅ ENHANCED: Add cell location information
+            cell_locations: cellLocations,
+            cell_locations_summary: {
+              total_cells: cellLocations.length,
+              warehouses: [...new Set(cellLocations.map(c => c.warehouse_name))],
+              total_allocated_from_cells: cellLocations.reduce((sum, c) => sum + c.allocated_quantity, 0),
+            },
+
+            // ✅ ENHANCED: Add supplier information (from source allocations)
+            supplier_info: productAllocations.length > 0 && productAllocations[0].source_allocation?.entry_order_product?.supplier ? {
+              company_name: productAllocations[0].source_allocation.entry_order_product.supplier.company_name || productAllocations[0].source_allocation.entry_order_product.supplier.name,
+              contact_person: productAllocations[0].source_allocation.entry_order_product.supplier.contact_person,
+              phone: productAllocations[0].source_allocation.entry_order_product.supplier.phone,
+              email: productAllocations[0].source_allocation.entry_order_product.supplier.email,
+            } : null,
+
+            allocation_status: {
+              allocated_quantity: productAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0),
+              allocation_percentage: product.requested_quantity > 0 ? 
+                ((productAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0) / product.requested_quantity) * 100).toFixed(1) : 0,
+              total_allocations: productAllocations.length,
+              is_fully_allocated: productAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0) >= product.requested_quantity,
+              source_entry_orders: entryOrders
+            }
+          };
+        }),
+
+        // Source entry orders summary (showing multiple entry orders contributing to this departure)
+        source_entry_orders: Object.values(entryOrderSources),
+
+        // Cell allocation summary with entry order traceability
+        cell_allocations_summary: departureOrder.departureAllocations.map(allocation => ({
+          allocation_id: allocation.allocation_id,
+          cell_reference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+          warehouse_name: allocation.cell.warehouse.name,
+          allocated_quantity: allocation.allocated_quantity,
+          allocated_weight: parseFloat(allocation.allocated_weight),
+          source_entry_order: allocation.source_allocation?.entry_order_product?.entry_order?.entry_order_no,
+          source_entry_date: allocation.source_allocation?.entry_order_product?.entry_order?.entry_date_time,
+          product_code: allocation.source_allocation?.entry_order_product?.product?.product_code,
+          product_name: allocation.source_allocation?.entry_order_product?.product?.name,
+          product_status: allocation.product_status,
+          status_code: allocation.status_code,
+        })),
+
+        // Multi-entry order analysis
+        multi_entry_analysis: {
+          total_source_entry_orders: Object.keys(entryOrderSources).length,
+          is_multi_entry_fulfillment: Object.keys(entryOrderSources).length > 1,
+          entry_order_breakdown: Object.values(entryOrderSources).map(source => ({
+            entry_order_no: source.entry_order_no,
+            contribution_quantity: source.total_allocated_quantity,
+            contribution_weight: source.total_allocated_weight,
+            contribution_percentage: totalAllocated > 0 ? 
+              ((source.total_allocated_quantity / totalAllocated) * 100).toFixed(1) : 0,
+            allocations_count: source.allocations.length
+          }))
+        },
+
+        // Time tracking
+        time_tracking: {
+          created_at: departureOrder.registration_date,
+          reviewed_at: departureOrder.reviewed_at,
+          dispatched_at: departureOrder.dispatched_at,
+          days_in_current_status: calculateDaysInStatus(departureOrder),
+          estimated_dispatch_date: estimateDispatchDate(departureOrder),
+        }
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in getComprehensiveDepartureOrderByNumber:", error);
+    throw new Error(`Failed to fetch comprehensive departure order: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Get audit trail for departure order
+async function getDepartureOrderAuditTrail(departureOrderId, userRole = null, userId = null, organisationId = null) {
+  try {
+    // First verify the departure order exists and user has access
+    const departureOrder = await prisma.departureOrder.findFirst({
+      where: {
+        departure_order_id: departureOrderId,
+        // Role-based filtering
+        ...(userRole === 'CLIENT' && { created_by: userId }),
+        // Organisation filtering
+        ...(organisationId && {
+          order: {
+            organisation_id: organisationId
+          }
+        })
+      },
+      select: {
+        departure_order_id: true,
+        departure_order_no: true,
+        order_status: true,
+        created_by: true,
+        registration_date: true,
+        order: {
+          select: {
+            organisation_id: true
+          }
+        }
+      }
+    });
+
+    if (!departureOrder) {
+      return null;
+    }
+
+    // Get audit trail from system audit logs
+    const auditLogs = await prisma.systemAuditLog.findMany({
+      where: {
+        entity_type: 'DepartureOrder',
+        entity_id: departureOrderId,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            email: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        performed_at: 'desc'
+      }
+    });
+
+    // Get related audit logs (for products, allocations, etc.)
+    const relatedAuditLogs = await prisma.systemAuditLog.findMany({
+      where: {
+        OR: [
+          {
+            entity_type: 'DepartureOrderProduct',
+            metadata: {
+              path: ['departure_order_id'],
+              equals: departureOrderId
+            }
+          },
+          {
+            entity_type: 'DepartureAllocation',
+            metadata: {
+              path: ['departure_order_id'],
+              equals: departureOrderId
+            }
+          },
+          {
+            entity_type: 'InventoryLog',
+            metadata: {
+              path: ['departure_order_id'],
+              equals: departureOrderId
+            }
+          }
+        ]
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            email: true,
+            role: {
+              select: {
+                role_id: true,
+                name: true,
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        performed_at: 'desc'
+      }
+    });
+
+    // Combine and sort all audit logs
+    const allAuditLogs = [...auditLogs, ...relatedAuditLogs].sort(
+      (a, b) => new Date(b.performed_at) - new Date(a.performed_at)
+    );
+
+    // Transform audit logs for better presentation
+    const transformedAuditTrail = allAuditLogs.map(log => ({
+      audit_id: log.audit_id,
+      timestamp: log.performed_at,
+      action: log.action,
+      entity_type: log.entity_type,
+      entity_id: log.entity_id,
+      description: log.description,
+      user: {
+        id: log.user.id,
+        name: `${log.user.first_name || ''} ${log.user.last_name || ''}`.trim(),
+        email: log.user.email,
+        role: log.user.role?.name
+      },
+      changes: {
+        old_values: log.old_values,
+        new_values: log.new_values
+      },
+      metadata: log.metadata,
+      session_info: {
+        ip_address: log.ip_address,
+        user_agent: log.user_agent,
+        session_id: log.session_id
+      }
+    }));
+
+    // Group audit trail by categories for better organization
+    const categorizedAuditTrail = {
+      order_lifecycle: transformedAuditTrail.filter(log => 
+        ['DEPARTURE_ORDER_CREATED', 'DEPARTURE_ORDER_APPROVED', 'DEPARTURE_ORDER_REJECTED', 
+         'DEPARTURE_ORDER_REVISION_REQUESTED', 'DEPARTURE_ORDER_DISPATCHED'].includes(log.action)
+      ),
+      product_changes: transformedAuditTrail.filter(log => 
+        log.entity_type === 'DepartureOrderProduct' || 
+        log.action.includes('PRODUCT')
+      ),
+      allocation_changes: transformedAuditTrail.filter(log => 
+        log.entity_type === 'DepartureAllocation' || 
+        log.action.includes('ALLOCATION')
+      ),
+      inventory_movements: transformedAuditTrail.filter(log => 
+        log.entity_type === 'InventoryLog' || 
+        log.action.includes('INVENTORY')
+      ),
+      system_events: transformedAuditTrail.filter(log => 
+        log.action.includes('SYSTEM') || log.action.includes('ERROR')
+      ),
+      other_events: transformedAuditTrail.filter(log => 
+        !['DEPARTURE_ORDER_CREATED', 'DEPARTURE_ORDER_APPROVED', 'DEPARTURE_ORDER_REJECTED', 
+          'DEPARTURE_ORDER_REVISION_REQUESTED', 'DEPARTURE_ORDER_DISPATCHED'].includes(log.action) &&
+        log.entity_type !== 'DepartureOrderProduct' && 
+        log.entity_type !== 'DepartureAllocation' && 
+        log.entity_type !== 'InventoryLog' &&
+        !log.action.includes('PRODUCT') && 
+        !log.action.includes('ALLOCATION') && 
+        !log.action.includes('INVENTORY') && 
+        !log.action.includes('SYSTEM') && 
+        !log.action.includes('ERROR')
+      )
+    };
+
+    // Calculate audit trail statistics
+    const auditStats = {
+      total_events: transformedAuditTrail.length,
+      unique_users: [...new Set(transformedAuditTrail.map(log => log.user.id))].length,
+      date_range: {
+        first_event: transformedAuditTrail.length > 0 ? 
+          transformedAuditTrail[transformedAuditTrail.length - 1].timestamp : null,
+        last_event: transformedAuditTrail.length > 0 ? 
+          transformedAuditTrail[0].timestamp : null
+      },
+      event_types: transformedAuditTrail.reduce((acc, log) => {
+        acc[log.action] = (acc[log.action] || 0) + 1;
+        return acc;
+      }, {}),
+      user_activity: transformedAuditTrail.reduce((acc, log) => {
+        const userName = log.user.name || log.user.email;
+        acc[userName] = (acc[userName] || 0) + 1;
+        return acc;
+      }, {})
+    };
+
+    return {
+      success: true,
+      message: "Departure order audit trail retrieved successfully",
+      data: {
+        departure_order: {
+          departure_order_id: departureOrder.departure_order_id,
+          departure_order_no: departureOrder.departure_order_no,
+          current_status: departureOrder.order_status,
+          created_date: departureOrder.registration_date,
+          organisation_id: departureOrder.order.organisation_id
+        },
+        audit_trail: {
+          all_events: transformedAuditTrail,
+          categorized_events: categorizedAuditTrail,
+          statistics: auditStats
+        },
+        access_info: {
+          requested_by: userId,
+          user_role: userRole,
+          organisation_id: organisationId,
+          access_granted_at: new Date().toISOString()
+        }
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in getDepartureOrderAuditTrail:", error);
+    throw new Error(`Failed to fetch departure order audit trail: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Create departure allocations for a departure order
+async function createDepartureAllocations(departureOrderId, allocationData, userId, userRole) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can create departure allocations');
+    }
+
+    // Check if departure order exists and is approved
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+      include: {
+        products: true,
+      }
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (departureOrder.order_status !== 'APPROVED') {
+      throw new Error(`Cannot allocate inventory to departure order with status: ${departureOrder.order_status}. Order must be approved first.`);
+    }
+
+    // ✅ Validate allocation data
+    if (!allocationData.allocations || allocationData.allocations.length === 0) {
+      throw new Error('Allocation data is required');
+    }
+
+    // ✅ Process allocations in transaction
+    const result = await prisma.$transaction(async (tx) => {
+      const createdAllocations = [];
+
+      for (const allocation of allocationData.allocations) {
+        // Validate departure order product exists
+        const departureProduct = await tx.departureOrderProduct.findUnique({
+          where: { departure_order_product_id: allocation.departure_order_product_id },
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+              }
+            }
+          }
+        });
+
+        if (!departureProduct) {
+          throw new Error(`Departure order product ${allocation.departure_order_product_id} not found`);
+        }
+
+        // Validate source inventory allocation
+        const sourceAllocation = await tx.inventoryAllocation.findUnique({
+          where: { allocation_id: allocation.source_allocation_id },
+          include: {
+            inventory: {
+              where: { status: 'AVAILABLE' },
+              select: {
+                inventory_id: true,
+                current_quantity: true,
+                current_package_quantity: true,
+                current_weight: true,
+                current_volume: true,
+                status: true,
+                quality_status: true,
+              }
+            },
+            cell: {
+              select: {
+                id: true,
+                row: true,
+                bay: true,
+                position: true,
+                warehouse: {
+                  select: {
+                    warehouse_id: true,
+                    name: true,
+                  }
+                }
+              }
+            },
+            entry_order_product: {
+              select: {
+                product_id: true,
+              }
+            }
+          }
+        });
+
+        if (!sourceAllocation) {
+          throw new Error(`Source allocation ${allocation.source_allocation_id} not found`);
+        }
+
+        if (!sourceAllocation.inventory || sourceAllocation.inventory.length === 0) {
+          throw new Error(`No available inventory found for allocation ${allocation.source_allocation_id}`);
+        }
+
+        const inventory = sourceAllocation.inventory[0];
+
+        // Validate product match
+        if (sourceAllocation.entry_order_product.product_id !== departureProduct.product.product_id) {
+          throw new Error(`Product mismatch: source allocation has ${sourceAllocation.entry_order_product.product_id}, departure order requires ${departureProduct.product.product_id}`);
+        }
+
+        // Validate inventory availability
+        if (inventory.status !== 'AVAILABLE') {
+          throw new Error(`Inventory is not available (Status: ${inventory.status})`);
+        }
+
+        if (inventory.quality_status !== 'APROBADO') {
+          throw new Error(`Inventory has not been approved for departure (Quality Status: ${inventory.quality_status})`);
+        }
+
+        if (inventory.current_package_quantity < allocation.allocated_quantity) {
+          throw new Error(`Insufficient quantity available. Available: ${inventory.current_package_quantity}, Requested: ${allocation.allocated_quantity}`);
+        }
+
+        if (parseFloat(inventory.current_weight) < allocation.allocated_weight) {
+          throw new Error(`Insufficient weight available. Available: ${inventory.current_weight}kg, Requested: ${allocation.allocated_weight}kg`);
+        }
+
+        // Create departure allocation
+        const departureAllocation = await tx.departureAllocation.create({
+          data: {
+            departure_order_id: departureOrderId,
+            departure_order_product_id: allocation.departure_order_product_id,
+            source_allocation_id: allocation.source_allocation_id,
+            allocated_quantity: parseInt(allocation.allocated_quantity),
+            allocated_packages: parseInt(allocation.allocated_packages || allocation.allocated_quantity),
+            allocated_pallets: allocation.allocated_pallets ? parseInt(allocation.allocated_pallets) : null,
+            presentation: allocation.presentation || 'CAJA',
+            allocated_weight: parseFloat(allocation.allocated_weight),
+            allocated_volume: allocation.allocated_volume ? parseFloat(allocation.allocated_volume) : null,
+            cell_id: sourceAllocation.cell.id,
+            product_status: sourceAllocation.product_status,
+            status_code: sourceAllocation.status_code,
+            guide_number: allocation.guide_number || null,
+            observations: allocation.observations || null,
+            allocated_by: userId,
+            allocated_at: new Date(),
+            status: 'ACTIVE',
+          }
+        });
+
+        createdAllocations.push({
+          allocation_id: departureAllocation.allocation_id,
+          departure_order_product_id: departureAllocation.departure_order_product_id,
+          source_allocation_id: departureAllocation.source_allocation_id,
+          allocated_quantity: departureAllocation.allocated_quantity,
+          allocated_weight: parseFloat(departureAllocation.allocated_weight),
+          cell_reference: `${sourceAllocation.cell.row}.${String(sourceAllocation.cell.bay).padStart(2, "0")}.${String(sourceAllocation.cell.position).padStart(2, "0")}`,
+          warehouse_name: sourceAllocation.cell.warehouse.name,
+          product_code: departureProduct.product.product_code,
+          product_name: departureProduct.product.name,
+          inventory_id: inventory.inventory_id, // ✅ This is what dispatch needs!
+        });
+      }
+
+      return createdAllocations;
+    }, {
+      maxWait: 30000, // 30 seconds
+      timeout: 30000, // 30 seconds
+    });
+
+    return {
+      success: true,
+      message: 'Departure allocations created successfully',
+      departure_order_id: departureOrderId,
+      allocations: result,
+      total_allocations: result.length,
+      allocated_by: userId,
+      allocated_at: new Date(),
+    };
+
+  } catch (error) {
+    console.error("Error in createDepartureAllocations:", error);
+    throw new Error(`Failed to create departure allocations: ${error.message}`);
+  }
+}
+
+// ✅ NEW: Get available inventory for departure allocation (FIFO-based)
+async function getAvailableInventoryForDeparture(departureOrderId, userRole = null, userId = null) {
+  try {
+    // Get departure order with products
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+      include: {
+        products: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+              }
+            }
+          }
+        },
+        departureAllocations: true, // Check existing allocations
+      }
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (departureOrder.order_status !== 'APPROVED') {
+      throw new Error('Departure order must be approved before allocation');
+    }
+
+    // Get available inventory for each product
+    const inventoryByProduct = {};
+
+    for (const departureProduct of departureOrder.products) {
+      // Get existing allocations for this product
+      const existingAllocations = departureOrder.departureAllocations.filter(
+        a => a.departure_order_product_id === departureProduct.departure_order_product_id
+      );
+      const alreadyAllocated = existingAllocations.reduce((sum, a) => sum + a.allocated_quantity, 0);
+      const remainingToAllocate = departureProduct.requested_quantity - alreadyAllocated;
+
+      if (remainingToAllocate <= 0) {
+        continue; // This product is fully allocated
+      }
+
+      // Get available inventory for this product (FIFO)
+      const availableInventory = await prisma.inventoryAllocation.findMany({
+        where: {
+          entry_order_product: {
+            product_id: departureProduct.product.product_id,
+          },
+          quality_status: 'APROBADO',
+          status: 'ACTIVE',
+          inventory: {
+            some: {
+              status: 'AVAILABLE',
+              current_package_quantity: { gt: 0 },
+            }
+          }
+        },
+        include: {
+          inventory: {
+            where: {
+              status: 'AVAILABLE',
+              current_package_quantity: { gt: 0 },
+            },
+            select: {
+              inventory_id: true,
+              current_quantity: true,
+              current_package_quantity: true,
+              current_weight: true,
+              current_volume: true,
+              status: true,
+              quality_status: true,
+            }
+          },
+          cell: {
+            select: {
+              id: true,
+              row: true,
+              bay: true,
+              position: true,
+              warehouse: {
+                select: {
+                  warehouse_id: true,
+                  name: true,
+                }
+              }
+            }
+          },
+          entry_order_product: {
+            include: {
+              entry_order: {
+                select: {
+                  entry_order_no: true,
+                  entry_date_time: true,
+                }
+              },
+              product: {
+                select: {
+                  product_code: true,
+                  name: true,
+                }
+              }
+            }
+          }
+        },
+        orderBy: [
+          { entry_order_product: { expiration_date: 'asc' } }, // FIFO by expiry
+          { allocated_at: 'asc' }, // Then by allocation date
+        ]
+      });
+
+      // Filter and format available inventory
+      const formattedInventory = availableInventory
+        .filter(allocation => allocation.inventory && allocation.inventory.length > 0)
+        .map(allocation => {
+          const inventory = allocation.inventory[0];
+          return {
+            allocation_id: allocation.allocation_id,
+            inventory_id: inventory.inventory_id,
+            cell_id: allocation.cell.id,
+            cell_reference: `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`,
+            warehouse_name: allocation.cell.warehouse.name,
+            warehouse_id: allocation.cell.warehouse.warehouse_id,
+            
+            // Available quantities
+            available_quantity: inventory.current_quantity,
+            available_packages: inventory.current_package_quantity,
+            available_weight: parseFloat(inventory.current_weight),
+            available_volume: inventory.current_volume ? parseFloat(inventory.current_volume) : null,
+            
+            // Product and entry order info
+            product_code: allocation.entry_order_product.product.product_code,
+            product_name: allocation.entry_order_product.product.name,
+            entry_order_no: allocation.entry_order_product.entry_order.entry_order_no,
+            entry_date: allocation.entry_order_product.entry_order.entry_date_time,
+            expiration_date: allocation.entry_order_product.expiration_date,
+            lot_series: allocation.entry_order_product.lot_series,
+            
+            // Allocation details
+            presentation: allocation.presentation,
+            product_status: allocation.product_status,
+            status_code: allocation.status_code,
+            quality_status: allocation.quality_status,
+          };
+        });
+
+      inventoryByProduct[departureProduct.departure_order_product_id] = {
+        departure_order_product_id: departureProduct.departure_order_product_id,
+        product_id: departureProduct.product.product_id,
+        product_code: departureProduct.product.product_code,
+        product_name: departureProduct.product.name,
+        requested_quantity: departureProduct.requested_quantity,
+        requested_weight: parseFloat(departureProduct.requested_weight || 0),
+        already_allocated: alreadyAllocated,
+        remaining_to_allocate: remainingToAllocate,
+        available_inventory: formattedInventory,
+        suggested_allocation: getSuggestedAllocationForProduct(formattedInventory, remainingToAllocate, parseFloat(departureProduct.requested_weight || 0) - (existingAllocations.reduce((sum, a) => sum + parseFloat(a.allocated_weight), 0))),
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Available inventory for departure allocation retrieved successfully',
+      departure_order_id: departureOrderId,
+      departure_order_no: departureOrder.departure_order_no,
+      order_status: departureOrder.order_status,
+      inventory_by_product: inventoryByProduct,
+      summary: {
+        total_products: Object.keys(inventoryByProduct).length,
+        products_needing_allocation: Object.values(inventoryByProduct).filter(p => p.remaining_to_allocate > 0).length,
+        fully_allocated_products: Object.values(inventoryByProduct).filter(p => p.remaining_to_allocate <= 0).length,
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in getAvailableInventoryForDeparture:", error);
+    throw new Error(`Failed to get available inventory for departure: ${error.message}`);
+  }
+}
+
+// ✅ Helper function to suggest optimal allocation
+function getSuggestedAllocationForProduct(availableInventory, requiredQuantity, requiredWeight) {
+  if (!availableInventory || availableInventory.length === 0) {
+    return [];
+  }
+
+  const suggestions = [];
+  let remainingQuantity = requiredQuantity;
+  let remainingWeight = requiredWeight;
+
+  for (const inventory of availableInventory) {
+    if (remainingQuantity <= 0) break;
+
+    const takeQuantity = Math.min(remainingQuantity, inventory.available_packages);
+    const weightPerUnit = inventory.available_weight / inventory.available_packages;
+    const takeWeight = takeQuantity * weightPerUnit;
+
+    if (takeQuantity > 0) {
+      suggestions.push({
+        allocation_id: inventory.allocation_id,
+        inventory_id: inventory.inventory_id,
+        cell_reference: inventory.cell_reference,
+        warehouse_name: inventory.warehouse_name,
+        entry_order_no: inventory.entry_order_no,
+        suggested_quantity: takeQuantity,
+        suggested_weight: Math.min(takeWeight, remainingWeight),
+        available_quantity: inventory.available_packages,
+        available_weight: inventory.available_weight,
+        expiration_date: inventory.expiration_date,
+        lot_series: inventory.lot_series,
+      });
+
+      remainingQuantity -= takeQuantity;
+      remainingWeight -= takeWeight;
+    }
+  }
+
+  return suggestions;
+}
+
+// ✅ NEW: Auto-dispatch with FIFO+Expiry (bypasses allocation step)
+async function autoDispatchDepartureOrder(departureOrderId, userId, userRole, dispatchData = {}) {
+  try {
+    // ✅ Role validation
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      throw new Error('Only warehouse incharge or admin can dispatch departure orders');
+    }
+
+    console.log(`🚀 Starting auto-dispatch for departure order: ${departureOrderId}`);
+
+    // Check if departure order exists and is approved
+    const departureOrder = await prisma.departureOrder.findUnique({
+      where: { departure_order_id: departureOrderId },
+      include: {
+        products: {
+          include: {
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+              }
+            },
+          }
+        }
+      }
+    });
+
+    if (!departureOrder) {
+      throw new Error('Departure order not found');
+    }
+
+    if (departureOrder.order_status !== 'APPROVED') {
+      throw new Error(`Cannot dispatch departure order with status: ${departureOrder.order_status}. Order must be approved first.`);
+    }
+
+    if (departureOrder.dispatch_status === 'DISPATCHED') {
+      throw new Error('Departure order has already been dispatched');
+    }
+
+    console.log(`📋 Processing ${departureOrder.products.length} products for auto-dispatch...`);
+
+    // ✅ AUTO-ALLOCATE: Apply FIFO + Expiry logic automatically
+    const validatedCells = [];
+    const fifoProcessingSummary = [];
+    
+    for (const departureProduct of departureOrder.products) {
+      console.log(`🔍 Finding inventory for ${departureProduct.product.product_code} (Required: ${departureProduct.requested_quantity} units, ${departureProduct.requested_weight} kg)...`);
+      
+      // Get available inventory using FIFO + Expiry logic
+      const availableInventory = await prisma.inventoryAllocation.findMany({
+        where: {
+          entry_order_product: {
+            product_id: departureProduct.product_id
+          },
+          quality_status: "APROBADO",
+          status: "ACTIVE",
+          inventory: {
+            some: {
+              status: "AVAILABLE",
+              current_quantity: { gt: 0 }
+            }
+          }
+        },
+        include: {
+          inventory: {
+            where: { status: "AVAILABLE" },
+            select: {
+              inventory_id: true,
+              current_quantity: true,
+              current_package_quantity: true,
+              current_weight: true,
+              status: true,
+              quality_status: true,
+            }
+          },
+          entry_order_product: {
+            select: {
+              expiration_date: true,
+              lot_series: true,
+              manufacturing_date: true,
+              entry_order: {
+                select: {
+                  entry_order_no: true,
+                  entry_date_time: true
+                }
+              }
+            }
+          },
+          cell: {
+            select: {
+              id: true,
+              row: true,
+              bay: true,
+              position: true,
+              warehouse: {
+                select: {
+                  warehouse_id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        },
+        orderBy: [
+          { entry_order_product: { expiration_date: "asc" } }, // ✅ PRIMARY: Earliest expiry first
+          { entry_order_product: { entry_order: { entry_date_time: "asc" } } }, // ✅ SECONDARY: FIFO
+        ]
+      });
+
+      let remainingQuantity = departureProduct.requested_quantity;
+      let remainingWeight = departureProduct.requested_weight;
+      let productAllocations = 0;
+      const productFifoDetails = [];
+
+      // ✅ ALLOCATE: Using FIFO + Expiry priority
+      for (const allocation of availableInventory) {
+        if (remainingQuantity <= 0) break;
+        
+        const inventory = allocation.inventory[0];
+        if (!inventory || inventory.current_quantity <= 0) continue;
+
+        const allocateQty = Math.min(remainingQuantity, inventory.current_quantity);
+        const allocateWeight = remainingWeight > 0 ? (remainingWeight / departureProduct.requested_quantity) * allocateQty : 0;
+
+        // Validate this inventory selection
+        const validated = await validateSelectedCell(
+          inventory.inventory_id,
+          allocateQty,
+          allocateWeight
+        );
+        
+        validatedCells.push(validated);
+        remainingQuantity -= allocateQty;
+        remainingWeight -= allocateWeight;
+        productAllocations++;
+
+        const cellRef = `${allocation.cell.row}.${String(allocation.cell.bay).padStart(2, "0")}.${String(allocation.cell.position).padStart(2, "0")}`;
+        const daysToExpiry = allocation.entry_order_product.expiration_date ? 
+          Math.ceil((new Date(allocation.entry_order_product.expiration_date) - new Date()) / (1000 * 60 * 60 * 24)) : 'N/A';
+
+        // ✅ SPANISH TRACKING: Detalle de selección FIFO
+        const fifoDetail = {
+          producto_codigo: departureProduct.product.product_code,
+          producto_nombre: departureProduct.product.name,
+          celda_referencia: cellRef,
+          almacen: allocation.cell.warehouse.name,
+          cantidad_asignada: allocateQty,
+          peso_asignado: allocateWeight,
+          lote: allocation.entry_order_product.lot_series,
+          fecha_vencimiento: allocation.entry_order_product.expiration_date,
+          dias_hasta_vencimiento: daysToExpiry,
+          orden_entrada_numero: allocation.entry_order_product.entry_order.entry_order_no,
+          fecha_entrada: allocation.entry_order_product.entry_order.entry_date_time,
+          prioridad_fifo: productAllocations,
+          urgencia_vencimiento: daysToExpiry <= 7 ? 'URGENTE' : daysToExpiry <= 30 ? 'ADVERTENCIA' : 'NORMAL'
+        };
+        
+        productFifoDetails.push(fifoDetail);
+
+        console.log(`✅ FIFO-allocated ${allocateQty} units from cell ${cellRef} | Lot: ${allocation.entry_order_product.lot_series} | Entry: ${allocation.entry_order_product.entry_order.entry_order_no} | Expiry: ${allocation.entry_order_product.expiration_date} (${daysToExpiry} days)`);
+      }
+
+      if (remainingQuantity > 0) {
+        throw new Error(`Insufficient inventory for product ${departureProduct.product.product_code}. Required: ${departureProduct.requested_quantity}, Available: ${departureProduct.requested_quantity - remainingQuantity}`);
+      }
+
+      // ✅ Add to FIFO processing summary
+      fifoProcessingSummary.push({
+        producto: departureProduct.product.product_code,
+        cantidad_requerida: departureProduct.requested_quantity,
+        peso_requerido: departureProduct.requested_weight,
+        celdas_utilizadas: productAllocations,
+        selecciones_fifo: productFifoDetails
+      });
+
+      console.log(`📦 Product ${departureProduct.product.product_code}: ${productAllocations} cells allocated using FIFO+Expiry logic`);
+    }
+
+    console.log(`🎯 Auto-allocation completed: ${validatedCells.length} inventory selections using FIFO+Expiry logic`);
+
+    // ✅ SPANISH TRACKING: Proceso FIFO completado (before dispatch)
+    await logEvent(
+      'PROCESO_FIFO_COMPLETADO',
+      'ProcesoInventario',
+      departureOrderId,
+      `Proceso FIFO completado exitosamente - ${validatedCells.length} selecciones de inventario realizadas`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        metodo_seleccion: 'FIFO_FECHA_VENCIMIENTO_PRIMERO',
+        total_selecciones: validatedCells.length,
+        productos_procesados: fifoProcessingSummary.length,
+        resumen_fifo: fifoProcessingSummary,
+        criterios_aplicados: {
+          criterio_primario: 'FECHA_VENCIMIENTO_ASCENDENTE',
+          criterio_secundario: 'FECHA_ENTRADA_ASCENDENTE',
+          filtros: ['CALIDAD_APROBADA', 'ESTADO_ACTIVO', 'INVENTARIO_DISPONIBLE']
+        },
+        estadisticas_vencimiento: {
+          productos_urgentes: fifoProcessingSummary.reduce((count, p) => 
+            count + p.selecciones_fifo.filter(s => s.urgencia_vencimiento === 'URGENTE').length, 0),
+          productos_advertencia: fifoProcessingSummary.reduce((count, p) => 
+            count + p.selecciones_fifo.filter(s => s.urgencia_vencimiento === 'ADVERTENCIA').length, 0),
+          productos_normales: fifoProcessingSummary.reduce((count, p) => 
+            count + p.selecciones_fifo.filter(s => s.urgencia_vencimiento === 'NORMAL').length, 0)
+        }
+      },
+      { 
+        tipo_operacion: 'PROCESO_FIFO', 
+        tipo_accion: 'SELECCION_INVENTARIO_COMPLETADA',
+        impacto_negocio: 'INVENTARIO_SELECCIONADO_PARA_DESPACHO'
+      }
+    );
+
+    // ✅ DISPATCH: Process the actual dispatch (remove from inventory)
+    const dispatchResult = await processInventoryDispatch(
+      departureOrderId,
+      validatedCells,
+      userId,
+      {
+        ...dispatchData,
+        dispatch_method: 'AUTO_FIFO_EXPIRY',
+        allocation_method: 'AUTOMATIC',
+        fifo_applied: true,
+        expiry_priority: true
+      }
+    );
+
+    // ✅ SPANISH TRACKING: Procesamiento de celdas completado
+    await logEvent(
+      'PROCESAMIENTO_CELDAS_COMPLETADO',
+      'ProcesamientoCeldas',
+      departureOrderId,
+      `Procesamiento de celdas de inventario completado - ${dispatchResult.totals.cells_affected} celdas procesadas`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        celdas_procesadas: dispatchResult.cellAllocations?.map(cell => ({
+          referencia_celda: cell.cell_reference,
+          almacen: cell.warehouse_name,
+          producto_codigo: cell.product_code,
+          producto_nombre: cell.product_name,
+          cantidad_removida: cell.dispatched_qty,
+          peso_removido: cell.dispatched_weight,
+          celda_agotada: cell.cell_depleted,
+          lote: cell.lot_series,
+          fecha_vencimiento: cell.expiration_date,
+          orden_entrada_origen: cell.entry_order_no
+        })) || [],
+        resumen_procesamiento: {
+          total_celdas_afectadas: dispatchResult.totals.cells_affected,
+          total_celdas_agotadas: dispatchResult.totals.cells_depleted,
+          cantidad_total_removida: dispatchResult.totals.total_qty,
+          peso_total_removido: dispatchResult.totals.total_weight,
+          paquetes_totales_procesados: dispatchResult.totals.total_packages
+        }
+      },
+      { 
+        tipo_operacion: 'PROCESAMIENTO_CELDAS', 
+        tipo_accion: 'CELDAS_ACTUALIZADAS',
+        impacto_negocio: 'INVENTARIO_REMOVIDO_CELDAS'
+      }
+    );
+
+    // Update departure order with dispatch information
+    const updatedOrder = await prisma.departureOrder.update({
+      where: { departure_order_id: departureOrderId },
+      data: {
+        order_status: 'DISPATCHED',
+        dispatch_status: 'DISPATCHED',
+        dispatched_by: userId,
+        dispatched_at: new Date(),
+        dispatch_notes: `${dispatchData.dispatch_notes || ''} | AUTO-DISPATCH: FIFO+Expiry logic applied automatically`,
+      },
+      include: {
+        products: true,
+        dispatcher: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        }
+      }
+    });
+
+    // ✅ SPANISH TRACKING: Estado de orden actualizado
+    await logEvent(
+      'ESTADO_ORDEN_ACTUALIZADO_DESPACHO',
+      'EstadoOrden',
+      departureOrderId,
+      `Estado de orden actualizado a DESPACHADO tras procesamiento exitoso`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        numero_orden: updatedOrder.departure_order_no,
+        cambio_estado: {
+          estado_anterior: 'APROBADO',
+          estado_nuevo: 'DESPACHADO',
+          fecha_cambio: new Date().toISOString(),
+          actualizado_por: userId,
+          metodo_despacho: 'AUTO_FIFO_VENCIMIENTO'
+        },
+        despachador: {
+          usuario_id: userId,
+          nombre_completo: updatedOrder.dispatcher ? 
+            `${updatedOrder.dispatcher.first_name} ${updatedOrder.dispatcher.last_name}` : 'No disponible',
+          rol: userRole
+        },
+        notas_despacho: dispatchData.dispatch_notes || 'Despacho automático sin notas adicionales'
+      },
+      { 
+        tipo_operacion: 'ACTUALIZACION_ESTADO', 
+        tipo_accion: 'ORDEN_DESPACHADA',
+        impacto_negocio: 'ORDEN_COMPLETAMENTE_PROCESADA'
+      }
+    );
+
+    console.log(`🎉 Auto-dispatch completed successfully for order ${departureOrder.departure_order_no}`);
+
+    return {
+      success: true,
+      message: 'Departure order auto-dispatched successfully using FIFO+Expiry logic',
+      departure_order: updatedOrder,
+      dispatch_result: dispatchResult,
+      dispatched_by: userId,
+      dispatched_at: new Date(),
+      allocated_cells_dispatched: validatedCells.length,
+      dispatch_method: 'AUTO_FIFO_EXPIRY',
+      fifo_logic_applied: true,
+      expiry_priority_applied: true,
+      allocation_bypassed: true,
+    };
+  } catch (error) {
+    console.error("Error in autoDispatchDepartureOrder:", error);
+    throw new Error(`Failed to auto-dispatch departure order: ${error.message}`);
+  }
+}
+
+// ✅ HELPER: Log event function for service layer
+async function logEvent(eventType, entityType, entityId, description, previousData, eventData, metadata) {
+  // This would typically use a logging service or create event log entries
+  console.log(`📋 SPANISH EVENT: ${eventType} - ${description}`);
+  console.log(`   Entity: ${entityType}:${entityId}`);
+  console.log(`   Data:`, JSON.stringify(eventData, null, 2));
+  
+  // In a real implementation, you would save this to your event log table
+  try {
+    // Example of how you might save to event logs
+    await prisma.eventLog?.create({
+      data: {
+        event_type: eventType,
+        entity_type: entityType,
+        entity_id: entityId,
+        description: description,
+        event_data: eventData,
+        metadata: metadata,
+        created_at: new Date()
+      }
+    });
+  } catch (logError) {
+    console.log(`Warning: Could not save event log: ${logError.message}`);
+  }
+}
+
 module.exports = {
   getDepartureFormFields,
   getDepartureExitOptions,
@@ -2889,5 +4619,11 @@ module.exports = {
   processInventoryDispatch,
   getExpiryUrgencyDashboard,
   createComprehensiveDepartureOrder,
-  getComprehensiveDepartureOrders, // ✅ NEW: Get comprehensive orders
+  getComprehensiveDepartureOrders,
+  getComprehensiveDepartureOrderByNumber,
+  getDepartureOrderAuditTrail, // ✅ NEW: Get audit trail for departure order
+  createDepartureAllocations, // ✅ NEW: Create departure allocations for a departure order
+  getAvailableInventoryForDeparture, // ✅ NEW: Get available inventory for departure allocation (FIFO-based)
+  getSuggestedAllocationForProduct, // ✅ NEW: Helper function to suggest optimal allocation
+  autoDispatchDepartureOrder, // ✅ NEW: Auto-dispatch with FIFO+Expiry (bypasses allocation step)
 };

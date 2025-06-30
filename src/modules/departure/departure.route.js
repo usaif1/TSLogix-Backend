@@ -23,6 +23,9 @@ router.post("/comprehensive-orders", departureController.createComprehensiveDepa
 // ✅ NEW: Get comprehensive departure orders
 router.get("/comprehensive-orders", departureController.getComprehensiveDepartureOrders);
 
+// ✅ NEW: Get single comprehensive departure order by order number
+router.get("/comprehensive-orders/:orderNumber", departureController.getComprehensiveDepartureOrderByNumber);
+
 // ✅ NEW: Approval workflow endpoints (WAREHOUSE_INCHARGE/ADMIN only)
 router.post("/departure-orders/:departureOrderId/approve", departureController.approveDepartureOrder);
 router.post("/departure-orders/:departureOrderId/reject", departureController.rejectDepartureOrder);
@@ -30,6 +33,7 @@ router.post("/departure-orders/:departureOrderId/request-revision", departureCon
 
 // ✅ NEW: Dispatch endpoints (WAREHOUSE_INCHARGE/ADMIN only) - separate from approval
 router.post("/departure-orders/:departureOrderId/dispatch", departureController.dispatchDepartureOrder);
+router.post("/departure-orders/:departureOrderId/auto-dispatch", departureController.autoDispatchDepartureOrder);
 router.post("/departure-orders/batch-dispatch", departureController.batchDispatchDepartureOrders);
 
 // ✅ ENHANCED: EXPIRY-BASED FIFO Product-wise departure flow
@@ -46,5 +50,12 @@ router.get("/inventory-summary", departureController.getDepartureInventorySummar
 // ✅ ENHANCED: Cell validation endpoints with expiry consideration
 router.post("/validate-cell", departureController.validateSelectedCell);
 router.post("/validate-multiple-cells", departureController.validateMultipleCells);
+
+// ✅ NEW: Get audit trail for departure order
+router.get("/departure-orders/:departureOrderId/audit-trail", departureController.getDepartureOrderAuditTrail);
+
+// ✅ NEW: Allocation endpoints (WAREHOUSE_INCHARGE/ADMIN only)
+router.get("/departure-orders/:departureOrderId/available-inventory", departureController.getAvailableInventoryForDeparture);
+router.post("/departure-orders/:departureOrderId/allocate", departureController.createDepartureAllocations);
 
 module.exports = router;

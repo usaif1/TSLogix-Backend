@@ -1959,36 +1959,264 @@ async function getAvailableInventoryForDeparture(filters = {}) {
   });
 }
 
-// ✅ NEW: Get audit trail for inventory operations
+// ✅ UPDATED: Get inventory movement logs with enhanced filtering including dispatch and entry orders
 async function getInventoryAuditTrail(filters = {}) {
-  const { entity_id, user_id, action, limit = 50 } = filters;
+  const { 
+    movement_type,
+    entry_order_id,
+    departure_order_id,
+    product_id,
+    warehouse_id,
+    cell_id,
+    user_id,
+    date_from,
+    date_to,
+    limit = 50,
+    offset = 0
+  } = filters;
 
-  const where = {
-    entity_type: {
-      in: ["InventoryAllocation", "Inventory", "QualityControlTransition"]
+  // Build where clause for filtering
+  const where = {};
+
+  // ✅ NEW: Filter by movement type (ENTRY, DEPARTURE, ADJUSTMENT, etc.)
+  if (movement_type) {
+    where.movement_type = movement_type;
+  }
+
+  // ✅ NEW: Filter by entry order
+  if (entry_order_id) {
+    where.entry_order_id = entry_order_id;
+  }
+
+  // ✅ NEW: Filter by departure order
+  if (departure_order_id) {
+    where.departure_order_id = departure_order_id;
+  }
+
+  // ✅ NEW: Filter by product
+  if (product_id) {
+    where.product_id = product_id;
+  }
+
+  // ✅ NEW: Filter by warehouse
+  if (warehouse_id) {
+    where.warehouse_id = warehouse_id;
+  }
+
+  // ✅ NEW: Filter by cell
+  if (cell_id) {
+    where.cell_id = cell_id;
+  }
+
+  // ✅ NEW: Filter by user
+  if (user_id) {
+    where.user_id = user_id;
+  }
+
+  // ✅ NEW: Filter by date range
+  if (date_from || date_to) {
+    where.timestamp = {};
+    if (date_from) {
+      where.timestamp.gte = new Date(date_from);
     }
-  };
+    if (date_to) {
+      where.timestamp.lte = new Date(date_to);
+    }
+  }
 
-  if (entity_id) where.entity_id = entity_id;
-  if (user_id) where.user_id = user_id;
-  if (action) where.action = action;
-
-  return await prisma.systemAuditLog.findMany({
+  // Get inventory logs with comprehensive relations
+  const logs = await prisma.inventoryLog.findMany({
     where,
     include: {
       user: {
         select: {
+          id: true,
           first_name: true,
           last_name: true,
           email: true,
+          role: {
+            select: {
+              name: true
+            }
+          }
+        }
+      },
+      product: {
+        select: {
+          product_id: true,
+          product_code: true,
+          name: true,
+          manufacturer: true
+        }
+      },
+      entry_order: {
+        select: {
+          entry_order_id: true,
+          entry_order_no: true,
+          registration_date: true,
+          creator: {
+            select: {
+              first_name: true,
+              last_name: true
+            }
+          }
+        }
+      },
+      entry_order_product: {
+        select: {
+          entry_order_product_id: true,
+          lot_series: true,
+          expiration_date: true,
+          manufacturing_date: true
+        }
+      },
+      departure_order: {
+        select: {
+          departure_order_id: true,
+          departure_order_no: true,
+          departure_date_time: true,
+          order_status: true,
+          destination_point: true,
+          transport_type: true
+        }
+      },
+      departure_order_product: {
+        select: {
+          departure_order_product_id: true,
+          requested_quantity: true,
+          requested_weight: true
+        }
+      },
+      warehouse: {
+        select: {
+          warehouse_id: true,
+          name: true,
+          location: true
+        }
+      },
+      cell: {
+        select: {
+          id: true,
+          row: true,
+          bay: true,
+          position: true
+        }
+      },
+      allocation: {
+        select: {
+          allocation_id: true,
+          quality_status: true,
+          product_status: true
         }
       }
     },
     orderBy: {
-      performed_at: 'desc'
+      timestamp: 'desc'
     },
-    take: limit
+    take: parseInt(limit),
+    skip: parseInt(offset)
   });
+
+  // Transform logs with enhanced information
+  const transformedLogs = logs.map(log => ({
+    log_id: log.log_id,
+    timestamp: log.timestamp,
+    movement_type: log.movement_type,
+    
+    // Quantity changes
+    quantity_change: log.quantity_change,
+    package_change: log.package_change,
+    weight_change: parseFloat(log.weight_change),
+    volume_change: log.volume_change ? parseFloat(log.volume_change) : null,
+    
+    // User information
+    user: {
+      id: log.user.id,
+      name: `${log.user.first_name || ''} ${log.user.last_name || ''}`.trim(),
+      email: log.user.email,
+      role: log.user.role?.name
+    },
+    
+    // Product information
+    product: log.product,
+    
+    // Entry order information
+    entry_order: log.entry_order ? {
+      ...log.entry_order,
+      creator_name: log.entry_order.creator ? 
+        `${log.entry_order.creator.first_name || ''} ${log.entry_order.creator.last_name || ''}`.trim() : null
+    } : null,
+    
+    // Entry order product details
+    entry_order_product: log.entry_order_product,
+    
+    // Departure order information
+    departure_order: log.departure_order,
+    departure_order_product: log.departure_order_product,
+    
+    // Location information
+    warehouse: log.warehouse,
+    cell: log.cell ? {
+      ...log.cell,
+      cell_reference: `${log.cell.row}.${String(log.cell.bay).padStart(2, '0')}.${String(log.cell.position).padStart(2, '0')}`
+    } : null,
+    
+    // Allocation information
+    allocation: log.allocation,
+    
+    // Product status
+    product_status: log.product_status,
+    status_code: log.status_code,
+    
+    // Notes
+    notes: log.notes,
+    
+    // Movement classification
+    is_entry: log.movement_type === 'ENTRY',
+    is_departure: log.movement_type === 'DEPARTURE',
+    is_adjustment: log.movement_type === 'ADJUSTMENT',
+    is_transfer: log.movement_type === 'TRANSFER',
+    
+    // Quantity direction
+    is_inbound: log.quantity_change > 0,
+    is_outbound: log.quantity_change < 0,
+    quantity_abs: Math.abs(log.quantity_change),
+    weight_abs: Math.abs(parseFloat(log.weight_change))
+  }));
+
+  // Get total count for pagination
+  const totalCount = await prisma.inventoryLog.count({ where });
+
+  return {
+    logs: transformedLogs,
+    pagination: {
+      total_count: totalCount,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      has_more: (parseInt(offset) + parseInt(limit)) < totalCount
+    },
+    filters_applied: {
+      movement_type,
+      entry_order_id,
+      departure_order_id,
+      product_id,
+      warehouse_id,
+      cell_id,
+      user_id,
+      date_from,
+      date_to
+    },
+    summary: {
+      total_logs: transformedLogs.length,
+      entry_movements: transformedLogs.filter(log => log.is_entry).length,
+      departure_movements: transformedLogs.filter(log => log.is_departure).length,
+      adjustment_movements: transformedLogs.filter(log => log.is_adjustment).length,
+      total_inbound_quantity: transformedLogs.filter(log => log.is_inbound).reduce((sum, log) => sum + log.quantity_abs, 0),
+      total_outbound_quantity: transformedLogs.filter(log => log.is_outbound).reduce((sum, log) => sum + log.quantity_abs, 0),
+      total_inbound_weight: transformedLogs.filter(log => log.is_inbound).reduce((sum, log) => sum + log.weight_abs, 0),
+      total_outbound_weight: transformedLogs.filter(log => log.is_outbound).reduce((sum, log) => sum + log.weight_abs, 0)
+    }
+  };
 }
 
 // ✅ NEW: Validate synchronization across the entire inventory system
