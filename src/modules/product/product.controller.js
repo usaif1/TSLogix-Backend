@@ -8,6 +8,11 @@ async function createProduct(req, res) {
     const productData = req.body;
     const userId = req.user?.id;
     const userRole = req.user?.role;
+    const files = req.files; // For multipart/form-data with file uploads
+
+    console.log("📝 Creating product with potential documents...");
+    console.log("Product data:", productData);
+    console.log("Files received:", files ? files.length : 0);
 
     // ✅ LOG: Product creation process started
     await req.logEvent(
@@ -43,6 +48,108 @@ async function createProduct(req, res) {
     );
 
     const product = await ProductService.createProduct(productData, userId, userRole);
+
+    // ✅ NEW: If files are uploaded, process document uploads
+    if (files && files.length > 0 && product) {
+      console.log(`📎 Processing ${files.length} document uploads for product ${product.product_id}`);
+      
+      const { uploadDocument, validateFile } = require("../../utils/supabase");
+      const { PrismaClient } = require("@prisma/client");
+      const prisma = new PrismaClient();
+      // Parse document types if it's a string
+      let documentTypes = productData.document_types || [];
+      if (typeof documentTypes === 'string') {
+        try {
+          documentTypes = JSON.parse(documentTypes);
+        } catch (e) {
+          console.log('Failed to parse document_types, using as single type:', documentTypes);
+          documentTypes = [documentTypes];
+        }
+      }
+      
+      const uploadResults = [];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const documentType = Array.isArray(documentTypes) 
+          ? (documentTypes[i] || 'OTRO') 
+          : (documentTypes || 'OTRO');
+
+        // Validate file
+        const validation = validateFile(file.originalname, file.size);
+        if (!validation.valid) {
+          uploadResults.push({
+            filename: file.originalname,
+            success: false,
+            error: validation.error
+          });
+          continue;
+        }
+
+        // Upload to Supabase
+        const uploadResult = await uploadDocument(
+          file.buffer,
+          file.originalname,
+          'product',
+          product.product_id,
+          documentType,
+          userId
+        );
+
+        uploadResults.push({
+          filename: file.originalname,
+          ...uploadResult
+        });
+      }
+
+      // Update product with document information
+      const successfulUploads = uploadResults.filter(r => r.success);
+      if (successfulUploads.length > 0) {
+        const documentMetadata = successfulUploads.map(upload => ({
+          file_name: upload.file_name,
+          file_path: upload.file_path,
+          public_url: upload.public_url,
+          document_type: upload.document_type,
+          uploaded_by: upload.uploaded_by,
+          uploaded_at: upload.uploaded_at,
+          file_size: upload.file_size,
+          content_type: upload.content_type
+        }));
+
+        // Update product with documents
+        await prisma.product.update({
+          where: { product_id: product.product_id },
+          data: {
+            uploaded_documents: documentMetadata
+          }
+        });
+
+        // Log document upload activity
+        await req.logEvent(
+          'DOCUMENTOS_SUBIDOS_CREACION_PRODUCTO',
+          'Producto',
+          product.product_id,
+          `Se subieron ${successfulUploads.length} documentos durante la creación del producto ${product.name}`,
+          null,
+          {
+            producto_id: product.product_id,
+            producto_nombre: product.name,
+            producto_codigo: product.product_code,
+            documentos_subidos: successfulUploads.length,
+            tipos_documento: documentMetadata.map(d => d.document_type),
+            usuario_id: userId
+          }
+        );
+      }
+
+      // Add upload results to response
+      product.document_uploads = {
+        total_files: files.length,
+        successful_uploads: successfulUploads.length,
+        failed_uploads: uploadResults.filter(r => !r.success).length,
+        upload_details: uploadResults
+      };
+    }
 
     // ✅ LOG: Successful product creation
     await req.logEvent(

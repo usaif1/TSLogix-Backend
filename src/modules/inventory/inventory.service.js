@@ -885,18 +885,19 @@ async function getClientAssignedCells(warehouseId, userId) {
 }
 
 /**
- * Get inventory summary by product and location with movement logs including departures
+ * ✅ ENHANCED: Get comprehensive inventory summary including current inventory + dispatch history
  */
 async function getInventorySummary(filters = {}) {
-  const { warehouse_id, product_id, status, include_logs = true } = filters;
+  const { warehouse_id, product_id, status, include_logs = true, include_dispatch_history = true } = filters;
 
-  const where = {};
-  if (warehouse_id) where.warehouse_id = warehouse_id;
-  if (product_id) where.product_id = product_id;
-  if (status) where.status = status;
+  // ✅ SECTION 1: CURRENT INVENTORY (existing functionality)
+  const inventoryWhere = {};
+  if (warehouse_id) inventoryWhere.warehouse_id = warehouse_id;
+  if (product_id) inventoryWhere.product_id = product_id;
+  if (status) inventoryWhere.status = status;
 
-  const inventory = await prisma.inventory.findMany({
-    where,
+  const currentInventory = await prisma.inventory.findMany({
+    where: inventoryWhere,
     select: {
       inventory_id: true,
       current_quantity: true,
@@ -957,7 +958,7 @@ async function getInventorySummary(filters = {}) {
             },
           },
 
-          // ✅ NEW: Include departure allocations to get departure order info
+          // ✅ Include departure allocations to get departure order info
           departureAllocations: {
             select: {
               allocation_id: true,
@@ -990,14 +991,229 @@ async function getInventorySummary(filters = {}) {
     ],
   });
 
-  // If logs requested, get inventory movement logs for each item
+  // ✅ SECTION 2: DISPATCH HISTORY (what you requested)
+  let dispatchHistory = [];
+  let completedDepartureOrders = [];
+  
+  if (include_dispatch_history === true || include_dispatch_history === 'true') {
+    // Get historical dispatch records from inventory logs
+    const dispatchLogsWhere = {
+      movement_type: 'DEPARTURE',
+      departure_order_id: { not: null },
+    };
+    if (warehouse_id) dispatchLogsWhere.warehouse_id = warehouse_id;
+    if (product_id) dispatchLogsWhere.product_id = product_id;
+
+    const dispatchLogs = await prisma.inventoryLog.findMany({
+      where: dispatchLogsWhere,
+      select: {
+        log_id: true,
+        timestamp: true,
+        movement_type: true,
+        quantity_change: true,
+        package_change: true,
+        weight_change: true,
+        volume_change: true,
+        notes: true,
+        
+        // Product info
+        product_id: true,
+        product: {
+          select: {
+            product_id: true,
+            product_code: true,
+            name: true,
+            manufacturer: true,
+          }
+        },
+        
+        // Location info
+        warehouse_id: true,
+        cell_id: true,
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+          }
+        },
+        cell: {
+          select: {
+            id: true,
+            row: true,
+            bay: true,
+            position: true,
+          }
+        },
+        
+        // Departure order info
+        departure_order_id: true,
+        departure_order_product_id: true,
+        departure_order: {
+          select: {
+            departure_order_id: true,
+            departure_order_no: true,
+            departure_date_time: true,
+            order_status: true,
+            dispatch_status: true,
+            destination_point: true,
+            transport_type: true,
+            carrier_name: true,
+            dispatched_at: true,
+            dispatched_by: true,
+            customer: {
+              select: {
+                name: true,
+              }
+            },
+            client: {
+              select: {
+                company_name: true,
+                first_names: true,
+                last_name: true,
+              }
+            },
+            dispatcher: {
+              select: {
+                first_name: true,
+                last_name: true,
+              }
+            }
+          }
+        },
+        
+        // User who performed dispatch
+        user_id: true,
+        user: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        }
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 1000, // Limit for performance
+    });
+
+    // Transform dispatch logs into readable format
+    dispatchHistory = dispatchLogs.map(log => ({
+      ...log,
+      cell_reference: log.cell ? `${log.cell.row}.${String(log.cell.bay).padStart(2, '0')}.${String(log.cell.position).padStart(2, '0')}` : 'Unknown',
+      dispatched_quantity: Math.abs(log.quantity_change || 0),
+      dispatched_weight: Math.abs(log.weight_change || 0),
+      dispatched_by_name: log.user ? `${log.user.first_name || ''} ${log.user.last_name || ''}`.trim() : 'Unknown',
+      dispatcher_name: log.departure_order?.dispatcher ? `${log.departure_order.dispatcher.first_name || ''} ${log.departure_order.dispatcher.last_name || ''}`.trim() : 'Unknown',
+      customer_name: log.departure_order?.customer?.name || 'Unknown',
+      client_name: log.departure_order?.client ? 
+        `${log.departure_order.client.company_name || ''} ${log.departure_order.client.first_names || ''} ${log.departure_order.client.last_name || ''}`.trim() : 
+        'Unknown',
+    }));
+
+    // Get completed departure orders summary
+    const departureOrdersWhere = {
+      order_status: { in: ['COMPLETED', 'PARTIALLY_DISPATCHED'] },
+      dispatch_status: { in: ['DISPATCHED', 'PARTIALLY_DISPATCHED'] },
+    };
+    if (warehouse_id) {
+      departureOrdersWhere.warehouse_id = warehouse_id;
+    }
+
+    completedDepartureOrders = await prisma.departureOrder.findMany({
+      where: departureOrdersWhere,
+      select: {
+        departure_order_id: true,
+        departure_order_no: true,
+        order_status: true,
+        dispatch_status: true,
+        registration_date: true,
+        departure_date_time: true,
+        dispatched_at: true,
+        destination_point: true,
+        transport_type: true,
+        carrier_name: true,
+        total_weight: true,
+        total_volume: true,
+        total_pallets: true,
+        
+        customer: {
+          select: {
+            name: true,
+          }
+        },
+        client: {
+          select: {
+            company_name: true,
+            first_names: true,
+            last_name: true,
+          }
+        },
+        warehouse: {
+          select: {
+            warehouse_id: true,
+            name: true,
+          }
+        },
+        dispatcher: {
+          select: {
+            first_name: true,
+            last_name: true,
+          }
+        },
+        
+        // Include products that were dispatched
+        products: {
+          select: {
+            departure_order_product_id: true,
+            product_code: true,
+            requested_quantity: true,
+            requested_packages: true,
+            requested_weight: true,
+            dispatched_quantity: true,
+            dispatched_packages: true,
+            dispatched_weight: true,
+            remaining_quantity: true,
+            remaining_packages: true,
+            remaining_weight: true,
+            product: {
+              select: {
+                product_id: true,
+                product_code: true,
+                name: true,
+                manufacturer: true,
+              }
+            }
+          }
+        }
+      },
+      orderBy: { dispatched_at: 'desc' },
+      take: 500, // Limit for performance
+    });
+
+    // Transform completed departure orders
+    completedDepartureOrders = completedDepartureOrders.map(order => ({
+      ...order,
+      dispatcher_name: order.dispatcher ? `${order.dispatcher.first_name || ''} ${order.dispatcher.last_name || ''}`.trim() : 'Unknown',
+      customer_name: order.customer?.name || 'Unknown',
+      client_name: order.client ? 
+        `${order.client.company_name || ''} ${order.client.first_names || ''} ${order.client.last_name || ''}`.trim() : 
+        'Unknown',
+      total_products: order.products.length,
+      total_requested_quantity: order.products.reduce((sum, p) => sum + (p.requested_quantity || 0), 0),
+      total_dispatched_quantity: order.products.reduce((sum, p) => sum + (p.dispatched_quantity || 0), 0),
+      total_remaining_quantity: order.products.reduce((sum, p) => sum + (p.remaining_quantity || 0), 0),
+      is_fully_dispatched: order.products.every(p => (p.remaining_quantity || 0) === 0),
+      is_partially_dispatched: order.products.some(p => (p.dispatched_quantity || 0) > 0 && (p.remaining_quantity || 0) > 0),
+    }));
+  }
+
+  // ✅ SECTION 3: PROCESS CURRENT INVENTORY with movement logs (existing functionality)
+  let processedCurrentInventory = [];
+  
   if (include_logs === true || include_logs === 'true') {
-    const enrichedInventory = await Promise.all(
-      inventory.map(async (item) => {
-        // ✅ UPDATED: Get departure order details from departure allocations
+    processedCurrentInventory = await Promise.all(
+      currentInventory.map(async (item) => {
+        // Get departure order details from departure allocations
         let departureOrderDetails = null;
         if (item.allocation?.departureAllocations && item.allocation.departureAllocations.length > 0) {
-          // Use the first departure allocation's order details
           departureOrderDetails = item.allocation.departureAllocations[0].departure_order;
         }
 
@@ -1028,16 +1244,16 @@ async function getInventorySummary(filters = {}) {
             departure_order_id: true,
             departure_order_product_id: true,
             
-            // ✅ NEW: Add departure order details
+            // Departure order details
             departure_order: {
               select: {
                 departure_order_no: true,
-                departure_date_time: true, // ✅ FIXED: Use correct field name
+                departure_date_time: true,
                 order_status: true,
               }
             },
             
-            // ✅ NEW: Add entry order details  
+            // Entry order details  
             entry_order: {
               select: {
                 entry_order_no: true,
@@ -1069,33 +1285,66 @@ async function getInventorySummary(filters = {}) {
         return {
           ...item,
           cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
-          departure_order: departureOrderDetails, // ✅ UPDATED: Get from departure allocations
+          departure_order: departureOrderDetails,
           movement_logs: movementLogs,
           movement_summary: movementSummary,
         };
       })
     );
-
-    return enrichedInventory;
-  }
-
-  // Return basic inventory without logs but with departure order details
-  const enrichedBasicInventory = inventory.map(item => {
-    // ✅ UPDATED: Get departure order details from departure allocations
+  } else {
+    // Basic current inventory without logs
+    processedCurrentInventory = currentInventory.map(item => {
     let departureOrderDetails = null;
     if (item.allocation?.departureAllocations && item.allocation.departureAllocations.length > 0) {
-      // Use the first departure allocation's order details
       departureOrderDetails = item.allocation.departureAllocations[0].departure_order;
     }
 
     return {
       ...item,
       cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
-      departure_order: departureOrderDetails, // ✅ UPDATED: Get from departure allocations
+        departure_order: departureOrderDetails,
     };
   });
+  }
 
-  return enrichedBasicInventory;
+  // ✅ SECTION 4: RETURN COMPREHENSIVE SUMMARY
+  const summaryStats = {
+    current_inventory: {
+      total_items: processedCurrentInventory.length,
+      total_quantity: processedCurrentInventory.reduce((sum, item) => sum + (item.current_quantity || 0), 0),
+      total_weight: processedCurrentInventory.reduce((sum, item) => sum + parseFloat(item.current_weight || 0), 0),
+      unique_products: [...new Set(processedCurrentInventory.map(item => item.product.product_id))].length,
+      warehouses: [...new Set(processedCurrentInventory.map(item => item.warehouse.warehouse_id))].length,
+    },
+    dispatch_history: {
+      total_dispatch_events: dispatchHistory.length,
+      total_dispatched_quantity: dispatchHistory.reduce((sum, log) => sum + (log.dispatched_quantity || 0), 0),
+      total_dispatched_weight: dispatchHistory.reduce((sum, log) => sum + (log.dispatched_weight || 0), 0),
+      unique_departure_orders: [...new Set(dispatchHistory.map(log => log.departure_order_id).filter(Boolean))].length,
+      unique_dispatched_products: [...new Set(dispatchHistory.map(log => log.product_id))].length,
+    },
+    completed_orders: {
+      total_orders: completedDepartureOrders.length,
+      fully_completed: completedDepartureOrders.filter(order => order.is_fully_dispatched).length,
+      partially_completed: completedDepartureOrders.filter(order => order.is_partially_dispatched).length,
+      total_order_quantity: completedDepartureOrders.reduce((sum, order) => sum + (order.total_dispatched_quantity || 0), 0),
+    }
+  };
+
+  return {
+    summary_stats: summaryStats,
+    current_inventory: processedCurrentInventory,
+    dispatch_history: dispatchHistory,
+    completed_departure_orders: completedDepartureOrders,
+    filters_applied: {
+      warehouse_id: warehouse_id || 'ALL',
+      product_id: product_id || 'ALL', 
+      status: status || 'ALL',
+      include_logs: include_logs,
+      include_dispatch_history: include_dispatch_history,
+    },
+    generated_at: new Date().toISOString(),
+  };
 }
 
 /** Fetch all warehouses */

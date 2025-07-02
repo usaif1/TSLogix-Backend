@@ -97,6 +97,7 @@ async function createBaseLookupTables() {
         { name: "Dispositivos Médicos", description: "Medical devices and equipment" },
         { name: "Productos Farmacéuticos", description: "Pharmaceutical products and medications" },
         { name: "Productos Sanitarios", description: "Sanitary and hygiene products" },
+        { name: "Otro", description: "Other products and miscellaneous items" },
       ],
       skipDuplicates: true,
     });
@@ -107,6 +108,7 @@ async function createBaseLookupTables() {
     const dispositivosMedicos = categories.find(c => c.name === "Dispositivos Médicos");
     const productosFarmaceuticos = categories.find(c => c.name === "Productos Farmacéuticos");
     const productosSanitarios = categories.find(c => c.name === "Productos Sanitarios");
+    const otro = categories.find(c => c.name === "Otro");
 
     // ✅ NEW: Product Subcategories1
     console.log("Creating product subcategories1...");
@@ -149,6 +151,16 @@ async function createBaseLookupTables() {
         skipDuplicates: true,
       });
     }
+
+    // Otro - Subcategory 1
+    if (otro) {
+      await prisma.productSubCategory1.createMany({
+        data: [
+          { name: "Otro", description: "Other products and miscellaneous items", category_id: otro.category_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
     console.log("✅ Product subcategories1 created");
 
     // Get subcategories1 for subcategory2 creation
@@ -171,6 +183,9 @@ async function createBaseLookupTables() {
     const productosCosmeticos = subcategories1.find(s => s.name === "Productos Cosméticos");
     const productosHigieneDomestica = subcategories1.find(s => s.name === "Productos de Higiene Doméstica");
     const articulosSanitarios = subcategories1.find(s => s.name === "Artículos Sanitarios");
+    
+    // Otro subcategories
+    const otroSubcategory1 = subcategories1.find(s => s.name === "Otro");
 
     // ✅ NEW: Product Subcategories2
     console.log("Creating product subcategories2...");
@@ -326,6 +341,16 @@ async function createBaseLookupTables() {
           { name: "Productos Femeninos", description: "Feminine hygiene products", subcategory1_id: articulosSanitarios.subcategory1_id },
           { name: "Productos Infantiles", description: "Baby and infant hygiene products", subcategory1_id: articulosSanitarios.subcategory1_id },
           { name: "Productos Geriátricos", description: "Geriatric and elderly care products", subcategory1_id: articulosSanitarios.subcategory1_id },
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // Otro - Subcategory 2
+    if (otroSubcategory1) {
+      await prisma.productSubCategory2.createMany({
+        data: [
+          { name: "Otro", description: "Other products and miscellaneous items", subcategory1_id: otroSubcategory1.subcategory1_id },
         ],
         skipDuplicates: true,
       });

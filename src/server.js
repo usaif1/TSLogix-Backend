@@ -1,4 +1,5 @@
 require("module-alias/register");
+require("dotenv").config(); // ✅ Load environment variables
 const express = require("express");
 const cors = require("cors");
 const app = express();
@@ -32,6 +33,55 @@ const { eventLoggerMiddleware, errorLoggerMiddleware } = require("@/middlewares/
 // Apply event logging middleware globally
 app.use(eventLoggerMiddleware);
 
+// ✅ NEW: Test endpoint for Supabase debugging
+app.get("/test-supabase", async (req, res) => {
+  try {
+    const { testSupabaseConnection } = require("./utils/supabase");
+    const result = await testSupabaseConnection();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// ✅ NEW: Test endpoint for comprehensive departure order with documents
+app.get("/test-comprehensive-departure", async (req, res) => {
+  try {
+    const multer = require("multer");
+    const upload = multer({ storage: multer.memoryStorage() });
+    
+    res.json({
+      success: true,
+      message: "Comprehensive departure order endpoint ready",
+      endpoints: {
+        "POST /departure/comprehensive-orders": "Create comprehensive departure order with documents",
+        "GET /departure/comprehensive-orders": "Get all comprehensive departure orders",
+        "GET /departure/comprehensive-orders/:orderNumber": "Get specific comprehensive departure order"
+      },
+      document_upload: {
+        field_name: "documents",
+        max_files: 10,
+        max_size: "10MB",
+        supported_types: ["PDF", "DOC", "DOCX", "XLS", "XLSX", "JPG", "PNG", "GIF", "TXT", "CSV"]
+      },
+      form_fields: {
+        required: ["departure_order_no", "document_date", "departure_date_time"],
+        optional: ["document_types", "observation", "total_weight", "total_pallets"]
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // routes
 const authRoutes = require("@/modules/auth/auth.route");
 const organisationRoutes = require("@/modules/organisation/organisation.route");
@@ -48,6 +98,9 @@ const warehouseRoutes = require("@/modules/warehouse/warehouse.route");
 const clientRoutes = require("@/modules/client/client.route");
 const eventLogRoutes = require("@/modules/eventlog/eventlog.route");
 
+// ✅ NEW: Document management routes for file uploads/downloads
+const documentRoutes = require("./modules/departure/document.route");
+
 // Mount your module routes
 app.use("/auth", authRoutes);
 app.use("/organisation", organisationRoutes);
@@ -63,8 +116,23 @@ app.use("/inventory", authenticateToken, inventoryRoutes);
 app.use("/warehouse", authenticateToken, warehouseRoutes);
 app.use("/clients", authenticateToken, clientRoutes); // ✅ NEW: Mount client routes
 app.use("/eventlogs", authenticateToken, eventLogRoutes); // ✅ NEW: Mount event log routes
-// const indexRouter = require("@/routes");
-// app.use("/", indexRouter);
+
+// ✅ ENHANCED: Mount all routes with proper prefixes
+app.use("/auth", authRoutes);
+app.use("/entry", entryRoutes);
+app.use("/departure", departureRoutes);
+app.use("/warehouse", warehouseRoutes);
+app.use("/product", productRoutes);
+app.use("/inventory", inventoryRoutes);
+app.use("/audit", auditRoutes);
+app.use("/events", eventLogRoutes);
+app.use("/client", clientRoutes);
+app.use("/organisation", organisationRoutes);
+app.use("/supplier", supplierRoutes);
+app.use("/maintenance", maintenanceRoutes);
+
+// ✅ NEW: Document management endpoints for all entities
+app.use("/documents", documentRoutes);
 
 // Apply error logging middleware
 app.use(errorLoggerMiddleware);

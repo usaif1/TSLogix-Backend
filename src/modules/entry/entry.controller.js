@@ -1,13 +1,20 @@
 const entryService = require("./entry.service");
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient();
 
 // Create a new Entry Order with multiple products (updated for new schema)
 async function createEntryOrder(req, res) {
   const entryData = req.body;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const files = req.files; // For multipart/form-data with file uploads
+
+  console.log("📝 Creating entry order with potential documents...");
+  console.log("Entry data:", entryData);
+  console.log("Files received:", files ? files.length : 0);
 
   // ✅ FIXED: Get organisation_id from JWT token instead of request body
   const userOrgId = req.user?.organisation_id;
-  const userId = req.user?.id;
-  const userRole = req.user?.role;
 
   // ✅ NEW: Restrict entry order creation to CLIENT users only
   if (userRole !== "CLIENT") {
@@ -281,11 +288,106 @@ async function createEntryOrder(req, res) {
       }
     );
 
-    return res.status(201).json({
-      message: "Entry order created successfully",
-      entryOrder: result.entryOrder,
-      products: result.products,
-    });
+    // ✅ NEW: If files are uploaded, process document uploads
+    if (files && files.length > 0 && result.entryOrder) {
+      console.log(`📎 Processing ${files.length} document uploads for entry order ${result.entryOrder.entry_order_id}`);
+      
+      const { uploadDocument, validateFile } = require("../../utils/supabase");
+      // Parse document types if it's a string
+      let documentTypes = entryData.document_types || [];
+      if (typeof documentTypes === 'string') {
+        try {
+          documentTypes = JSON.parse(documentTypes);
+        } catch (e) {
+          console.log('Failed to parse document_types, using as single type:', documentTypes);
+          documentTypes = [documentTypes];
+        }
+      }
+      
+      const uploadResults = [];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const documentType = Array.isArray(documentTypes) 
+          ? (documentTypes[i] || 'OTRO') 
+          : (documentTypes || 'OTRO');
+
+        // Validate file
+        const validation = validateFile(file.originalname, file.size);
+        if (!validation.valid) {
+          uploadResults.push({
+            filename: file.originalname,
+            success: false,
+            error: validation.error
+          });
+          continue;
+        }
+
+        // Upload to Supabase
+        const uploadResult = await uploadDocument(
+          file.buffer,
+          file.originalname,
+          'entry-order',
+          result.entryOrder.entry_order_id,
+          documentType,
+          userId
+        );
+
+        uploadResults.push({
+          filename: file.originalname,
+          ...uploadResult
+        });
+      }
+
+      // Update entry order with document information
+      const successfulUploads = uploadResults.filter(r => r.success);
+      if (successfulUploads.length > 0) {
+        const documentMetadata = successfulUploads.map(upload => ({
+          file_name: upload.file_name,
+          file_path: upload.file_path,
+          public_url: upload.public_url,
+          document_type: upload.document_type,
+          uploaded_by: upload.uploaded_by,
+          uploaded_at: upload.uploaded_at,
+          file_size: upload.file_size,
+          content_type: upload.content_type
+        }));
+
+        // Update entry order with documents
+        await prisma.entryOrder.update({
+          where: { entry_order_id: result.entryOrder.entry_order_id },
+          data: {
+            uploaded_documents: documentMetadata
+          }
+        });
+
+        // Log document upload activity
+        await req.logEvent(
+          'DOCUMENTOS_SUBIDOS_CREACION_ORDEN',
+          'OrdenDeEntrada',
+          result.entryOrder.entry_order_id,
+          `Se subieron ${successfulUploads.length} documentos durante la creación de la orden de entrada ${result.entryOrder.entry_order_no}`,
+          null,
+          {
+            orden_entrada_id: result.entryOrder.entry_order_id,
+            orden_entrada_no: result.entryOrder.entry_order_no,
+            documentos_subidos: successfulUploads.length,
+            tipos_documento: documentMetadata.map(d => d.document_type),
+            usuario_id: userId
+          }
+        );
+      }
+
+      // Add upload results to response
+      result.document_uploads = {
+        total_files: files.length,
+        successful_uploads: successfulUploads.length,
+        failed_uploads: uploadResults.filter(r => !r.success).length,
+        upload_details: uploadResults
+      };
+    }
+
+    return res.status(201).json(result);
   } catch (error) {
     console.error("Error creating entry order:", error);
     

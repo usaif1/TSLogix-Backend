@@ -94,12 +94,13 @@ enum OrderStatusEntry {
 }
 
 enum OrderStatusDeparture {
-  PENDING       // Created by client/warehouse, waiting for approval
-  APPROVED      // Approved by warehouse_incharge/admin, ready for dispatch
-  REVISION      // Needs changes, can be edited
-  REJECTED      // Rejected by warehouse_incharge/admin
-  DISPATCHED    // Actually dispatched from warehouse
-  COMPLETED     // Fully completed
+  PENDING             // Created by client/warehouse, waiting for approval
+  APPROVED            // Approved by warehouse_incharge/admin, ready for dispatch
+  REVISION            // Needs changes, can be edited
+  REJECTED            // Rejected by warehouse_incharge/admin
+  PARTIALLY_DISPATCHED // Partially dispatched from warehouse
+  DISPATCHED          // Actually dispatched from warehouse (deprecated, use COMPLETED)
+  COMPLETED           // Fully completed dispatch
 }
 
 enum PresentationType {
@@ -202,6 +203,7 @@ enum MovementType {
 enum InventoryStatus {
   AVAILABLE
   RESERVED
+  HOLD              // Inventory held for partial dispatch remaining quantities
   DAMAGED
   DEPLETED
   EXPIRED
@@ -263,6 +265,8 @@ enum SystemAction {
   DEPARTURE_ORDER_PRODUCT_UPDATED
   DEPARTURE_ORDER_PRODUCT_REMOVED
   DEPARTURE_ORDER_DISPATCHED
+  DEPARTURE_ORDER_PARTIALLY_DISPATCHED
+  DEPARTURE_ORDER_DISPATCH_COMPLETED
   
   // Inventory Management
   INVENTORY_ALLOCATED
@@ -272,6 +276,8 @@ enum SystemAction {
   INVENTORY_COUNTED
   INVENTORY_RESERVED
   INVENTORY_RELEASED
+  INVENTORY_HELD
+  INVENTORY_UNHELD
   INVENTORY_DAMAGED
   INVENTORY_RETURNED
   INVENTORY_EXPIRED
@@ -1161,6 +1167,16 @@ model DepartureOrderProduct {
   requested_volume            Decimal?            @db.Decimal(10, 2)
   unit_price                  Decimal?            @db.Decimal(10, 2)
   total_value                 Decimal?            @db.Decimal(10, 2)
+  
+  // ✅ NEW: Partial dispatch tracking
+  dispatched_quantity         Int                 @default(0)
+  dispatched_packages         Int                 @default(0)
+  dispatched_pallets          Int                 @default(0)
+  dispatched_weight           Decimal             @db.Decimal(10, 2) @default(0)
+  dispatched_volume           Decimal?            @db.Decimal(10, 2) @default(0)
+  remaining_quantity          Int                 @default(0) // Computed: requested_quantity - dispatched_quantity
+  remaining_packages          Int                 @default(0) // Computed: requested_packages - dispatched_packages
+  remaining_weight            Decimal             @db.Decimal(10, 2) @default(0) // Computed: requested_weight - dispatched_weight
   
   // Special requirements
   temperature_requirement     TemperatureRangeType @default(AMBIENTE)

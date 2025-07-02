@@ -208,6 +208,11 @@ async function createDepartureOrder(req, res) {
     const departureData = req.body;
     const userId = req.user?.id;
     const userRole = req.user?.role;
+    const files = req.files; // For multipart/form-data with file uploads
+
+    console.log("📝 Creating departure order with potential documents...");
+    console.log("Departure data:", departureData);
+    console.log("Files received:", files ? files.length : 0);
 
     // ✅ SPANISH TRACKING: Inicio de creación de orden
     await req.logEvent(
@@ -246,6 +251,107 @@ async function createDepartureOrder(req, res) {
     );
 
     const result = await departureService.createDepartureOrder(departureData);
+
+    // ✅ NEW: If files are uploaded, process document uploads
+    if (files && files.length > 0 && result.departure_order) {
+      console.log(`📎 Processing ${files.length} document uploads for departure order ${result.departure_order.departure_order_id}`);
+      
+      const { uploadDocument, validateFile } = require("../../utils/supabase");
+      const { PrismaClient } = require("@prisma/client");
+      const prisma = new PrismaClient();
+      // Parse document types if it's a string
+      let documentTypes = departureData.document_types || [];
+      if (typeof documentTypes === 'string') {
+        try {
+          documentTypes = JSON.parse(documentTypes);
+        } catch (e) {
+          console.log('Failed to parse document_types, using as single type:', documentTypes);
+          documentTypes = [documentTypes];
+        }
+      }
+      
+      const uploadResults = [];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const documentType = Array.isArray(documentTypes) 
+          ? (documentTypes[i] || 'OTRO') 
+          : (documentTypes || 'OTRO');
+
+        // Validate file
+        const validation = validateFile(file.originalname, file.size);
+        if (!validation.valid) {
+          uploadResults.push({
+            filename: file.originalname,
+            success: false,
+            error: validation.error
+          });
+          continue;
+        }
+
+        // Upload to Supabase
+        const uploadResult = await uploadDocument(
+          file.buffer,
+          file.originalname,
+          'departure-order',
+          result.departure_order.departure_order_id,
+          documentType,
+          userId
+        );
+
+        uploadResults.push({
+          filename: file.originalname,
+          ...uploadResult
+        });
+      }
+
+      // Update departure order with document information
+      const successfulUploads = uploadResults.filter(r => r.success);
+      if (successfulUploads.length > 0) {
+        const documentMetadata = successfulUploads.map(upload => ({
+          file_name: upload.file_name,
+          file_path: upload.file_path,
+          public_url: upload.public_url,
+          document_type: upload.document_type,
+          uploaded_by: upload.uploaded_by,
+          uploaded_at: upload.uploaded_at,
+          file_size: upload.file_size,
+          content_type: upload.content_type
+        }));
+
+        // Update departure order with documents
+        await prisma.departureOrder.update({
+          where: { departure_order_id: result.departure_order.departure_order_id },
+          data: {
+            uploaded_documents: documentMetadata
+          }
+        });
+
+        // Log document upload activity
+        await req.logEvent(
+          'DOCUMENTOS_SUBIDOS_CREACION_ORDEN_SALIDA',
+          'OrdenDeSalida',
+          result.departure_order.departure_order_id,
+          `Se subieron ${successfulUploads.length} documentos durante la creación de la orden de salida ${result.departure_order.departure_order_no}`,
+          null,
+          {
+            orden_salida_id: result.departure_order.departure_order_id,
+            orden_salida_no: result.departure_order.departure_order_no,
+            documentos_subidos: successfulUploads.length,
+            tipos_documento: documentMetadata.map(d => d.document_type),
+            usuario_id: userId
+          }
+        );
+      }
+
+      // Add upload results to response
+      result.document_uploads = {
+        total_files: files.length,
+        successful_uploads: successfulUploads.length,
+        failed_uploads: uploadResults.filter(r => !r.success).length,
+        upload_details: uploadResults
+      };
+    }
 
     // ✅ SPANISH TRACKING: Orden creada exitosamente
     await req.logEvent(
@@ -416,6 +522,16 @@ async function approveDepartureOrder(req, res) {
       });
     }
 
+    // ✅ ROLE VALIDATION: Only WAREHOUSE_INCHARGE and ADMIN can approve
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only warehouse incharge or admin can approve departure orders',
+        user_role: userRole,
+        required_roles: ['WAREHOUSE_INCHARGE', 'ADMIN']
+      });
+    }
+
     // ✅ SPANISH TRACKING: Inicio de proceso de aprobación
     await req.logEvent(
       'PROCESO_APROBACION_INICIADO',
@@ -553,6 +669,16 @@ async function rejectDepartureOrder(req, res) {
       });
     }
 
+    // ✅ ROLE VALIDATION: Only WAREHOUSE_INCHARGE and ADMIN can reject
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only warehouse incharge or admin can reject departure orders',
+        user_role: userRole,
+        required_roles: ['WAREHOUSE_INCHARGE', 'ADMIN']
+      });
+    }
+
     // ✅ SPANISH TRACKING: Inicio de proceso de rechazo
     await req.logEvent(
       'PROCESO_RECHAZO_INICIADO',
@@ -682,6 +808,16 @@ async function requestRevisionDepartureOrder(req, res) {
       return res.status(400).json({
         success: false,
         message: "Revision comments are required",
+      });
+    }
+
+    // ✅ ROLE VALIDATION: Only WAREHOUSE_INCHARGE and ADMIN can request revision
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only warehouse incharge or admin can request revisions',
+        user_role: userRole,
+        required_roles: ['WAREHOUSE_INCHARGE', 'ADMIN']
       });
     }
 
@@ -1938,11 +2074,863 @@ async function autoDispatchDepartureOrder(req, res) {
   }
 }
 
+/**
+ * ✅ NEW: Update departure order (CLIENT users only, REVISION status only)
+ */
+async function updateDepartureOrder(req, res) {
+  try {
+    const { departureOrderId } = req.params;
+    const updateData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const files = req.files; // For multipart/form-data with file uploads
+
+    if (!userId) {
+      // ✅ LOG: Authentication failure
+      await req.logEvent(
+        'AUTHENTICATION_FAILED',
+        'DepartureOrder',
+        departureOrderId,
+        `Authentication required for updating departure order ${departureOrderId}`,
+        null,
+        { departure_order_id: departureOrderId, attempted_action: 'UPDATE' },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'AUTH_REQUIRED' }
+      );
+      
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    // ✅ NEW: Restrict departure order updates to CLIENT users only
+    if (userRole !== "CLIENT") {
+      // ✅ LOG: Access denied for update
+      await req.logEvent(
+        'ACCESS_DENIED',
+        'DepartureOrder',
+        departureOrderId,
+        `Access denied: ${userRole} user attempted to update departure order ${departureOrderId}`,
+        null,
+        { 
+          attempted_role: userRole, 
+          required_role: 'CLIENT',
+          departure_order_id: departureOrderId,
+          user_id: userId
+        },
+        { operation_type: 'ACCESS_CONTROL', action_type: 'UPDATE_DENIED' }
+      );
+      
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only CLIENT users can update departure orders.",
+      });
+    }
+
+    // Validate request data
+    if (!updateData || Object.keys(updateData).length === 0) {
+      // ✅ LOG: Empty update data
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'DepartureOrder',
+        departureOrderId,
+        `Empty update data provided for departure order ${departureOrderId}`,
+        null,
+        { 
+          departure_order_id: departureOrderId,
+          user_id: userId,
+          update_data_keys: Object.keys(updateData || {})
+        },
+        { operation_type: 'VALIDATION', action_type: 'EMPTY_UPDATE_DATA' }
+      );
+      
+      return res.status(400).json({
+        success: false,
+        message: "No update data provided",
+      });
+    }
+
+    // Validate that departure_order_no is not being changed
+    if (updateData.departure_order_no && updateData.departure_order_no !== departureOrderId) {
+      // ✅ LOG: Attempt to change order number
+      await req.logEvent(
+        'VALIDATION_FAILED',
+        'DepartureOrder',
+        departureOrderId,
+        `Attempt to change departure order number from ${departureOrderId} to ${updateData.departure_order_no}`,
+        null,
+        { 
+          original_order_id: departureOrderId,
+          attempted_new_order_no: updateData.departure_order_no,
+          user_id: userId
+        },
+        { operation_type: 'VALIDATION', action_type: 'ORDER_NUMBER_CHANGE_DENIED' }
+      );
+      
+      return res.status(400).json({
+        success: false,
+        message: "Departure order number cannot be changed",
+      });
+    }
+
+    // ✅ LOG: Update process started
+    await req.logEvent(
+      'DEPARTURE_ORDER_UPDATE_STARTED',
+      'DepartureOrder',
+      departureOrderId,
+      `Started updating departure order ${departureOrderId}`,
+      null,
+      {
+        departure_order_id: departureOrderId,
+        user_id: userId,
+        user_role: userRole,
+        update_fields: Object.keys(updateData),
+        products_being_updated: updateData.products ? updateData.products.length : 0,
+        update_timestamp: new Date().toISOString(),
+        has_product_changes: !!updateData.products,
+        has_order_details_changes: !!(updateData.total_volume || updateData.total_weight || updateData.total_pallets),
+        has_date_changes: !!(updateData.departure_date_time || updateData.document_date),
+        has_document_changes: !!updateData.uploaded_documents,
+        has_observation_changes: !!updateData.observation,
+        has_transport_changes: !!(updateData.transport_type || updateData.carrier_name || updateData.destination_point)
+      },
+      { operation_type: 'DEPARTURE_ORDER_MANAGEMENT', action_type: 'UPDATE_START' }
+    );
+
+    // Validate product data if provided
+    if (updateData.products && Array.isArray(updateData.products)) {
+      for (let i = 0; i < updateData.products.length; i++) {
+        const product = updateData.products[i];
+        
+        // Check required fields for new products (without departure_order_product_id)
+        if (!product.departure_order_product_id) {
+          if (!product.product_id || !product.product_code || 
+              !product.requested_quantity || !product.requested_weight) {
+            
+            // ✅ LOG: Product validation failure during update
+            await req.logEvent(
+              'PRODUCT_VALIDATION_FAILED',
+              'DepartureOrderProduct',
+              `${departureOrderId}-UPDATE-PRODUCT-${i + 1}`,
+              `Product ${i + 1} validation failed during departure order ${departureOrderId} update`,
+              null,
+              { 
+                departure_order_id: departureOrderId,
+                product_index: i + 1,
+                product_data: product,
+                missing_fields: {
+                  product_id: !product.product_id,
+                  product_code: !product.product_code,
+                  requested_quantity: !product.requested_quantity,
+                  requested_weight: !product.requested_weight
+                },
+                user_id: userId
+              },
+              { operation_type: 'VALIDATION', action_type: 'UPDATE_PRODUCT_VALIDATION' }
+            );
+            
+            return res.status(400).json({
+              success: false,
+              message: `Product ${i + 1}: Missing required fields (product_id, product_code, requested_quantity, requested_weight)`,
+            });
+          }
+        }
+
+        // Validate quantities are positive numbers
+        if (product.requested_quantity !== undefined && product.requested_quantity <= 0) {
+          // ✅ LOG: Quantity validation failure
+          await req.logEvent(
+            'QUANTITY_VALIDATION_FAILED',
+            'DepartureOrderProduct',
+            `${departureOrderId}-UPDATE-PRODUCT-${i + 1}`,
+            `Product ${i + 1} requested quantity validation failed during departure order ${departureOrderId} update`,
+            null,
+            { 
+              departure_order_id: departureOrderId,
+              product_index: i + 1,
+              product_code: product.product_code,
+              invalid_requested_quantity: product.requested_quantity,
+              user_id: userId
+            },
+            { operation_type: 'VALIDATION', action_type: 'UPDATE_QUANTITY_VALIDATION' }
+          );
+          
+          return res.status(400).json({
+            success: false,
+            message: `Product ${i + 1}: Requested quantity must be positive`,
+          });
+        }
+
+        if (product.requested_weight !== undefined && product.requested_weight <= 0) {
+          // ✅ LOG: Weight validation failure
+          await req.logEvent(
+            'QUANTITY_VALIDATION_FAILED',
+            'DepartureOrderProduct',
+            `${departureOrderId}-UPDATE-PRODUCT-${i + 1}`,
+            `Product ${i + 1} requested weight validation failed during departure order ${departureOrderId} update`,
+            null,
+            { 
+              departure_order_id: departureOrderId,
+              product_index: i + 1,
+              product_code: product.product_code,
+              invalid_requested_weight: product.requested_weight,
+              user_id: userId
+            },
+            { operation_type: 'VALIDATION', action_type: 'UPDATE_WEIGHT_VALIDATION' }
+          );
+          
+          return res.status(400).json({
+            success: false,
+            message: `Product ${i + 1}: Requested weight must be positive`,
+          });
+        }
+      }
+    }
+
+    const result = await departureService.updateDepartureOrder(departureOrderId, updateData, userId);
+
+    // ✅ NEW: If files are uploaded, process document uploads
+    if (files && files.length > 0 && result.departure_order) {
+      console.log(`📎 Processing ${files.length} document uploads for updated departure order ${result.departure_order.departure_order_id}`);
+      
+      const { uploadDocument, validateFile } = require("../../utils/supabase");
+      const { PrismaClient } = require("@prisma/client");
+      const prisma = new PrismaClient();
+      
+      // Parse document types if it's a string
+      let documentTypes = updateData.document_types || [];
+      if (typeof documentTypes === 'string') {
+        try {
+          documentTypes = JSON.parse(documentTypes);
+        } catch (e) {
+          console.log('Failed to parse document_types, using as single type:', documentTypes);
+          documentTypes = [documentTypes];
+        }
+      }
+      
+      const uploadResults = [];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const documentType = Array.isArray(documentTypes) 
+          ? (documentTypes[i] || 'OTRO') 
+          : (documentTypes || 'OTRO');
+
+        // Validate file
+        const validation = validateFile(file.originalname, file.size);
+        if (!validation.valid) {
+          uploadResults.push({
+            filename: file.originalname,
+            success: false,
+            error: validation.error
+          });
+          continue;
+        }
+
+        // Upload to Supabase
+        const uploadResult = await uploadDocument(
+          file.buffer,
+          file.originalname,
+          'departure-order',
+          result.departure_order.departure_order_id,
+          documentType,
+          userId
+        );
+
+        uploadResults.push({
+          filename: file.originalname,
+          ...uploadResult
+        });
+      }
+
+      // Update departure order with document information
+      const successfulUploads = uploadResults.filter(r => r.success);
+      if (successfulUploads.length > 0) {
+        const currentDocuments = result.departure_order.uploaded_documents || [];
+        const newDocuments = successfulUploads.map(upload => ({
+          file_name: upload.file_name,
+          file_path: upload.file_path,
+          public_url: upload.public_url,
+          document_type: upload.document_type,
+          uploaded_by: upload.uploaded_by,
+          uploaded_at: upload.uploaded_at,
+          file_size: upload.file_size,
+          content_type: upload.content_type
+        }));
+
+        // Update departure order with documents
+        await prisma.departureOrder.update({
+          where: { departure_order_id: result.departure_order.departure_order_id },
+          data: {
+            uploaded_documents: [...currentDocuments, ...newDocuments]
+          }
+        });
+
+        // Log document upload activity
+        await req.logEvent(
+          'DOCUMENTOS_SUBIDOS_ACTUALIZACION_ORDEN_SALIDA',
+          'OrdenDeSalida',
+          result.departure_order.departure_order_id,
+          `Se subieron ${successfulUploads.length} documentos durante la actualización de la orden de salida ${result.departure_order.departure_order_no}`,
+          null,
+          {
+            orden_salida_id: result.departure_order.departure_order_id,
+            orden_salida_no: result.departure_order.departure_order_no,
+            documentos_subidos: successfulUploads.length,
+            tipos_documento: newDocuments.map(d => d.document_type),
+            usuario_id: userId
+          }
+        );
+
+        // Add document metadata to result
+        result.departure_order.uploaded_documents = [...currentDocuments, ...newDocuments];
+      }
+
+      // Add upload results to response
+      result.document_uploads = {
+        total_files: files.length,
+        successful_uploads: successfulUploads.length,
+        failed_uploads: uploadResults.filter(r => !r.success).length,
+        upload_details: uploadResults
+      };
+    }
+
+    // ✅ LOG: Successful departure order update
+    await req.logEvent(
+      'DEPARTURE_ORDER_UPDATED',
+      'DepartureOrder',
+      result.departure_order.departure_order_id,
+      `Successfully updated departure order ${departureOrderId}`,
+      result.oldValues,
+      result.newValues,
+      { 
+        operation_type: 'DEPARTURE_ORDER_MANAGEMENT', 
+        action_type: 'UPDATE_SUCCESS',
+        business_impact: 'ORDER_MODIFIED_REQUIRES_RE_REVIEW',
+        next_steps: 'AWAITING_ADMIN_RE_REVIEW',
+        changes_summary: {
+          fields_updated: Object.keys(updateData),
+          products_updated: updateData.products ? updateData.products.length : 0,
+          status_reset_to_pending: true,
+          requires_new_review: true
+        }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: `Departure order ${departureOrderId} updated successfully. Status reset to PENDING for re-review.`,
+    });
+  } catch (error) {
+    console.error("Error updating departure order:", error);
+    
+    // ✅ LOG: Update process error
+    await req.logError(error, {
+      controller: 'departure',
+      action: 'updateDepartureOrder',
+      departure_order_id: req.params.departureOrderId,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      update_data_keys: Object.keys(req.body || {}),
+      error_context: 'DEPARTURE_ORDER_UPDATE_FAILED'
+    });
+    
+    // Handle specific business rule errors
+    if (error.message.includes("REVISION") || 
+        error.message.includes("only update your own") ||
+        error.message.includes("not found")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Error updating departure order",
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get approved departure orders for dispatch (similar to cell assignment flow)
+ */
+async function getApprovedDepartureOrdersForDispatch(req, res) {
+  try {
+    const { warehouseId, organisation_id } = req.query;
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    const data = await departureService.getApprovedDepartureOrdersForDispatch(warehouseId || null, userRole, userId, organisation_id || null);
+    
+    return res.status(200).json({ 
+      success: true,
+      message: userRole === "CLIENT" 
+        ? "Approved departure orders for your dispatch fetched successfully"
+        : "Approved departure orders for dispatch fetched successfully", 
+      count: data.length,
+      data,
+      user_role: userRole,
+      filtered_by_client: userRole === "CLIENT",
+      warehouse_filter: warehouseId || "ALL_WAREHOUSES",
+      organisation_filter: organisation_id || "ALL_ORGANISATIONS",
+      dispatch_flow: "APPROVED_ORDER_DISPATCH",
+      includes_orders_without_inventory: true
+    });
+  } catch (error) {
+    console.error("Error in getApprovedDepartureOrdersForDispatch:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Dispatch approved departure order with inventory selection (new flow)
+ */
+async function dispatchApprovedDepartureOrder(req, res) {
+  try {
+    const dispatchData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const files = req.files; // For multipart/form-data with file uploads
+
+    // ✅ ROLE VALIDATION: Only WAREHOUSE_INCHARGE and ADMIN can dispatch
+    if (!['WAREHOUSE_INCHARGE', 'ADMIN'].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only warehouse incharge or admin can dispatch departure orders',
+        user_role: userRole,
+        required_roles: ['WAREHOUSE_INCHARGE', 'ADMIN']
+      });
+    }
+
+    // ✅ Set required fields from authenticated user
+    dispatchData.dispatched_by = userId;
+
+    console.log("🚚 Dispatching approved departure order with inventory selection...");
+    console.log("Dispatch data:", dispatchData);
+    console.log("Inventory selections:", dispatchData.inventory_selections?.length || 0);
+    console.log("Files received:", files ? files.length : 0);
+
+    // ✅ SPANISH TRACKING: Inicio de despacho de orden aprobada
+    await req.logEvent(
+      'DESPACHO_ORDEN_APROBADA_INICIADO',
+      'DespachoOrdenAprobada',
+      dispatchData.departure_order_id,
+      `Iniciando despacho de orden aprobada ${dispatchData.departure_order_id} por ${userRole} - ${dispatchData.inventory_selections?.length || 0} selecciones de inventario`,
+      null,
+      {
+        usuario_id: userId,
+        rol_usuario: userRole,
+        orden_salida_id: dispatchData.departure_order_id,
+        selecciones_inventario: dispatchData.inventory_selections?.length || 0,
+        notas_despacho: dispatchData.dispatch_notes,
+        timestamp_inicio: new Date().toISOString(),
+        metodo_flujo: 'DESPACHO_ORDEN_APROBADA'
+      },
+      { 
+        tipo_operacion: 'DESPACHO_ORDEN_APROBADA', 
+        tipo_accion: 'INICIO_PROCESO',
+        impacto_negocio: 'PROCESO_DESPACHO_ORDEN_APROBADA_INICIADO'
+      }
+    );
+
+    const result = await departureService.dispatchApprovedDepartureOrder(dispatchData, userRole);
+
+    // ✅ NEW: If files are uploaded, process document uploads
+    if (files && files.length > 0 && result.departure_order) {
+      console.log(`📎 Processing ${files.length} document uploads for dispatched order ${result.departure_order.departure_order_id}`);
+      
+      const { uploadDocument, validateFile } = require("../../utils/supabase");
+      const { PrismaClient } = require("@prisma/client");
+      const prisma = new PrismaClient();
+      
+      // Parse document types if it's a string
+      let documentTypes = dispatchData.document_types || [];
+      if (typeof documentTypes === 'string') {
+        try {
+          documentTypes = JSON.parse(documentTypes);
+        } catch (e) {
+          console.log('Failed to parse document_types, using as single type:', documentTypes);
+          documentTypes = [documentTypes];
+        }
+      }
+      
+      const uploadResults = [];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const documentType = Array.isArray(documentTypes) 
+          ? (documentTypes[i] || 'CUSTOMER_DISPATCH_NOTE') 
+          : (documentTypes || 'CUSTOMER_DISPATCH_NOTE');
+
+        // Validate file
+        const validation = validateFile(file.originalname, file.size);
+        if (!validation.valid) {
+          uploadResults.push({
+            filename: file.originalname,
+            success: false,
+            error: validation.error
+          });
+          continue;
+        }
+
+        // Upload to Supabase
+        const uploadResult = await uploadDocument(
+          file.buffer,
+          file.originalname,
+          'departure-order',
+          result.departure_order.departure_order_id,
+          documentType,
+          userId
+        );
+
+        uploadResults.push({
+          filename: file.originalname,
+          ...uploadResult
+        });
+      }
+
+      // Update departure order with document information
+      const successfulUploads = uploadResults.filter(r => r.success);
+      if (successfulUploads.length > 0) {
+        const currentDocuments = result.departure_order.uploaded_documents || [];
+        const newDocuments = successfulUploads.map(upload => ({
+          file_name: upload.file_name,
+          file_path: upload.file_path,
+          public_url: upload.public_url,
+          document_type: upload.document_type,
+          uploaded_by: upload.uploaded_by,
+          uploaded_at: upload.uploaded_at,
+          file_size: upload.file_size,
+          content_type: upload.content_type
+        }));
+
+        // Update departure order with documents
+        await prisma.departureOrder.update({
+          where: { departure_order_id: result.departure_order.departure_order_id },
+          data: {
+            uploaded_documents: [...currentDocuments, ...newDocuments]
+          }
+        });
+
+        // Log document upload activity
+        await req.logEvent(
+          'DOCUMENTOS_SUBIDOS_DESPACHO_ORDEN_APROBADA',
+          'DespachoOrdenAprobada',
+          result.departure_order.departure_order_id,
+          `Se subieron ${successfulUploads.length} documentos durante el despacho de orden aprobada ${result.departure_order.departure_order_no}`,
+          null,
+          {
+            orden_salida_id: result.departure_order.departure_order_id,
+            orden_salida_no: result.departure_order.departure_order_no,
+            documentos_subidos: successfulUploads.length,
+            tipos_documento: newDocuments.map(d => d.document_type),
+            usuario_id: userId,
+            metodo_despacho: 'ORDEN_APROBADA'
+          }
+        );
+      }
+
+      // Add upload results to response
+      result.document_uploads = {
+        total_files: files.length,
+        successful_uploads: successfulUploads.length,
+        failed_uploads: uploadResults.filter(r => !r.success).length,
+        upload_details: uploadResults
+      };
+    }
+
+    // ✅ SPANISH TRACKING: Despacho de orden aprobada completado exitosamente
+    await req.logEvent(
+      'DESPACHO_ORDEN_APROBADA_COMPLETADO',
+      'DespachoOrdenAprobada',
+      result.departure_order.departure_order_id,
+      `Despacho de orden aprobada completado exitosamente - Orden ${result.departure_order.departure_order_no} despachada`,
+      null,
+      {
+        orden_salida_id: result.departure_order.departure_order_id,
+        numero_orden_salida: result.departure_order.departure_order_no,
+        usuario_despachador: userId,
+        rol_despachador: userRole,
+        fecha_despacho: result.departure_order.dispatched_at,
+        metodo_despacho: result.departure_order.dispatch_method,
+        fue_pre_aprobada: result.departure_order.was_pre_approved,
+        resumen_despacho: {
+          productos_totales: result.summary.total_products_dispatched,
+          selecciones_inventario: result.summary.total_inventory_selections,
+          cantidad_total_despachada: result.summary.total_quantity_dispatched,
+          peso_total_despachado: result.summary.total_weight_dispatched,
+          celdas_afectadas: result.summary.cells_affected,
+          celdas_agotadas: result.summary.cells_depleted
+        },
+        informacion_workflow: result.workflow_info
+      },
+      { 
+        tipo_operacion: 'DESPACHO_ORDEN_APROBADA', 
+        tipo_accion: 'DESPACHO_EXITOSO',
+        impacto_negocio: 'ORDEN_APROBADA_DESPACHADA',
+        metodo_flujo: 'DISPATCH_FROM_APPROVED_ORDER'
+      }
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error dispatching approved departure order:", error);
+    
+    // ✅ SPANISH TRACKING: Error en despacho de orden aprobada
+    await req.logEvent(
+      'ERROR_DESPACHO_ORDEN_APROBADA',
+      'DespachoOrdenAprobada',
+      req.body.departure_order_id || 'ERROR_OPERACION',
+      `Error durante despacho de orden aprobada: ${error.message}`,
+      null,
+      {
+        datos_despacho: {
+          orden_salida_id: req.body.departure_order_id,
+          selecciones_inventario: req.body.inventory_selections?.length || 0,
+        },
+        usuario_id: req.user?.id,
+        rol_usuario: req.user?.role,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        fecha_error: new Date().toISOString(),
+        contexto_error: 'DESPACHO_ORDEN_APROBADA_FALLIDO'
+      },
+      { 
+        tipo_operacion: 'DESPACHO_ORDEN_APROBADA', 
+        tipo_accion: 'ERROR_DESPACHO',
+        impacto_negocio: 'DESPACHO_ORDEN_APROBADA_FALLIDO'
+      }
+    );
+    
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get warehouse summary for dispatch selection
+ */
+async function getWarehouseDispatchSummary(req, res) {
+  try {
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    const data = await departureService.getWarehouseDispatchSummary(userRole, userId);
+    
+    return res.status(200).json({ 
+      success: true,
+      message: userRole === "CLIENT" 
+        ? "Warehouse dispatch summary for your assigned products fetched successfully"
+        : "Warehouse dispatch summary fetched successfully", 
+      count: data.length,
+      data,
+      user_role: userRole,
+      filtered_by_client_assignments: userRole === "CLIENT",
+      summary: {
+        total_warehouses: data.length,
+        total_quantity: data.reduce((sum, w) => sum + w.total_quantity, 0),
+        total_weight: data.reduce((sum, w) => sum + w.total_weight, 0),
+        total_products: data.reduce((sum, w) => sum + w.total_products, 0),
+        warehouses_with_inventory: data.filter(w => w.can_dispatch).length,
+      },
+      dispatch_flow: "DIRECT_FROM_INVENTORY"
+    });
+  } catch (error) {
+    console.error("Error in getWarehouseDispatchSummary:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get recalculated FIFO inventory for partial dispatch
+ */
+async function getRecalculatedFifoInventoryForDeparture(req, res) {
+  try {
+    const { departureOrderId, productId } = req.params;
+    const { requestedQuantity } = req.query;
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    if (!departureOrderId || !productId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure Order ID and Product ID are required",
+      });
+    }
+
+    if (!requestedQuantity || isNaN(parseInt(requestedQuantity))) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid requested quantity is required",
+      });
+    }
+    
+    const data = await departureService.getRecalculatedFifoInventoryForDeparture(
+      departureOrderId,
+      productId,
+      parseInt(requestedQuantity),
+      userRole,
+      userId
+    );
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Recalculated FIFO inventory for partial dispatch fetched successfully", 
+      data,
+      departure_order_id: departureOrderId,
+      product_id: productId,
+      requested_quantity: parseInt(requestedQuantity),
+      user_role: userRole,
+      supports_partial_dispatch: true,
+      includes_held_inventory: true,
+    });
+  } catch (error) {
+    console.error("Error in getRecalculatedFifoInventoryForDeparture:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Release held inventory for departure order
+ */
+async function releaseHeldInventoryForDeparture(req, res) {
+  try {
+    const { departureOrderId } = req.params;
+    const { reason } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    if (!departureOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure Order ID is required",
+      });
+    }
+
+    // ✅ SPANISH TRACKING: Inicio de liberación de inventario retenido
+    await req.logEvent(
+      'LIBERACION_INVENTARIO_RETENIDO_INICIADA',
+      'InventarioRetenido',
+      departureOrderId,
+      `Iniciando liberación de inventario retenido para orden de salida ${departureOrderId}`,
+      null,
+      {
+        usuario_id: userId,
+        rol_usuario: userRole,
+        orden_salida_id: departureOrderId,
+        razon_liberacion: reason || 'ORDER_COMPLETION',
+        timestamp_inicio: new Date().toISOString(),
+      },
+      { 
+        tipo_operacion: 'LIBERACION_INVENTARIO_RETENIDO', 
+        tipo_accion: 'INICIO_PROCESO',
+        impacto_negocio: 'PROCESO_LIBERACION_INVENTARIO_INICIADO'
+      }
+    );
+
+    const { PrismaClient } = require("@prisma/client");
+    const prisma = new PrismaClient();
+    
+    const result = await prisma.$transaction(async (tx) => {
+      return await departureService.releaseHeldInventoryForDeparture(
+        tx, 
+        departureOrderId, 
+        userId, 
+        reason || "ORDER_COMPLETION"
+      );
+    });
+
+    // ✅ SPANISH TRACKING: Liberación de inventario completada
+    await req.logEvent(
+      'INVENTARIO_RETENIDO_LIBERADO',
+      'InventarioRetenido',
+      departureOrderId,
+      `Inventario retenido liberado exitosamente para orden de salida ${departureOrderId}`,
+      null,
+      {
+        orden_salida_id: departureOrderId,
+        usuario_liberador: userId,
+        rol_liberador: userRole,
+        razon_liberacion: reason || 'ORDER_COMPLETION',
+        fecha_liberacion: new Date().toISOString(),
+        resumen_liberacion: {
+          items_liberados: result.released_items,
+          cantidad_total_liberada: result.total_quantity_released,
+          peso_total_liberado: result.total_weight_released
+        }
+      },
+      { 
+        tipo_operacion: 'LIBERACION_INVENTARIO_RETENIDO', 
+        tipo_accion: 'LIBERACION_EXITOSA',
+        impacto_negocio: 'INVENTARIO_RETENIDO_LIBERADO'
+      }
+    );
+    
+    return res.status(200).json({ 
+      success: true,
+      message: `Held inventory for departure order ${departureOrderId} released successfully`, 
+      data: result,
+      departure_order_id: departureOrderId,
+      release_reason: reason || "ORDER_COMPLETION",
+      released_by: {
+        user_id: userId,
+        user_role: userRole
+      }
+    });
+  } catch (error) {
+    console.error("Error in releaseHeldInventoryForDeparture:", error);
+    
+    // ✅ SPANISH TRACKING: Error en liberación de inventario
+    await req.logEvent(
+      'ERROR_LIBERACION_INVENTARIO_RETENIDO',
+      'InventarioRetenido',
+      req.params.departureOrderId || 'ERROR_OPERACION',
+      `Error durante liberación de inventario retenido: ${error.message}`,
+      null,
+      {
+        orden_salida_id: req.params.departureOrderId,
+        usuario_id: req.user?.id,
+        rol_usuario: req.user?.role,
+        razon_liberacion: req.body.reason,
+        tipo_error: error.name || 'Error',
+        mensaje_error: error.message,
+        fecha_error: new Date().toISOString(),
+        contexto_error: 'LIBERACION_INVENTARIO_RETENIDO_FALLIDA'
+      },
+      { 
+        tipo_operacion: 'LIBERACION_INVENTARIO_RETENIDO', 
+        tipo_accion: 'ERROR_LIBERACION',
+        impacto_negocio: 'LIBERACION_INVENTARIO_FALLIDA'
+      }
+    );
+    
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
 module.exports = {
   getDepartureFormFields,
   getDepartureExitOptions,
   getAllDepartureOrders,
   createDepartureOrder,
+  updateDepartureOrder,
   getProductsWithInventory,
   getAvailableCellsForProduct,
   validateSelectedCell,
@@ -1952,23 +2940,30 @@ module.exports = {
   getCurrentDepartureOrderNo,
   getFifoLocationsForProduct,
   getSuggestedFifoAllocation,
-  // ✅ NEW: Approval workflow methods
+  // ✅ Approval workflow methods
   approveDepartureOrder,
   rejectDepartureOrder,
   requestRevisionDepartureOrder,
-  // ✅ NEW: Dispatch methods
+  // ✅ Dispatch methods
   dispatchDepartureOrder,
   batchDispatchDepartureOrders,
-  // ✅ NEW: Permissions method
+  // ✅ Permissions method
   getDeparturePermissions,
-  // ✅ NEW: Expiry urgency dashboard
+  // ✅ Expiry urgency dashboard
   getExpiryUrgencyDashboard,
   createComprehensiveDepartureOrder,
   getComprehensiveDepartureOrders,
   getComprehensiveDepartureOrderByNumber,
-  getDepartureOrderAuditTrail, // ✅ NEW: Get audit trail for departure order
+  getDepartureOrderAuditTrail,
   createDepartureAllocations,
   getAvailableInventoryForDeparture,
   autoDispatchDepartureOrder,
+  // ✅ NEW: Corrected dispatch flow methods
+  getApprovedDepartureOrdersForDispatch,
+  dispatchApprovedDepartureOrder,
+  getWarehouseDispatchSummary,
+  // ✅ NEW: Partial dispatch support methods
+  getRecalculatedFifoInventoryForDeparture,
+  releaseHeldInventoryForDeparture,
 };
 

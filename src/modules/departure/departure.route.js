@@ -1,7 +1,38 @@
 const express = require("express");
+const multer = require("multer");
 const departureController = require("./departure.controller");
 
 const router = express.Router();
+
+// Configure multer for file upload (memory storage for direct Supabase upload)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 10 // Maximum 10 files per upload
+  },
+  fileFilter: (req, file, cb) => {
+    // Allowed file types
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'text/plain',
+      'text/csv'
+    ];
+
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type ${file.mimetype} not allowed`), false);
+    }
+  }
+});
 
 // ✅ ENHANCED: Form data endpoints
 router.get("/departure-formfields", departureController.getDepartureFormFields);
@@ -14,11 +45,14 @@ router.get("/expiry-urgency-dashboard", departureController.getExpiryUrgencyDash
 
 // ✅ ENHANCED: Departure order management with approval workflow
 router.get("/departure-orders", departureController.getAllDepartureOrders);
-router.post("/create-departure-order", departureController.createDepartureOrder);
+router.post("/create-departure-order", upload.array('documents', 10), departureController.createDepartureOrder);
 router.get("/departure-orders/:departureOrderId", departureController.getDepartureOrderById);
 
+// ✅ NEW: Update departure order (CLIENT users only, REVISION status only)
+router.put("/departure-orders/:departureOrderId", upload.array('documents', 10), departureController.updateDepartureOrder);
+
 // ✅ NEW: Comprehensive departure order creation
-router.post("/comprehensive-orders", departureController.createComprehensiveDepartureOrder);
+router.post("/comprehensive-orders", upload.array('documents', 10), departureController.createComprehensiveDepartureOrder);
 
 // ✅ NEW: Get comprehensive departure orders
 router.get("/comprehensive-orders", departureController.getComprehensiveDepartureOrders);
@@ -57,5 +91,14 @@ router.get("/departure-orders/:departureOrderId/audit-trail", departureControlle
 // ✅ NEW: Allocation endpoints (WAREHOUSE_INCHARGE/ADMIN only)
 router.get("/departure-orders/:departureOrderId/available-inventory", departureController.getAvailableInventoryForDeparture);
 router.post("/departure-orders/:departureOrderId/allocate", departureController.createDepartureAllocations);
+
+// ✅ NEW: Direct dispatch flow endpoints (similar to cell assignment flow)
+router.get("/approved-departure-orders", departureController.getApprovedDepartureOrdersForDispatch);
+router.get("/warehouse-dispatch-summary", departureController.getWarehouseDispatchSummary);
+router.post("/dispatch-approved-order", upload.array('documents', 10), departureController.dispatchApprovedDepartureOrder);
+
+// ✅ NEW: Partial dispatch support endpoints
+router.get("/departure-orders/:departureOrderId/products/:productId/recalculated-fifo", departureController.getRecalculatedFifoInventoryForDeparture);
+router.post("/departure-orders/:departureOrderId/release-held-inventory", departureController.releaseHeldInventoryForDeparture);
 
 module.exports = router;
