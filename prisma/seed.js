@@ -20,6 +20,7 @@ const {
   ClientType,
   CompanyType,
   EstablishmentType,
+  PackagingType,
 } = require("@prisma/client");
 const { faker } = require("@faker-js/faker");
 const bcrypt = require("bcrypt");
@@ -357,34 +358,7 @@ async function createBaseLookupTables() {
     }
     console.log("✅ Product subcategories2 created");
 
-    // Product Lines
-    console.log("Creating product lines...");
-    await prisma.productLine.createMany({
-      data: [
-        { name: "Scleccionar" },
-        { name: "Disposotivos medicos" },
-        { name: "Productos farmaceuticos" },
-        { name: "Productos Sanitarios" },
-        { name: "Otros" },
-      ],
-      skipDuplicates: true,
-    });
-    console.log("✅ Product lines created");
 
-    // Group Names
-    console.log("Creating group names...");
-    await prisma.groupName.createMany({
-      data: [
-        { name: "Frozen Foods", product_category: "Food" },
-        { name: "Fresh Produce", product_category: "Food" },
-        { name: "Consumer Electronics", product_category: "Electronics" },
-        { name: "Industrial Equipment", product_category: "Equipment" },
-        { name: "Raw Materials", product_category: "Materials" },
-        { name: "Medical Supplies", product_category: "Healthcare" },
-      ],
-      skipDuplicates: true,
-    });
-    console.log("✅ Group names created");
 
     // Temperature Ranges
     console.log("Creating temperature ranges...");
@@ -412,19 +386,6 @@ async function createBaseLookupTables() {
       skipDuplicates: true,
     });
     console.log("✅ Active states created");
-
-    // Customer Types
-    console.log("Creating customer types...");
-    await prisma.customerType.createMany({
-      data: [
-        { name: "Regular", discount_rate: 0.00 },
-        { name: "Premium", discount_rate: 5.00 },
-        { name: "VIP", discount_rate: 10.00 },
-        { name: "Wholesale", discount_rate: 15.00 },
-      ],
-      skipDuplicates: true,
-    });
-    console.log("✅ Customer types created");
 
     // Origins for Entry Orders
     console.log("Creating origins...");
@@ -515,6 +476,10 @@ async function createBaseLookupTables() {
     });
     console.log("✅ Roles created");
 
+
+
+
+
   } catch (error) {
     console.error("❌ Error in createBaseLookupTables:", error);
     throw error;
@@ -528,7 +493,7 @@ async function createUsersAndOrganization() {
     // Create organisations
     const organisations = [
       {
-        name: "TSLogix Corporation",
+        name: "TSLogix Peru",
         address: { street: "123 Main St", city: "Lima", zip: "15001" },
         tax_id: "TAX12345678",
       },
@@ -701,14 +666,12 @@ async function createSuppliersAndCustomers() {
     console.log("✅ Suppliers created");
     
     console.log("Creating customers...");
-    const customerTypes = await prisma.customerType.findMany();
     const activeStates = await prisma.activeState.findMany();
     
     const customers = [];
     for (let i = 0; i < COUNT.CUSTOMERS; i++) {
       customers.push({
         name: faker.company.name(),
-        type_id: faker.helpers.arrayElement(customerTypes).customer_type_id,
         billing_address: {
           street: faker.location.streetAddress(),
           city: faker.location.city(),
@@ -760,7 +723,7 @@ async function createClients() {
       const autoPasswordHash = await bcrypt.hash(autoPassword, 10);
       
       const clientData = {
-        client_type: ClientType.COMMERCIAL,
+        client_type: "JURIDICO",
         
         // Common fields
         email: faker.internet.email({ provider: "comercial.com" }),
@@ -779,14 +742,14 @@ async function createClients() {
         
         // Commercial client fields (all required)
         company_name: companyName,
-        company_type: faker.helpers.arrayElement([CompanyType.PRIVATE, CompanyType.PUBLIC]),
+        company_type: faker.helpers.arrayElement(["PRIVADO", "PUBLICO"]),
         establishment_type: faker.helpers.arrayElement([
-          EstablishmentType.ALMACEN_ESPECIALIZADO,
-          EstablishmentType.BOTICA,
-          EstablishmentType.BOTIQUIN,
-          EstablishmentType.DROGUERIA,
-          EstablishmentType.FARMACIA,
-          EstablishmentType.OTROS
+          "ALMACEN_ESPECIALIZADO",
+          "BOTICA",
+          "BOTIQUIN",
+          "DROGUERIA",
+          "FARMACIA",
+          "OTROS"
         ]),
         ruc: `20${faker.string.numeric(9)}`,
         
@@ -839,7 +802,7 @@ async function createClients() {
       const autoPasswordHash = await bcrypt.hash(autoPassword, 10);
       
       const clientData = {
-        client_type: ClientType.INDIVIDUAL,
+        client_type: "NATURAL",
         
         // Common fields
         email: faker.internet.email({ firstName, lastName, provider: "cliente.com" }),
@@ -1146,7 +1109,7 @@ async function createWarehousesAndCells() {
     const warehouses = await prisma.warehouse.createMany({
       data: [
         {
-          name: "Main Warehouse",
+          name: "Almacén Ancón",
           location: "Lima, Peru",
           capacity: 10000,
           max_occupancy: 8000,
@@ -2018,7 +1981,12 @@ async function createDepartureOrdersWithProducts() {
           document_date: faker.date.recent({ days: 7 }),
           departure_date_time: faker.date.future({ days: 5 }),
           created_by: clientUser.id,
-          order_status: faker.helpers.arrayElement(Object.values(OrderStatusDeparture)),
+          order_status: faker.helpers.arrayElement([
+            OrderStatusDeparture.PENDING,
+            OrderStatusDeparture.APPROVED,
+            OrderStatusDeparture.REVISION,
+            OrderStatusDeparture.REJECTED
+          ]),
           destination_point: `${faker.location.city()}, ${faker.location.country()}`,
           transport_type: faker.helpers.arrayElement(["Truck", "Ship", "Air", "Rail"]),
           carrier_name: faker.company.name(),
@@ -2110,27 +2078,94 @@ async function createDepartureOrdersWithProducts() {
   }
 }
 
-// ✅ SIMPLIFIED: Create a warehouse-focused seed for testing
+// ✅ SIMPLIFIED: Create a complete seed for testing the new simplified dispatch flow
 async function main() {
   try {
-    console.log("🌱 Starting simplified warehouse-focused seed...");
+    console.log("🌱 Starting complete seed for simplified dispatch flow...");
     
+    // Create all base data
     await createBaseLookupTables();
     await createUsersAndOrganization();
-    await createSuppliersAndCustomers(); 
-    // await createProducts(); // ✅ SKIP for now - focus on warehouse testing
+    await createSuppliersAndCustomers();
+    await createClients();
+    await assignClientsToWarehouseAssistants();
+    await createClientProductAssignments();
+    await createClientSupplierAssignments();
     await createWarehousesAndCells();
     
-    console.log("🎉 Basic warehouse data seeded successfully!");
+    // Create products (uncommented for complete testing)
+    console.log("🌱 Creating products...");
+    const suppliers = await prisma.supplier.findMany();
+    const categories = await prisma.productCategory.findMany();
+    const subcategories1 = await prisma.productSubCategory1.findMany();
+    const subcategories2 = await prisma.productSubCategory2.findMany();
+    const countries = await prisma.country.findMany();
+    const temperatureRanges = await prisma.temperatureRange.findMany();
+    
+    // Create products for testing
+    for (let i = 0; i < COUNT.PRODUCTS; i++) {
+      const supplier = faker.helpers.arrayElement(suppliers);
+      const category = faker.helpers.arrayElement(categories);
+      const subcategory1 = faker.helpers.arrayElement(subcategories1.filter(s => s.category_id === category.category_id));
+      const subcategory2 = subcategory1 ? faker.helpers.arrayElement(subcategories2.filter(s => s.subcategory1_id === subcategory1.subcategory1_id)) : null;
+      
+      await prisma.product.create({
+        data: {
+          product_code: `PROD-${String(i + 1).padStart(4, '0')}`,
+          name: faker.commerce.productName(),
+          category_id: category.category_id,
+          subcategory1_id: subcategory1?.subcategory1_id,
+          subcategory2_id: subcategory2?.subcategory2_id,
+          manufacturer: supplier.company_name || supplier.name || faker.company.name(),
+          temperature_range_id: faker.helpers.maybe(() => faker.helpers.arrayElement(temperatureRanges).temperature_range_id),
+          humidity: faker.helpers.maybe(() => `${faker.number.int({ min: 30, max: 70 })}%`),
+          observations: faker.lorem.sentence(),
+          uploaded_documents: faker.helpers.maybe(() => ({
+            documents: [
+              { name: "product_spec.pdf", url: "/documents/product_spec.pdf" }
+            ]
+          })),
+        },
+      });
+    }
+    console.log("✅ Products created");
+    
+    // Create entry orders and inventory
+    await createEntryOrdersWithProducts();
+    await createInventoryAllocations();
+    await createQualityControlTransitions();
+    
+    // Create departure orders with simplified flow
+    await createDepartureOrdersWithProducts();
+    
+    console.log("🎉 Complete seed data created successfully!");
     console.log("\n📊 Seed Summary:");
-    console.log("   • ✅ WAREHOUSES: 1 warehouse created with cells");
-    console.log("   • ✅ USERS: Basic users including warehouse incharge and client");
-    console.log("   • ✅ SUPPLIERS: Basic suppliers for testing");
-    console.log("   • ✅ API TESTING: Ready for warehouse API testing");
+    console.log(`   • ✅ ORGANISATIONS: ${COUNT.ORGANISATIONS} created`);
+    console.log(`   • ✅ USERS: ${COUNT.USERS} created with proper roles`);
+    console.log(`   • ✅ SUPPLIERS: ${COUNT.SUPPLIERS} created`);
+    console.log(`   • ✅ CUSTOMERS: ${COUNT.CUSTOMERS} created`);
+    console.log(`   • ✅ CLIENTS: ${COUNT.CLIENTS} created with assignments`);
+    console.log(`   • ✅ PRODUCTS: ${COUNT.PRODUCTS} created`);
+    console.log(`   • ✅ WAREHOUSES: ${COUNT.WAREHOUSES} created with cells`);
+    console.log(`   • ✅ ENTRY ORDERS: ${COUNT.ENTRY_ORDERS} created with inventory`);
+    console.log(`   • ✅ DEPARTURE ORDERS: ${COUNT.DEPARTURE_ORDERS} created (simplified flow)`);
+    console.log("\n🔄 Simplified Dispatch Flow Features:");
+    console.log("   • ✅ No partial dispatch tracking");
+    console.log("   • ✅ APPROVED → COMPLETED status flow");
+    console.log("   • ✅ Flexible dispatch quantities");
+    console.log("   • ✅ FIFO + expiry date inventory selection");
+    console.log("   • ✅ Complete audit trail");
     console.log("\n🔑 Test Credentials:");
     console.log("   • Admin: admin1 / Admin123!");
     console.log("   • Warehouse Incharge: wh_incharge1 / WhIncharge123!");
+    console.log("   • Pharmacist: pharmacist1 / Pharmacist123!");
+    console.log("   • Warehouse Assistant: wh_assistant1 / WhAssistant123!");
     console.log("   • Client: client1 / Client123!");
+    console.log("\n🧪 Ready for Testing:");
+    console.log("   • API endpoints for simplified dispatch flow");
+    console.log("   • Auto-selection of inventory with FIFO");
+    console.log("   • Flexible quantity dispatch");
+    console.log("   • Complete order lifecycle");
     
   } catch (error) {
     console.error("❌ Error seeding database:", error);

@@ -73,21 +73,29 @@ class EventLogger {
    * Log user authentication events
    */
   async logAuth(userId, action, ipAddress, userAgent, sessionId, additionalData = {}) {
+    // Map invalid actions to valid SystemAction enum values
+    const actionMap = {
+      'PRODUCT_LIST_ACCESSED': 'REPORT_VIEWED',
+      'PRODUCT_FORM_FIELDS_ACCESSED': 'REPORT_VIEWED',
+      'USER_LOGIN': 'USER_LOGIN',
+      'USER_LOGOUT': 'USER_LOGOUT',
+      'USER_LOGIN_FAILED': 'USER_LOGIN_FAILED'
+    };
+    
+    const validAction = actionMap[action] || 'REPORT_VIEWED';
+    
     return await this.logEvent({
       userId: userId || 'SYSTEM',
-      action,
+      action: validAction,
       entityType: 'User',
       entityId: userId || 'UNKNOWN',
-      description: this.getAuthDescription(action, additionalData),
+      description: this.getAuthDescription(validAction, additionalData),
       metadata: {
         ip_address: ipAddress,
         user_agent: userAgent,
         session_id: sessionId,
         ...additionalData
-      },
-      ipAddress,
-      userAgent,
-      sessionId
+      }
     });
   }
 

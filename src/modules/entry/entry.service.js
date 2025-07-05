@@ -154,83 +154,52 @@ async function getAllEntryOrders(
   sortOptions = null,
   entryOrderNo = null,
   userRole = null,
-  userId = null
+  userId = null,
+  filters = {}
 ) {
-  const query = {
-    select: {
-      entry_order_id: true,
-      entry_order_no: true,
-      registration_date: true,
-      document_date: true,
-      entry_date_time: true,
-      order_status: true,
-      review_status: true,
-      total_volume: true,
-      total_weight: true,
-      cif_value: true,
-      total_pallets: true,
-      observation: true,
-      uploaded_documents: true,
-      review_comments: true,
-      reviewed_at: true,
+  // Build base where conditions
+  const whereConds = {};
+  if (organisationId) {
+    whereConds.order = { organisation_id: organisationId };
+  }
+  // CLIENT-specific filtering - clients can only see their own entry orders
+  if (userRole === "CLIENT" && userId) {
+    whereConds.created_by = userId;
+  }
+  if (entryOrderNo) {
+    whereConds.entry_order_no = { contains: entryOrderNo, mode: "insensitive" };
+  }
+  // Add search filter
+  if (filters.search) {
+    whereConds.entry_order_no = { contains: filters.search, mode: "insensitive" };
+  }
+  // Add date range filter
+  if (filters.startDate || filters.endDate) {
+    whereConds.registration_date = {};
+    if (filters.startDate) whereConds.registration_date.gte = new Date(filters.startDate);
+    if (filters.endDate) whereConds.registration_date.lte = new Date(filters.endDate);
+  }
+  // Add status filter
+  if (filters.statuses && Array.isArray(filters.statuses)) {
+    whereConds.order_status = { in: filters.statuses };
+  }
 
-      // Relations
-      origin: { select: { name: true, type: true } },
-      documentType: { select: { name: true, type: true } },
-      warehouse: { select: { name: true, warehouse_id: true } },
-      creator: {
-        select: {
-          first_name: true,
-          last_name: true,
-          organisation: { select: { name: true } },
-        },
-      },
-      reviewer: {
-        select: { first_name: true, last_name: true },
-      },
-      order: {
-        select: {
-          created_at: true,
-          status: true,
-          priority: true,
-        },
-      },
-
-      // Include products with new schema
+  const orders = await prisma.entryOrder.findMany({
+    where: whereConds,
+    orderBy: { registration_date: "desc" },
+    include: {
+      origin: { select: { origin_id: true, name: true, type: true } },
+      documentType: { select: { document_type_id: true, name: true, type: true } },
+      warehouse: { select: { warehouse_id: true, name: true, location: true } },
+      creator: { select: { id: true, first_name: true, last_name: true, email: true } },
+      reviewer: { select: { id: true, first_name: true, last_name: true } },
+      order: { select: { order_id: true, created_at: true, status: true, priority: true, organisation: { select: { name: true } } } },
       products: {
-        select: {
-          entry_order_product_id: true,
-          serial_number: true,
-          product_code: true,
-          lot_series: true,
-          manufacturing_date: true,
-          expiration_date: true,
-          inventory_quantity: true,
-          package_quantity: true,
-          quantity_pallets: true,
-          presentation: true,
-          guide_number: true,
-          weight_kg: true,
-          volume_m3: true,
-          insured_value: true,
-          temperature_range: true,
-          humidity: true,
-          health_registration: true,
-
-          // Product relation
-          product: {
-            select: {
-              product_id: true,
-              product_code: true,
-              name: true,
-            },
-          },
-
-          // Supplier relation
+        include: {
+          product: { select: { product_id: true, product_code: true, name: true } },
           supplier: {
             select: {
               supplier_id: true,
-              // ✅ NEW: Support new supplier fields
               company_name: true,
               category: true,
               tax_id: true,
@@ -238,162 +207,81 @@ async function getAllEntryOrders(
               contact_no: true,
               contact_person: true,
               notes: true,
-              
-              // ✅ DEPRECATED: Keep old fields for backward compatibility
               name: true,
               address: true,
               city: true,
               phone: true,
               email: true,
               ruc: true,
-              
               country: { select: { name: true } },
             },
           },
+          inventoryAllocations: true,
         },
       },
-
-      // Inventory allocations (filled by warehouse)
-      inventoryAllocations: {
-        select: {
-          allocation_id: true,
-          inventory_quantity: true,
-          package_quantity: true,
-          weight_kg: true,
-          product_status: true,
-          status_code: true,
-          allocated_at: true,
-          observations: true,
-
-          // Cell assignment
-          cell: {
-            select: {
-              id: true,
-              row: true,
-              bay: true,
-              position: true,
-              status: true,
-            },
-          },
-
-          // Allocator
-          allocator: {
-            select: {
-              first_name: true,
-              last_name: true,
-            },
-          },
-        },
-      },
+      inventoryAllocations: true,
     },
-    orderBy: {
-      [sortOptions?.orderBy || "registration_date"]:
-        sortOptions?.direction || "desc",
-    },
-    where: {},
-  };
-
-  // Build where conditions
-  const whereConds = {};
-  if (organisationId) {
-    whereConds.order = { organisation_id: organisationId };
-  }
-  if (entryOrderNo) {
-    whereConds.entry_order_no = { contains: entryOrderNo, mode: "insensitive" };
-  }
-  
-  // ✅ NEW: CLIENT-specific filtering - clients can only see their own entry orders
-  if (userRole === "CLIENT" && userId) {
-    whereConds.created_by = userId;
-  }
-  
-  if (Object.keys(whereConds).length) {
-    query.where = whereConds;
-  }
-
-  const orders = await prisma.entryOrder.findMany(query);
-
-  return orders.map((order) => {
-    // Calculate totals from products
-    const totalInventoryQuantity = order.products.reduce(
-      (sum, p) => sum + p.inventory_quantity,
-      0
-    );
-    const totalPackageQuantity = order.products.reduce(
-      (sum, p) => sum + p.package_quantity,
-      0
-    );
-    const totalWeight = order.products.reduce(
-      (sum, p) => sum + parseFloat(p.weight_kg),
-      0
-    );
-    const totalVolume = order.products.reduce(
-      (sum, p) => sum + parseFloat(p.volume_m3 || 0),
-      0
-    );
-    const totalInsuredValue = order.products.reduce(
-      (sum, p) => sum + parseFloat(p.insured_value || 0),
-      0
-    );
-
-    // Calculate allocated quantities
-    const totalAllocatedQuantity = order.inventoryAllocations.reduce(
-      (sum, a) => sum + a.inventory_quantity,
-      0
-    );
-    const totalAllocatedWeight = order.inventoryAllocations.reduce(
-      (sum, a) => sum + parseFloat(a.weight_kg),
-      0
-    );
-
-    // Transform allocations with cell references
-    const transformedAllocations = order.inventoryAllocations?.map(
-      (allocation) => ({
-        ...allocation,
-        cellReference: `${allocation.cell.row}.${String(
-          allocation.cell.bay
-        ).padStart(2, "0")}.${String(allocation.cell.position).padStart(
-          2,
-          "0"
-        )}`,
-        allocator_name: `${allocation.allocator.first_name || ""} ${
-          allocation.allocator.last_name || ""
-        }`.trim(),
-      })
-    );
-
-    return {
-      ...order,
-      creator_name: `${order.creator.first_name || ""} ${
-        order.creator.last_name || ""
-      }`.trim(),
-      reviewer_name: order.reviewer
-        ? `${order.reviewer.first_name || ""} ${
-            order.reviewer.last_name || ""
-          }`.trim()
-        : null,
-      organisation_name: order.creator.organisation.name,
-
-      // Calculated totals
-      total_inventory_quantity: totalInventoryQuantity,
-      total_package_quantity: totalPackageQuantity,
-      calculated_total_weight: totalWeight,
-      calculated_total_volume: totalVolume,
-      total_insured_value: totalInsuredValue,
-
-      // Allocation status
-      total_allocated_quantity: totalAllocatedQuantity,
-      total_allocated_weight: totalAllocatedWeight,
-      allocation_percentage:
-        totalInventoryQuantity > 0
-          ? (totalAllocatedQuantity / totalInventoryQuantity) * 100
-          : 0,
-      is_fully_allocated: totalAllocatedQuantity >= totalInventoryQuantity,
-
-      // Transform data
-      inventoryAllocations: transformedAllocations,
-    };
   });
+
+  // Optionally, add summary or transform as needed
+  return {
+    success: true,
+    data: orders,
+    count: orders.length,
+  };
+}
+
+/**
+ * ✅ NEW: Helper function to determine entry order workflow status
+ */
+function getEntryOrderWorkflowStatus(orderStatus, reviewStatus) {
+  if (reviewStatus === 'PENDING') {
+    return {
+      status: 'PENDING_REVIEW',
+      description: 'Waiting for admin review',
+      canEdit: false,
+      canReview: true,
+      nextActions: ['APPROVE', 'REJECT', 'REQUEST_REVISION']
+    };
+  }
+  
+  if (reviewStatus === 'NEEDS_REVISION') {
+    return {
+      status: 'NEEDS_REVISION',
+      description: 'Requires client revision',
+      canEdit: true,
+      canReview: false,
+      nextActions: ['UPDATE_AND_RESUBMIT']
+    };
+  }
+  
+  if (reviewStatus === 'APPROVED') {
+    return {
+      status: 'APPROVED_READY_FOR_ALLOCATION',
+      description: 'Ready for warehouse allocation',
+      canEdit: false,
+      canReview: false,
+      nextActions: ['ALLOCATE_INVENTORY']
+    };
+  }
+  
+  if (reviewStatus === 'REJECTED') {
+    return {
+      status: 'REJECTED',
+      description: 'Order rejected',
+      canEdit: false,
+      canReview: false,
+      nextActions: []
+    };
+  }
+  
+  return {
+    status: 'UNKNOWN',
+    description: 'Unknown status',
+    canEdit: false,
+    canReview: false,
+    nextActions: []
+  };
 }
 
 /**
@@ -438,12 +326,9 @@ async function getEntryFormFields(userRole = null, userId = null) {
           product_id: true,
           product_code: true,
           name: true,
-          unit_weight: true,
-          unit_volume: true,
           manufacturer: true,
-          storage_conditions: true,
-          product_line: { select: { name: true } },
-          group: { select: { name: true } },
+          humidity: true,
+          observations: true,
           temperature_range: {
             select: {
               range: true,
@@ -511,12 +396,9 @@ async function getEntryFormFields(userRole = null, userId = null) {
         product_id: true,
         product_code: true,
         name: true,
-        unit_weight: true,
-        unit_volume: true,
         manufacturer: true,
-        storage_conditions: true,
-        product_line: { select: { name: true } },
-        group: { select: { name: true } },
+        humidity: true,
+        observations: true,
         temperature_range: {
           select: {
             range: true,
@@ -845,23 +727,10 @@ async function getEntryOrderByNo(orderNo, organisationId = null, userRole = null
               product_id: true,
               product_code: true,
               name: true,
-              manufacturer: true,
-              storage_conditions: true,
-              unit_weight: true,
-              unit_volume: true,
-              product_line: { select: { name: true } },
-              group: { select: { name: true } },
-              temperature_range: {
-                select: {
-                  range: true,
-                  min_celsius: true,
-                  max_celsius: true,
-                },
-              },
             },
           },
 
-          // Supplier details
+          // Supplier relation
           supplier: {
             select: {
               supplier_id: true,

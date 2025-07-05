@@ -420,32 +420,42 @@ async function getAllEntryOrders(req, res) {
       return res.status(403).json({ message: "Authorization required" });
     }
 
-    // ✅ UPDATED: Admin and Warehouse Incharge can see all orders, others see only their organization's orders
+    // Admin and Warehouse Incharge can see all orders, others see only their organization's orders
     const filterOrg = (userRole === "ADMIN" || userRole === "WAREHOUSE_INCHARGE") ? null : organisationId;
     
-    // ✅ UPDATED: Changed sort field to match new schema
-    const sortOptions = { 
-      orderBy: "registration_date", 
-      direction: req.query.sortDirection || "desc" 
+    // Build filters object
+    const filters = {
+      search: req.query.search || searchOrderNo,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+      statuses: req.query.statuses ? req.query.statuses.split(',') : null
     };
 
-    const entryOrders = await entryService.getAllEntryOrders(
+    const result = await entryService.getAllEntryOrders(
       filterOrg,
-      sortOptions,
-      searchOrderNo,
+      null, // sortOptions
+      null, // entryOrderNo
       userRole,
-      req.user?.id
+      req.user?.id,
+      filters
     );
 
     return res.status(200).json({
-      success: true,
-      data: entryOrders,
-      count: entryOrders.length,
+      success: result.success,
+      data: result.data,
+      count: result.count,
       user_role: userRole,
+      filters_applied: {
+        organisation_filter: filterOrg ? 'FILTERED' : 'ALL',
+        search: filters.search,
+        date_range: filters.startDate || filters.endDate ? 'APPLIED' : 'NONE',
+        status_filter: filters.statuses ? 'APPLIED' : 'NONE'
+      }
     });
   } catch (error) {
     console.error("Error fetching entry orders:", error);
     return res.status(500).json({
+      success: false,
       message: "Error fetching entry orders",
       error: error.message,
     });

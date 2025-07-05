@@ -94,6 +94,7 @@ router.post("/departure-orders/:departureOrderId/allocate", departureController.
 
 // ✅ NEW: Direct dispatch flow endpoints (similar to cell assignment flow)
 router.get("/approved-departure-orders", departureController.getApprovedDepartureOrdersForDispatch);
+router.post("/departure-orders/:departureOrderId/auto-select-inventory", departureController.getAutoSelectedInventoryForDispatch);
 router.get("/warehouse-dispatch-summary", departureController.getWarehouseDispatchSummary);
 router.post("/dispatch-approved-order", upload.array('documents', 10), departureController.dispatchApprovedDepartureOrder);
 

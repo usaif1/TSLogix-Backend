@@ -2753,6 +2753,54 @@ async function getWarehouseDispatchSummary(req, res) {
 }
 
 /**
+ * ✅ NEW: Get auto-selected inventory for dispatch based on FIFO and expiry
+ */
+async function getAutoSelectedInventoryForDispatch(req, res) {
+  try {
+    const { departureOrderId } = req.params;
+    const { dispatchQuantities } = req.body;
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    
+    if (!departureOrderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Departure Order ID is required",
+      });
+    }
+
+    if (!dispatchQuantities || typeof dispatchQuantities !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: "Dispatch quantities object is required (productId: quantity)",
+      });
+    }
+    
+    const data = await departureService.getAutoSelectedInventoryForDispatch(
+      departureOrderId,
+      dispatchQuantities
+    );
+    
+    return res.status(200).json({ 
+      success: true,
+      message: "Auto-selected inventory for dispatch fetched successfully", 
+      data,
+      departure_order_id: departureOrderId,
+      dispatch_quantities: dispatchQuantities,
+      user_role: userRole,
+      selection_method: "AUTO_FIFO_EXPIRY",
+      allows_modification: true,
+    });
+  } catch (error) {
+    console.error("Error in getAutoSelectedInventoryForDispatch:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+}
+
+/**
  * ✅ NEW: Get recalculated FIFO inventory for partial dispatch
  */
 async function getRecalculatedFifoInventoryForDeparture(req, res) {
@@ -2960,6 +3008,7 @@ module.exports = {
   autoDispatchDepartureOrder,
   // ✅ NEW: Corrected dispatch flow methods
   getApprovedDepartureOrdersForDispatch,
+  getAutoSelectedInventoryForDispatch,
   dispatchApprovedDepartureOrder,
   getWarehouseDispatchSummary,
   // ✅ NEW: Partial dispatch support methods

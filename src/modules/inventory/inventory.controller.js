@@ -972,7 +972,9 @@ async function validateInventorySynchronization(req, res) {
 // ✅ NEW: Get cells filtered by quality status destination
 async function getCellsByQualityStatus(req, res) {
   try {
-    const { quality_status, warehouse_id } = req.query;
+    const { quality_status, warehouse_id, entry_order_id } = req.query;
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
     
     if (!quality_status) {
       return res.status(400).json({
@@ -990,7 +992,76 @@ async function getCellsByQualityStatus(req, res) {
       });
     }
 
-    const cells = await inventoryService.getCellsByQualityStatus(quality_status, warehouse_id);
+    // ✅ NEW: Role-based access control
+    let cells;
+    let accessInfo = {
+      user_role: userRole,
+      entry_order_id: entry_order_id,
+      filtering_applied: false,
+      reason: ""
+    };
+
+    if (userRole === "ADMIN") {
+      // ✅ ADMIN: Can access all cells regardless of entry order
+      cells = await inventoryService.getCellsByQualityStatus(quality_status, warehouse_id);
+      accessInfo.reason = "Admin access - all cells available";
+    } else if (userRole === "WAREHOUSE_INCHARGE" || userRole === "PHARMACIST") {
+      // ✅ WAREHOUSE_INCHARGE/PHARMACIST: Need entry_order_id to determine filtering
+      if (!entry_order_id) {
+        return res.status(400).json({
+          success: false,
+          message: "entry_order_id is required for warehouse staff to determine appropriate cell filtering",
+          suggestion: "Add ?entry_order_id=<entry_order_id> to see cells based on entry order creator's role"
+        });
+      }
+
+      // Get entry order to determine creator's role
+      const entryOrderInfo = await inventoryService.getEntryOrderCreatorInfo(entry_order_id);
+      
+      if (entryOrderInfo.creator_role === "CLIENT") {
+        // ✅ CLIENT entry order: Show only client-assigned cells
+        cells = await inventoryService.getCellsByQualityStatusForClient(quality_status, warehouse_id, entryOrderInfo.creator_id);
+        accessInfo.filtering_applied = true;
+        accessInfo.reason = `Entry order created by CLIENT - showing only client-assigned cells`;
+        accessInfo.entry_order_creator_role = "CLIENT";
+      } else {
+        // ✅ WAREHOUSE_INCHARGE entry order: Show all cells
+        cells = await inventoryService.getCellsByQualityStatus(quality_status, warehouse_id);
+        accessInfo.reason = `Entry order created by ${entryOrderInfo.creator_role} - showing all cells`;
+        accessInfo.entry_order_creator_role = entryOrderInfo.creator_role;
+      }
+    } else if (userRole === "CLIENT") {
+      // ✅ CLIENT: Can only see their assigned cells
+      cells = await inventoryService.getCellsByQualityStatusForClient(quality_status, warehouse_id, userId);
+      accessInfo.filtering_applied = true;
+      accessInfo.reason = "Client access - showing only assigned cells";
+    } else {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Insufficient permissions to view cells by quality status."
+      });
+    }
+
+    // ✅ LOG: Cell access for quality status
+    await req.logEvent(
+      'CELLS_BY_QUALITY_STATUS_ACCESSED',
+      'QualityControl',
+      `${quality_status}-${warehouse_id || 'all'}`,
+      `User accessed cells for quality status ${quality_status}`,
+      null,
+      {
+        quality_status: quality_status,
+        warehouse_id: warehouse_id,
+        entry_order_id: entry_order_id,
+        accessed_by: userId,
+        accessor_role: userRole,
+        cells_returned: cells.length,
+        filtering_applied: accessInfo.filtering_applied,
+        access_reason: accessInfo.reason,
+        access_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'QUALITY_CONTROL', action_type: 'CELL_ACCESS' }
+    );
     
     res.json({
       success: true,
@@ -998,11 +1069,25 @@ async function getCellsByQualityStatus(req, res) {
         quality_status,
         warehouse_id: warehouse_id || "all",
         cells_count: cells.length,
-        cells
+        cells,
+        access_info: accessInfo
       }
     });
   } catch (error) {
     console.error("❌ Error getting cells by quality status:", error);
+    
+    // ✅ LOG: Cell access failure
+    await req.logError(error, {
+      controller: 'inventory',
+      action: 'getCellsByQualityStatus',
+      quality_status: req.query.quality_status,
+      warehouse_id: req.query.warehouse_id,
+      entry_order_id: req.query.entry_order_id,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CELL_ACCESS_FAILED'
+    });
+    
     res.status(500).json({
       success: false,
       message: "Failed to get cells by quality status",

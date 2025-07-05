@@ -56,9 +56,9 @@ const createProduct = async (data, createdByUserId = null, userRole = null) => {
       name: data.name,
       
       // ✅ NEW: Category system fields
-      category_id: data.category_id || null,
-      subcategory1_id: data.subcategory1_id || null,
-      subcategory2_id: data.subcategory2_id || null,
+      category: data.category_id ? { connect: { category_id: data.category_id } } : undefined,
+      subcategory1: data.subcategory1_id ? { connect: { subcategory1_id: data.subcategory1_id } } : undefined,
+      subcategory2: data.subcategory2_id ? { connect: { subcategory2_id: data.subcategory2_id } } : undefined,
       
       // ✅ NEW: Enhanced product fields
       manufacturer: data.manufacturer || null,
@@ -66,14 +66,11 @@ const createProduct = async (data, createdByUserId = null, userRole = null) => {
       observations: data.observations || null,
       uploaded_documents: data.uploaded_documents || null,
       
+      // ✅ NEW: Temperature range connection
+      temperature_range: data.temperature_range_id ? { connect: { temperature_range_id: data.temperature_range_id } } : undefined,
+      
       // ✅ DEPRECATED: Keep old fields for backward compatibility
-      product_line_id: data.product_line_id || null,
-      group_id: data.group_id || null,
-      active_state_id: data.active_state_id || null,
-      storage_conditions: data.storage_conditions || null,
-      temperature_range_id: data.temperature_range_id || null,
-      unit_weight: data.unit_weight || null,
-      unit_volume: data.unit_volume || null,
+      // (unit_weight and unit_volume removed)
     },
     include: {
       // ✅ NEW: Include new category relations
@@ -99,11 +96,6 @@ const createProduct = async (data, createdByUserId = null, userRole = null) => {
         }
       },
       temperature_range: true,
-      
-      // ✅ DEPRECATED: Keep old relations for backward compatibility
-      product_line: true,
-      group: true,
-      active_state: { select: { name: true } },
     },
   });
   
@@ -196,11 +188,14 @@ const getAllProducts = async (filters = {}, userRole = null, userId = null) => {
   }
   
   // ✅ DEPRECATED: Keep old filters for backward compatibility
-  if (filters.product_line_id) {
-    where.product_line_id = filters.product_line_id;
+  if (filters.storage_conditions) {
+    where.storage_conditions = {
+      contains: filters.storage_conditions,
+      mode: "insensitive",
+    };
   }
-  if (filters.group_id) {
-    where.group_id = filters.group_id;
+  if (filters.temperature_range_id) {
+    where.temperature_range_id = filters.temperature_range_id;
   }
   if (filters.name) {
     where.name = {
@@ -247,13 +242,7 @@ const getAllProducts = async (filters = {}, userRole = null, userId = null) => {
         }
       },
       temperature_range: true,
-      
-      // ✅ DEPRECATED: Keep old relations for backward compatibility
-      product_line: true,
-      group: true,
-      active_state: { select: { name: true } },
-      
-      // ✅ NEW: Include client assignment info for debugging
+      // Removed deprecated fields: product_line, group, active_state
       clientAssignments: userRole === "CLIENT" ? {
         where: { is_active: true },
         include: {
@@ -313,11 +302,7 @@ const getProductById = async (id) => {
         }
       },
       temperature_range: true,
-      
-      // ✅ DEPRECATED: Keep old relations for backward compatibility
-      product_line: true,
-      group: true,
-      active_state: { select: { name: true } },
+      // active_state: { select: { name: true } }, // Removed, not a relation
       
       // ✅ NEW: Include client assignments
       clientAssignments: {
@@ -351,22 +336,16 @@ const updateProduct = async (id, data) => {
       // ✅ NEW: Support new fields
       ...(data.product_code && { product_code: data.product_code }),
       ...(data.name && { name: data.name }),
-      ...(data.category_id !== undefined && { category_id: data.category_id }),
-      ...(data.subcategory1_id !== undefined && { subcategory1_id: data.subcategory1_id }),
-      ...(data.subcategory2_id !== undefined && { subcategory2_id: data.subcategory2_id }),
+      ...(data.category_id !== undefined && { category: data.category_id ? { connect: { category_id: data.category_id } } : { disconnect: true } }),
+      ...(data.subcategory1_id !== undefined && { subcategory1: data.subcategory1_id ? { connect: { subcategory1_id: data.subcategory1_id } } : { disconnect: true } }),
+      ...(data.subcategory2_id !== undefined && { subcategory2: data.subcategory2_id ? { connect: { subcategory2_id: data.subcategory2_id } } : { disconnect: true } }),
       ...(data.manufacturer !== undefined && { manufacturer: data.manufacturer }),
       ...(data.humidity !== undefined && { humidity: data.humidity }),
       ...(data.observations !== undefined && { observations: data.observations }),
       ...(data.uploaded_documents !== undefined && { uploaded_documents: data.uploaded_documents }),
       
       // ✅ DEPRECATED: Keep old fields for backward compatibility
-      ...(data.product_line_id !== undefined && { product_line_id: data.product_line_id }),
-      ...(data.group_id !== undefined && { group_id: data.group_id }),
-      ...(data.active_state_id !== undefined && { active_state_id: data.active_state_id }),
-      ...(data.storage_conditions !== undefined && { storage_conditions: data.storage_conditions }),
       ...(data.temperature_range_id !== undefined && { temperature_range_id: data.temperature_range_id }),
-      ...(data.unit_weight !== undefined && { unit_weight: data.unit_weight }),
-      ...(data.unit_volume !== undefined && { unit_volume: data.unit_volume }),
     },
     include: {
       // ✅ NEW: Include new category relations
@@ -378,11 +357,6 @@ const updateProduct = async (id, data) => {
         include: { subcategory1: { include: { category: true } } }
       },
       temperature_range: true,
-      
-      // ✅ DEPRECATED: Keep old relations for backward compatibility
-      product_line: true,
-      group: true,
-      active_state: { select: { name: true } },
     },
   });
 };
@@ -621,14 +595,6 @@ const createSubCategory2 = async (subcategoryData) => {
 };
 
 // ✅ DEPRECATED: Keep old functions for backward compatibility
-const getProductLines = async () => {
-  return prisma.productLine.findMany();
-};
-
-const getGroups = async () => {
-  return prisma.groupName.findMany();
-};
-
 const getTemperatureRanges = async () => {
   return prisma.temperatureRange.findMany();
 };
@@ -640,18 +606,12 @@ const getFormFields = async () => {
       productCategories,
       subcategories1,
       subcategories2,
-      temperatureRanges,
-      
-      // ✅ DEPRECATED: Keep old fields for backward compatibility
-      productLines,
-      groups,
+      temperatureRanges
     ] = await Promise.all([
       getProductCategories(),
       getSubCategories1(),
       getSubCategories2(),
-      getTemperatureRanges(),
-      getProductLines(),
-      getGroups(),
+      getTemperatureRanges()
     ]);
 
     return {
@@ -659,12 +619,7 @@ const getFormFields = async () => {
       productCategories: productCategories, // New healthcare categories
       subcategories1: subcategories1, // New healthcare subcategories level 1
       subcategories2: subcategories2, // New healthcare subcategories level 2
-      temperatureRanges,
-      
-      // ✅ DEPRECATED: Keep old fields for backward compatibility
-      categories: productCategories, // Alias for backward compatibility
-      productLines,
-      groups,
+      temperatureRanges
     };
   } catch (error) {
     console.error("Error in getFormFields:", error);
@@ -686,10 +641,6 @@ module.exports = {
   createSubCategory1,
   getSubCategories2,
   createSubCategory2,
-  
-  // ✅ DEPRECATED: Keep old functions for backward compatibility
-  getProductLines,
-  getGroups,
   getTemperatureRanges,
   getFormFields,
 };

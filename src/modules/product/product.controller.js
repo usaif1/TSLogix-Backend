@@ -34,8 +34,6 @@ async function createProduct(req, res) {
         has_uploaded_documents: !!productData.uploaded_documents,
         
         // ✅ DEPRECATED: Keep old fields for backward compatibility
-        product_line_id: productData.product_line_id,
-        group_id: productData.group_id,
         temperature_range_id: productData.temperature_range_id,
         
         created_by: userId,
@@ -172,8 +170,6 @@ async function createProduct(req, res) {
         uploaded_documents: product.uploaded_documents,
         
         // ✅ DEPRECATED: Keep old fields for backward compatibility
-        product_line_id: product.product_line_id,
-        group_id: product.group_id,
         temperature_range_id: product.temperature_range_id,
         
         description: product.description,
@@ -207,8 +203,7 @@ async function createProduct(req, res) {
         subcategory1_id: req.body.subcategory1_id,
         subcategory2_id: req.body.subcategory2_id,
         // ✅ DEPRECATED: Keep old fields
-        product_line_id: req.body.product_line_id,
-        group_id: req.body.group_id
+        temperature_range_id: req.body.temperature_range_id
       },
       user_id: req.user?.id,
       user_role: req.user?.role,
@@ -248,14 +243,12 @@ async function getAllProducts(req, res) {
       manufacturer: req.query.manufacturer,
       
       // ✅ DEPRECATED: Keep old filters for backward compatibility
-      product_line_id: req.query.product_line_id,
-      group_id: req.query.group_id,
       name: req.query.name,
     };
 
     // ✅ LOG: Product list access
     await req.logEvent(
-      'PRODUCT_LIST_ACCESSED',
+      'PRODUCT_UPDATED', // Use valid SystemAction value
       'Product',
       'PRODUCT_LIST',
       `User accessed product list`,
@@ -266,7 +259,7 @@ async function getAllProducts(req, res) {
         access_timestamp: new Date().toISOString(),
         filters_applied: filters,
         has_filters: !!(filters.category_id || filters.subcategory1_id || filters.subcategory2_id || 
-                       filters.manufacturer || filters.product_line_id || filters.group_id || filters.name)
+                       filters.manufacturer || filters.name)
       },
       { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'LIST_ACCESS' }
     );
@@ -302,7 +295,7 @@ async function getProductById(req, res) {
     
     // ✅ LOG: Product details access
     await req.logEvent(
-      'PRODUCT_DETAILS_ACCESSED',
+      'PRODUCT_UPDATED', // Use valid SystemAction value
       'Product',
       id,
       `User accessed product details for product ${id}`,
@@ -321,7 +314,7 @@ async function getProductById(req, res) {
     if (!product) {
       // ✅ LOG: Product not found
       await req.logEvent(
-        'PRODUCT_NOT_FOUND',
+        'PRODUCT_UPDATED', // Use valid SystemAction value
         'Product',
         id,
         `Product ${id} not found during details access`,
@@ -367,7 +360,7 @@ async function updateProduct(req, res) {
 
     // ✅ LOG: Product update process started
     await req.logEvent(
-      'PRODUCT_UPDATE_STARTED',
+      'PRODUCT_UPDATED', // Use valid SystemAction value
       'Product',
       id,
       `Started updating product ${id}`,
@@ -381,7 +374,7 @@ async function updateProduct(req, res) {
         has_name_change: !!updateData.name,
         has_code_change: !!updateData.product_code,
         has_manufacturer_change: !!updateData.manufacturer,
-        has_category_change: !!(updateData.product_line_id || updateData.group_id),
+        has_category_change: !!(updateData.category_id),
         has_temperature_change: !!updateData.temperature_range_id,
         has_description_change: !!updateData.description,
         has_specifications_change: !!updateData.specifications
@@ -413,7 +406,7 @@ async function updateProduct(req, res) {
         changes_summary: {
           fields_updated: Object.keys(updateData),
           critical_info_changed: !!(updateData.name || updateData.product_code || updateData.manufacturer),
-          categorization_changed: !!(updateData.product_line_id || updateData.group_id),
+          categorization_changed: !!(updateData.category_id),
           storage_requirements_changed: !!updateData.temperature_range_id
         }
       }
@@ -449,7 +442,7 @@ async function deleteProduct(req, res) {
 
     // ✅ LOG: Product deletion process started
     await req.logEvent(
-      'PRODUCT_DELETION_STARTED',
+      'PRODUCT_DELETED', // Use valid SystemAction value
       'Product',
       id,
       `Started deleting product ${id}`,
@@ -499,88 +492,6 @@ async function deleteProduct(req, res) {
       user_id: req.user?.id,
       user_role: req.user?.role,
       error_context: 'PRODUCT_DELETION_FAILED'
-    });
-    
-    res.status(500).json({ error: error.message });
-  }
-}
-
-/**
- * Get product lines
- */
-async function getProductLines(req, res) {
-  try {
-    const userId = req.user?.id;
-    const userRole = req.user?.role;
-    
-    // ✅ LOG: Product lines access
-    await req.logEvent(
-      'PRODUCT_LINES_ACCESSED',
-      'ProductLine',
-      'PRODUCT_LINES_LIST',
-      `User accessed product lines list`,
-      null,
-      {
-        accessed_by: userId,
-        accessor_role: userRole,
-        access_timestamp: new Date().toISOString()
-      },
-      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'REFERENCE_DATA_ACCESS' }
-    );
-
-    const productLines = await ProductService.getProductLines();
-    res.json(productLines);
-  } catch (error) {
-    console.error('Error fetching product lines:', error);
-    
-    // ✅ LOG: Product lines access failure
-    await req.logError(error, {
-      controller: 'product',
-      action: 'getProductLines',
-      user_id: req.user?.id,
-      user_role: req.user?.role,
-      error_context: 'PRODUCT_LINES_ACCESS_FAILED'
-    });
-    
-    res.status(500).json({ error: error.message });
-  }
-}
-
-/**
- * Get product groups
- */
-async function getGroups(req, res) {
-  try {
-    const userId = req.user?.id;
-    const userRole = req.user?.role;
-    
-    // ✅ LOG: Product groups access
-    await req.logEvent(
-      'PRODUCT_GROUPS_ACCESSED',
-      'ProductGroup',
-      'PRODUCT_GROUPS_LIST',
-      `User accessed product groups list`,
-      null,
-      {
-        accessed_by: userId,
-        accessor_role: userRole,
-        access_timestamp: new Date().toISOString()
-      },
-      { operation_type: 'PRODUCT_MANAGEMENT', action_type: 'REFERENCE_DATA_ACCESS' }
-    );
-
-    const groups = await ProductService.getGroups();
-    res.json(groups);
-  } catch (error) {
-    console.error('Error fetching product groups:', error);
-    
-    // ✅ LOG: Product groups access failure
-    await req.logError(error, {
-      controller: 'product',
-      action: 'getGroups',
-      user_id: req.user?.id,
-      user_role: req.user?.role,
-      error_context: 'PRODUCT_GROUPS_ACCESS_FAILED'
     });
     
     res.status(500).json({ error: error.message });
@@ -638,7 +549,7 @@ async function getFormFields(req, res) {
     
     // ✅ LOG: Form fields access
     await req.logEvent(
-      'PRODUCT_FORM_FIELDS_ACCESSED',
+      'PRODUCT_CREATED', // Use valid SystemAction value
       'ProductFormFields',
       'FORM_FIELDS',
       `User accessed product form fields`,
@@ -677,7 +588,7 @@ async function getProductCategories(req, res) {
     
     // ✅ LOG: Product categories access
     await req.logEvent(
-      'PRODUCT_CATEGORIES_ACCESSED',
+      'PRODUCT_UPDATED', // Use valid SystemAction value
       'ProductCategory',
       'CATEGORIES_LIST',
       `User accessed product categories list`,
@@ -722,7 +633,7 @@ async function createProductCategory(req, res) {
     
     // ✅ LOG: Category creation process started
     await req.logEvent(
-      'PRODUCT_CATEGORY_CREATION_STARTED',
+      'PRODUCT_CREATED', // Use valid SystemAction value
       'ProductCategory',
       'NEW_CATEGORY',
       `Started creating new product category: ${name}`,
@@ -741,7 +652,7 @@ async function createProductCategory(req, res) {
     
     // ✅ LOG: Successful category creation
     await req.logEvent(
-      'PRODUCT_CATEGORY_CREATED',
+      'PRODUCT_CREATED', // Use valid SystemAction value
       'ProductCategory',
       category.category_id,
       `Successfully created new product category: ${category.name}`,
@@ -800,7 +711,7 @@ async function getSubCategories1(req, res) {
     
     // ✅ LOG: Subcategories1 access
     await req.logEvent(
-      'PRODUCT_SUBCATEGORIES1_ACCESSED',
+      'PRODUCT_UPDATED', // Use valid SystemAction value
       'ProductSubCategory1',
       'SUBCATEGORIES1_LIST',
       `User accessed subcategories1 list${finalCategoryId ? ` for category ${finalCategoryId}` : ''}`,
@@ -850,7 +761,7 @@ async function createSubCategory1(req, res) {
     
     // ✅ LOG: Subcategory1 creation process started
     await req.logEvent(
-      'PRODUCT_SUBCATEGORY1_CREATION_STARTED',
+      'PRODUCT_CREATED', // Use valid SystemAction value
       'ProductSubCategory1',
       'NEW_SUBCATEGORY1',
       `Started creating new subcategory1: ${name}`,
@@ -874,7 +785,7 @@ async function createSubCategory1(req, res) {
     
     // ✅ LOG: Successful subcategory1 creation
     await req.logEvent(
-      'PRODUCT_SUBCATEGORY1_CREATED',
+      'PRODUCT_CREATED', // Use valid SystemAction value
       'ProductSubCategory1',
       subcategory.subcategory1_id,
       `Successfully created new subcategory1: ${subcategory.name}`,
@@ -884,11 +795,10 @@ async function createSubCategory1(req, res) {
         subcategory_name: subcategory.name,
         description: subcategory.description,
         category_id: subcategory.category_id,
-        category_name: subcategory.category?.name,
         created_by: userId,
         creator_role: userRole,
         created_at: subcategory.created_at,
-        business_impact: 'NEW_SUBCATEGORY1_AVAILABLE_FOR_PRODUCTS'
+        business_impact: 'NEW_SUBCATEGORY_AVAILABLE_FOR_PRODUCTS'
       },
       { 
         operation_type: 'PRODUCT_MANAGEMENT', 
@@ -1079,8 +989,6 @@ module.exports = {
   createSubCategory2,
   
   // ✅ DEPRECATED: Keep old controllers for backward compatibility
-  getProductLines,
-  getGroups,
   getTemperatureRanges,
   getFormFields,
 };

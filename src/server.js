@@ -117,20 +117,6 @@ app.use("/warehouse", authenticateToken, warehouseRoutes);
 app.use("/clients", authenticateToken, clientRoutes); // ✅ NEW: Mount client routes
 app.use("/eventlogs", authenticateToken, eventLogRoutes); // ✅ NEW: Mount event log routes
 
-// ✅ ENHANCED: Mount all routes with proper prefixes
-app.use("/auth", authRoutes);
-app.use("/entry", entryRoutes);
-app.use("/departure", departureRoutes);
-app.use("/warehouse", warehouseRoutes);
-app.use("/product", productRoutes);
-app.use("/inventory", inventoryRoutes);
-app.use("/audit", auditRoutes);
-app.use("/events", eventLogRoutes);
-app.use("/client", clientRoutes);
-app.use("/organisation", organisationRoutes);
-app.use("/supplier", supplierRoutes);
-app.use("/maintenance", maintenanceRoutes);
-
 // ✅ NEW: Document management endpoints for all entities
 app.use("/documents", documentRoutes);
 
