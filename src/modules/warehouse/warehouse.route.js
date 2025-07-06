@@ -4,7 +4,6 @@ const {
   allocatePallets,
   listWarehouseCells,
   listWarehouses,
-  getWarehouseReport,
 } = require("./warehouse.controller");
 
 // Allocate pallets to cells
@@ -15,7 +14,5 @@ router.get("/cells", listWarehouseCells);
 
 router.get("/warehouses", listWarehouses);
 
-// ✅ NEW: Warehouse report endpoint
-router.get("/report", getWarehouseReport);
 
 module.exports = router;

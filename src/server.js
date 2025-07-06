@@ -97,6 +97,7 @@ const inventoryRoutes = require("@/modules/inventory/inventory.route");
 const warehouseRoutes = require("@/modules/warehouse/warehouse.route");
 const clientRoutes = require("@/modules/client/client.route");
 const eventLogRoutes = require("@/modules/eventlog/eventlog.route");
+const reportsRoutes = require("@/modules/reports/reports.route");
 
 // ✅ NEW: Document management routes for file uploads/downloads
 const documentRoutes = require("./modules/departure/document.route");
@@ -116,6 +117,7 @@ app.use("/inventory", authenticateToken, inventoryRoutes);
 app.use("/warehouse", authenticateToken, warehouseRoutes);
 app.use("/clients", authenticateToken, clientRoutes); // ✅ NEW: Mount client routes
 app.use("/eventlogs", authenticateToken, eventLogRoutes); // ✅ NEW: Mount event log routes
+app.use("/reports", authenticateToken, reportsRoutes); // ✅ NEW: Mount reports routes
 
 // ✅ NEW: Document management endpoints for all entities
 app.use("/documents", documentRoutes);
