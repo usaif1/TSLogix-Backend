@@ -1305,6 +1305,22 @@ async function generateCardexReport(filters, userContext) {
             customer: true,
             client: true
           }
+        },
+        departureAllocations: {
+          include: {
+            source_allocation: {
+              include: {
+                entry_order_product: {
+                  select: {
+                    insured_value: true,
+                    inventory_quantity: true,
+                    lot_series: true,
+                    entry_order_id: true
+                  }
+                }
+              }
+            }
+          }
         }
       },
       orderBy: {
@@ -1358,6 +1374,7 @@ async function generateCardexReport(filters, userContext) {
       }
 
       const quantity = entryProduct.inventory_quantity || 0;
+      // ✅ CORRECT: Use original insured_value from entry order as source of truth
       const financialValue = parseFloat(entryProduct.insured_value) || 0;
 
       // Determine if this is opening balance or stock in based on report date range
@@ -1427,8 +1444,27 @@ async function generateCardexReport(filters, userContext) {
       }
 
       const quantity = departureProduct.dispatched_quantity || departureProduct.requested_quantity || 0;
-      // Get financial value from the original entry order product (through departure allocations)
-      const financialValue = parseFloat(departureProduct.unit_price || departureProduct.total_value || 0);
+      
+      // ✅ CORRECT: Calculate financial value based on original entry order insured_value
+      let financialValue = 0;
+      if (departureProduct.departureAllocations && departureProduct.departureAllocations.length > 0) {
+        // Trace back to original entry order product's insured_value
+        departureProduct.departureAllocations.forEach(allocation => {
+          if (allocation.source_allocation?.entry_order_product) {
+            const entryProduct = allocation.source_allocation.entry_order_product;
+            const originalInsuredValue = parseFloat(entryProduct.insured_value || 0);
+            const originalQuantity = entryProduct.inventory_quantity || 1;
+            const allocatedQuantity = allocation.allocated_quantity || 0;
+            
+            // Calculate proportional financial value based on original insured_value
+            const unitValue = originalInsuredValue / originalQuantity;
+            financialValue += unitValue * allocatedQuantity;
+          }
+        });
+      } else {
+        // Fallback: If no allocations found, use departure order's values
+        financialValue = parseFloat(departureProduct.unit_price || departureProduct.total_value || 0);
+      }
 
       // Determine if this affects opening balance or stock out based on report date range
       if (departureDate < reportDateFrom) {
