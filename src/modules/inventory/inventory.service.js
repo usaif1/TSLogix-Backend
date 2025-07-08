@@ -945,8 +945,47 @@ async function getInventorySummary(filters = {}) {
 
           entry_order: {
             select: {
+              entry_order_id: true,
               entry_order_no: true,
               registration_date: true,
+              
+              // Include creator (user) information
+              creator: {
+                select: {
+                  id: true,
+                  first_name: true,
+                  last_name: true,
+                  middle_name: true,
+                  email: true,
+                  role: {
+                    select: {
+                      name: true
+                    }
+                  },
+                  organisation: {
+                    select: {
+                      name: true,
+                      address: true
+                    }
+                  }
+                }
+              },
+              
+              // Include reviewer information
+              reviewer: {
+                select: {
+                  id: true,
+                  first_name: true,
+                  last_name: true,
+                  middle_name: true,
+                  email: true,
+                  role: {
+                    select: {
+                      name: true
+                    }
+                  }
+                }
+              }
             },
           },
 
@@ -1285,29 +1324,109 @@ async function getInventorySummary(filters = {}) {
           last_departure: movementLogs.find(log => log.movement_type === 'DEPARTURE')?.timestamp,
         };
 
+        // Get client information if the entry order creator is a CLIENT
+        let clientInfo = null;
+        if (item.allocation?.entry_order?.creator?.role?.name === 'CLIENT') {
+          try {
+            // Use the new ClientUser relationship
+            const clientUser = await prisma.clientUser.findFirst({
+              where: {
+                user_id: item.allocation.entry_order.creator.id,
+                is_active: true
+              },
+              include: {
+                client: {
+                  select: {
+                    client_id: true,
+                    client_type: true,
+                    company_name: true,
+                    first_names: true,
+                    last_name: true,
+                    mothers_last_name: true,
+                    email: true,
+                    phone: true,
+                    address: true,
+                    establishment_type: true,
+                    ruc: true,
+                    created_at: true
+                  }
+                }
+              }
+            });
+            
+            if (clientUser && clientUser.client) {
+              clientInfo = clientUser.client;
+            }
+          } catch (error) {
+            console.error('Error fetching client info for user:', item.allocation.entry_order.creator.id, error);
+          }
+        }
+
         return {
           ...item,
           cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
           departure_order: departureOrderDetails,
           movement_logs: movementLogs,
           movement_summary: movementSummary,
+          client_info: clientInfo,
         };
       })
     );
   } else {
     // Basic current inventory without logs
-    processedCurrentInventory = currentInventory.map(item => {
-    let departureOrderDetails = null;
-    if (item.allocation?.departureAllocations && item.allocation.departureAllocations.length > 0) {
-      departureOrderDetails = item.allocation.departureAllocations[0].departure_order;
-    }
+    processedCurrentInventory = await Promise.all(
+      currentInventory.map(async (item) => {
+        let departureOrderDetails = null;
+        if (item.allocation?.departureAllocations && item.allocation.departureAllocations.length > 0) {
+          departureOrderDetails = item.allocation.departureAllocations[0].departure_order;
+        }
 
-    return {
-      ...item,
-      cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
-        departure_order: departureOrderDetails,
-    };
-  });
+        // Get client information if the entry order creator is a CLIENT
+        let clientInfo = null;
+        if (item.allocation?.entry_order?.creator?.role?.name === 'CLIENT') {
+          try {
+            // Use the new ClientUser relationship
+            const clientUser = await prisma.clientUser.findFirst({
+              where: {
+                user_id: item.allocation.entry_order.creator.id,
+                is_active: true
+              },
+              include: {
+                client: {
+                  select: {
+                    client_id: true,
+                    client_type: true,
+                    company_name: true,
+                    first_names: true,
+                    last_name: true,
+                    mothers_last_name: true,
+                    email: true,
+                    phone: true,
+                    address: true,
+                    establishment_type: true,
+                    ruc: true,
+                    created_at: true
+                  }
+                }
+              }
+            });
+            
+            if (clientUser && clientUser.client) {
+              clientInfo = clientUser.client;
+            }
+          } catch (error) {
+            console.error('Error fetching client info for user:', item.allocation.entry_order.creator.id, error);
+          }
+        }
+
+        return {
+          ...item,
+          cell_reference: `${item.cell.row}.${String(item.cell.bay).padStart(2, '0')}.${String(item.cell.position).padStart(2, '0')}`,
+          departure_order: departureOrderDetails,
+          client_info: clientInfo,
+        };
+      })
+    );
   }
 
   // ✅ SECTION 4: RETURN COMPREHENSIVE SUMMARY
