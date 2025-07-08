@@ -413,16 +413,16 @@ async function assignProductToCell(assignmentData) {
 
 
 
-    // 3. ✅ FIXED: Calculate proper usage for cell capacity
-    const requestedUsage = parseFloat(volume_m3 || 0);
-    const maxCellUsage = parseFloat(cell.capacity || 100);
-    const currentCellUsage = parseFloat(cell.currentUsage || 0);
+    // 3. ✅ REMOVED: Capacity validation - cells can now hold unlimited amounts
+    // const requestedUsage = parseFloat(volume_m3 || 0);
+    // const maxCellUsage = parseFloat(cell.capacity || 100);
+    // const currentCellUsage = parseFloat(cell.currentUsage || 0);
     
-    if (currentCellUsage + requestedUsage > maxCellUsage) {
-      throw new Error(
-        `Cell capacity exceeded. Available capacity: ${maxCellUsage - currentCellUsage}, Requested: ${requestedUsage}`
-      );
-    }
+    // if (currentCellUsage + requestedUsage > maxCellUsage) {
+    //   throw new Error(
+    //     `Cell capacity exceeded. Available capacity: ${maxCellUsage - currentCellUsage}, Requested: ${requestedUsage}`
+    //   );
+    // }
 
     // ✅ Helper functions for product status conversion
     const convertProductStatusToEnum = (statusString, presentation) => {

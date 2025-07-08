@@ -473,7 +473,7 @@ async function createClient(clientData, cellAssignmentData = {}) {
         assigned_by: cellAssignmentData.assigned_by,
         priority: index + 1,
         notes: finalNotes,
-        max_capacity: cellAssignmentData.max_capacity || 100.0
+        max_capacity: cellAssignmentData.max_capacity || null
       }));
 
       // ✅ OPTIMIZATION 5: Single bulk insert for all cell assignments
@@ -944,7 +944,7 @@ async function assignCellsToClient(assignmentData) {
         assigned_by,
         priority: index + 1,
         notes: finalNotes,
-        max_capacity: max_capacity || 100.0
+        max_capacity: max_capacity || null
       }));
 
       // Bulk create all assignments at once

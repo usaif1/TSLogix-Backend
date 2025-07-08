@@ -74,22 +74,29 @@ async function createBaseLookupTables() {
   try {
     console.log("Creating base lookup tables...");
 
-    // Countries
+    // Countries - Use populate countries function to get all countries
     console.log("Creating countries...");
-    await prisma.country.createMany({
-      data: [
-        { name: "Peru" },
-        { name: "Ecuador" },
-        { name: "Colombia" },
-        { name: "Brazil" },
-        { name: "Chile" },
-        { name: "United States" },
-        { name: "Mexico" },
-        { name: "Argentina" },
-      ],
-      skipDuplicates: true,
-    });
-    console.log("✅ Countries created");
+    try {
+      const { populateCountries } = require("../scripts/populate-countries");
+      const result = await populateCountries();
+      console.log(`✅ Countries populated: ${result.total_countries_now} total countries`);
+    } catch (error) {
+      console.log("⚠️  Fallback to basic countries...");
+      await prisma.country.createMany({
+        data: [
+          { name: "Peru" },
+          { name: "Ecuador" },
+          { name: "Colombia" },
+          { name: "Brazil" },
+          { name: "Chile" },
+          { name: "United States" },
+          { name: "Mexico" },
+          { name: "Argentina" },
+        ],
+        skipDuplicates: true,
+      });
+      console.log("✅ Basic countries created");
+    }
 
     // ✅ NEW: Product Categories
     console.log("Creating product categories...");
@@ -2086,69 +2093,69 @@ async function main() {
     // Create all base data
     await createBaseLookupTables();
     await createUsersAndOrganization();
-    await createSuppliersAndCustomers();
-    await createClients();
-    await assignClientsToWarehouseAssistants();
-    await createClientProductAssignments();
-    await createClientSupplierAssignments();
+    // await createSuppliersAndCustomers();
+    // await createClients();
+    // await assignClientsToWarehouseAssistants();
+    // await createClientProductAssignments();
+    // await createClientSupplierAssignments();
     await createWarehousesAndCells();
     
-    // Create products (uncommented for complete testing)
-    console.log("🌱 Creating products...");
-    const suppliers = await prisma.supplier.findMany();
-    const categories = await prisma.productCategory.findMany();
-    const subcategories1 = await prisma.productSubCategory1.findMany();
-    const subcategories2 = await prisma.productSubCategory2.findMany();
-    const countries = await prisma.country.findMany();
-    const temperatureRanges = await prisma.temperatureRange.findMany();
+    // Create products (commented out - depends on suppliers)
+    // console.log("🌱 Creating products...");
+    // const suppliers = await prisma.supplier.findMany();
+    // const categories = await prisma.productCategory.findMany();
+    // const subcategories1 = await prisma.productSubCategory1.findMany();
+    // const subcategories2 = await prisma.productSubCategory2.findMany();
+    // const countries = await prisma.country.findMany();
+    // const temperatureRanges = await prisma.temperatureRange.findMany();
     
     // Create products for testing
-    for (let i = 0; i < COUNT.PRODUCTS; i++) {
-      const supplier = faker.helpers.arrayElement(suppliers);
-      const category = faker.helpers.arrayElement(categories);
-      const subcategory1 = faker.helpers.arrayElement(subcategories1.filter(s => s.category_id === category.category_id));
-      const subcategory2 = subcategory1 ? faker.helpers.arrayElement(subcategories2.filter(s => s.subcategory1_id === subcategory1.subcategory1_id)) : null;
-      
-      await prisma.product.create({
-        data: {
-          product_code: `PROD-${String(i + 1).padStart(4, '0')}`,
-          name: faker.commerce.productName(),
-          category_id: category.category_id,
-          subcategory1_id: subcategory1?.subcategory1_id,
-          subcategory2_id: subcategory2?.subcategory2_id,
-          manufacturer: supplier.company_name || supplier.name || faker.company.name(),
-          temperature_range_id: faker.helpers.maybe(() => faker.helpers.arrayElement(temperatureRanges).temperature_range_id),
-          humidity: faker.helpers.maybe(() => `${faker.number.int({ min: 30, max: 70 })}%`),
-          observations: faker.lorem.sentence(),
-          uploaded_documents: faker.helpers.maybe(() => ({
-            documents: [
-              { name: "product_spec.pdf", url: "/documents/product_spec.pdf" }
-            ]
-          })),
-        },
-      });
-    }
-    console.log("✅ Products created");
+    // for (let i = 0; i < COUNT.PRODUCTS; i++) {
+    //   const supplier = faker.helpers.arrayElement(suppliers);
+    //   const category = faker.helpers.arrayElement(categories);
+    //   const subcategory1 = faker.helpers.arrayElement(subcategories1.filter(s => s.category_id === category.category_id));
+    //   const subcategory2 = subcategory1 ? faker.helpers.arrayElement(subcategories2.filter(s => s.subcategory1_id === subcategory1.subcategory1_id)) : null;
+    //   
+    //   await prisma.product.create({
+    //     data: {
+    //       product_code: `PROD-${String(i + 1).padStart(4, '0')}`,
+    //       name: faker.commerce.productName(),
+    //       category_id: category.category_id,
+    //       subcategory1_id: subcategory1?.subcategory1_id,
+    //       subcategory2_id: subcategory2?.subcategory2_id,
+    //       manufacturer: supplier.company_name || supplier.name || faker.company.name(),
+    //       temperature_range_id: faker.helpers.maybe(() => faker.helpers.arrayElement(temperatureRanges).temperature_range_id),
+    //       humidity: faker.helpers.maybe(() => `${faker.number.int({ min: 30, max: 70 })}%`),
+    //       observations: faker.lorem.sentence(),
+    //       uploaded_documents: faker.helpers.maybe(() => ({
+    //         documents: [
+    //           { name: "product_spec.pdf", url: "/documents/product_spec.pdf" }
+    //         ]
+    //       })),
+    //     },
+    //   });
+    // }
+    // console.log("✅ Products created");
     
-    // Create entry orders and inventory
-    await createEntryOrdersWithProducts();
-    await createInventoryAllocations();
-    await createQualityControlTransitions();
+    // Create entry orders and inventory (commented out - depends on products)
+    // await createEntryOrdersWithProducts();
+    // await createInventoryAllocations();
+    // await createQualityControlTransitions();
     
-    // Create departure orders with simplified flow
-    await createDepartureOrdersWithProducts();
+    // Create departure orders with simplified flow (commented out - depends on products)
+    // await createDepartureOrdersWithProducts();
     
     console.log("🎉 Complete seed data created successfully!");
     console.log("\n📊 Seed Summary:");
     console.log(`   • ✅ ORGANISATIONS: ${COUNT.ORGANISATIONS} created`);
     console.log(`   • ✅ USERS: ${COUNT.USERS} created with proper roles`);
-    console.log(`   • ✅ SUPPLIERS: ${COUNT.SUPPLIERS} created`);
-    console.log(`   • ✅ CUSTOMERS: ${COUNT.CUSTOMERS} created`);
-    console.log(`   • ✅ CLIENTS: ${COUNT.CLIENTS} created with assignments`);
-    console.log(`   • ✅ PRODUCTS: ${COUNT.PRODUCTS} created`);
+    console.log(`   • ❌ SUPPLIERS: Skipped (not needed)`);
+    console.log(`   • ❌ CUSTOMERS: Skipped (not needed)`);
+    console.log(`   • ❌ CLIENTS: Skipped (not needed)`);
+    console.log(`   • ❌ PRODUCTS: Skipped (depends on suppliers)`);
     console.log(`   • ✅ WAREHOUSES: ${COUNT.WAREHOUSES} created with cells`);
-    console.log(`   • ✅ ENTRY ORDERS: ${COUNT.ENTRY_ORDERS} created with inventory`);
-    console.log(`   • ✅ DEPARTURE ORDERS: ${COUNT.DEPARTURE_ORDERS} created (simplified flow)`);
+    console.log(`   • ❌ ENTRY ORDERS: Skipped (depends on products)`);
+    console.log(`   • ❌ DEPARTURE ORDERS: Skipped (depends on products)`);
     console.log("\n🔄 Simplified Dispatch Flow Features:");
     console.log("   • ✅ No partial dispatch tracking");
     console.log("   • ✅ APPROVED → COMPLETED status flow");
