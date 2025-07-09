@@ -408,6 +408,37 @@ async function getAvailableCellsForClient(req, res) {
   }
 }
 
+// ✅ NEW: Get available cells including cells assigned to specific client
+async function getAvailableCellsWithClientAssignments(req, res) {
+  try {
+    const { warehouse_id, client_id } = req.query;
+    
+    // Validate required client_id parameter
+    if (!client_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Client ID is required as a query parameter",
+        usage: "GET /client/cells/available-with-assignments?client_id=CLIENT_ID&warehouse_id=WAREHOUSE_ID"
+      });
+    }
+    
+    const result = await clientService.getAvailableCellsWithClientAssignments(warehouse_id, client_id);
+    
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Error in getAvailableCellsWithClientAssignments controller:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching available cells with client assignments",
+      error: error.message,
+    });
+  }
+}
+
 // Deactivate client cell assignment
 async function deactivateClientCellAssignment(req, res) {
   try {
@@ -727,14 +758,229 @@ async function markCredentialsHandedOver(req, res) {
   }
 }
 
+/**
+ * ✅ ENHANCED: Update client with cell reassignment capabilities
+ */
+async function updateClientWithCellReassignment(req, res) {
+  try {
+    const { client_id } = req.params;
+    const updateData = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // Validate required parameters
+    if (!client_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Client ID is required"
+      });
+    }
+
+    // Log the update attempt
+    await req.logEvent(
+      'CLIENT_UPDATE_WITH_REASSIGNMENT_STARTED',
+      'Client',
+      client_id,
+      `Started comprehensive client update with possible cell reassignment for client ${client_id}`,
+      null,
+      {
+        client_id: client_id,
+        update_fields: Object.keys(updateData),
+        has_cell_reassignment: !!updateData.reassign_cells,
+        new_cells: updateData.cell_ids || [],
+        updated_by: userId,
+        updater_role: userRole,
+        update_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'COMPREHENSIVE_UPDATE_START' }
+    );
+
+    const result = await clientService.updateClientWithCellReassignment(
+      client_id,
+      updateData,
+      userId
+    );
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    // Log successful update
+    await req.logEvent(
+      'CLIENT_UPDATE_WITH_REASSIGNMENT_COMPLETED',
+      'Client',
+      client_id,
+      `Successfully completed comprehensive client update for client ${client_id}`,
+      null,
+      {
+        client_id: client_id,
+        changes: result.changes,
+        client_updated: result.changes?.client_updated || false,
+        cells_reassigned: result.changes?.cells_reassigned || false,
+        old_cell_count: result.changes?.old_cell_count || 0,
+        new_cell_count: result.changes?.new_cell_count || 0,
+        updated_by: userId,
+        updater_role: userRole
+      },
+      { 
+        operation_type: 'CLIENT_MANAGEMENT', 
+        action_type: 'COMPREHENSIVE_UPDATE_SUCCESS',
+        business_impact: result.changes?.cells_reassigned ? 'CLIENT_CELLS_REASSIGNED' : 'CLIENT_INFORMATION_UPDATED'
+      }
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error in updateClientWithCellReassignment controller:", error);
+    
+    await req.logError(error, {
+      controller: 'client',
+      action: 'updateClientWithCellReassignment',
+      client_id: req.params.client_id,
+      update_data_keys: Object.keys(req.body || {}),
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'CLIENT_COMPREHENSIVE_UPDATE_FAILED'
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: "Error updating client with cell reassignment",
+      error: error.message
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Get client cell reassignment options
+ */
+async function getClientCellReassignmentOptions(req, res) {
+  try {
+    const { client_id } = req.params;
+    
+    if (!client_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Client ID is required"
+      });
+    }
+
+    const result = await clientService.getClientCellReassignmentOptions(client_id);
+    
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error in getClientCellReassignmentOptions controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving client cell reassignment options",
+      error: error.message
+    });
+  }
+}
+
+/**
+ * ✅ NEW: Bulk update clients
+ */
+async function bulkUpdateClients(req, res) {
+  try {
+    const { client_updates } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    
+    // Validate input
+    if (!client_updates || !Array.isArray(client_updates) || client_updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Client updates array is required and must not be empty"
+      });
+    }
+
+    // Only allow warehouse incharge and admin to perform bulk operations
+    if (!["WAREHOUSE_INCHARGE", "ADMIN"].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only warehouse incharge and admin can perform bulk client updates."
+      });
+    }
+
+    // Log bulk update attempt
+    await req.logEvent(
+      'BULK_CLIENT_UPDATE_STARTED',
+      'Client',
+      'BULK_OPERATION',
+      `Started bulk client update for ${client_updates.length} clients`,
+      null,
+      {
+        total_clients: client_updates.length,
+        client_ids: client_updates.map(u => u.client_id),
+        initiated_by: userId,
+        initiator_role: userRole,
+        bulk_update_timestamp: new Date().toISOString()
+      },
+      { operation_type: 'CLIENT_MANAGEMENT', action_type: 'BULK_UPDATE_START' }
+    );
+
+    const result = await clientService.bulkUpdateClients(client_updates, userId);
+
+    // Log bulk update completion
+    await req.logEvent(
+      'BULK_CLIENT_UPDATE_COMPLETED',
+      'Client',
+      'BULK_OPERATION',
+      `Completed bulk client update: ${result.data.successful_updates}/${result.data.total_processed} successful`,
+      null,
+      {
+        total_processed: result.data.total_processed,
+        successful_updates: result.data.successful_updates,
+        failed_updates: result.data.failed_updates,
+        success_rate: `${((result.data.successful_updates / result.data.total_processed) * 100).toFixed(1)}%`,
+        completed_by: userId,
+        completor_role: userRole
+      },
+      { 
+        operation_type: 'CLIENT_MANAGEMENT', 
+        action_type: 'BULK_UPDATE_SUCCESS',
+        business_impact: 'MULTIPLE_CLIENTS_UPDATED'
+      }
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error in bulkUpdateClients controller:", error);
+    
+    await req.logError(error, {
+      controller: 'client',
+      action: 'bulkUpdateClients',
+      client_updates_count: req.body?.client_updates?.length || 0,
+      user_id: req.user?.id,
+      user_role: req.user?.role,
+      error_context: 'BULK_CLIENT_UPDATE_FAILED'
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: "Error in bulk client update",
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   createClient,
   getAllClients,
   getClientById,
   updateClient,
+  updateClientWithCellReassignment,
+  getClientCellReassignmentOptions,
+  bulkUpdateClients,
   assignCellsToClient,
   getClientCellAssignments,
   getAvailableCellsForClient,
+  getAvailableCellsWithClientAssignments,
   deactivateClientCellAssignment,
   getClientFormFields,
   getClientStatistics,

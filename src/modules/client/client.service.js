@@ -683,7 +683,7 @@ async function getClientById(clientId) {
           include: {
             order: true
           },
-          orderBy: { created_at: 'desc' },
+          orderBy: { registration_date: 'desc' },
           take: 10 // Latest 10 departure orders
         },
         _count: {
@@ -815,10 +815,291 @@ async function updateClient(clientId, updateData) {
       }
     });
 
-    return updatedClient;
+    // Get old and new values for audit logging
+    const oldValues = existingClient;
+    const newValues = updatedClient;
+
+    return {
+      success: true,
+      message: "Client updated successfully",
+      data: updatedClient,
+      oldValues: oldValues,
+      newValues: newValues
+    };
   } catch (error) {
     console.error("Error in updateClient service:", error);
-    throw error;
+    return {
+      success: false,
+      message: error.message || "Error updating client",
+      error: error.message
+    };
+  }
+}
+
+/**
+ * ✅ ENHANCED: Update client with cell reassignment capabilities
+ */
+async function updateClientWithCellReassignment(clientId, updateData, userId) {
+  try {
+    // Check if client exists
+    const existingClient = await prisma.client.findUnique({
+      where: { client_id: clientId },
+      include: {
+        active_state: true,
+        cellAssignments: {
+          where: { is_active: true },
+          include: {
+            cell: true,
+            warehouse: true
+          }
+        }
+      }
+    });
+
+    if (!existingClient) {
+      return {
+        success: false,
+        message: "Client not found"
+      };
+    }
+
+    // Separate client data from cell assignment data
+    const {
+      cell_ids,
+      warehouse_id,
+      assignment_notes,
+      max_capacity,
+      reassign_cells,
+      ...clientUpdateData
+    } = updateData;
+
+    // ✅ STEP 1: Update client information if provided
+    if (Object.keys(clientUpdateData).length > 0) {
+      const clientUpdateResult = await updateClient(clientId, clientUpdateData);
+      
+      if (!clientUpdateResult.success) {
+        return clientUpdateResult;
+      }
+    }
+
+    // ✅ STEP 2: Handle cell reassignment if requested
+    if (reassign_cells && cell_ids && cell_ids.length > 0) {
+      // Delete ALL existing assignments for this client (both active and inactive)
+      // This is necessary due to unique constraint on (client_id, cell_id)
+      await prisma.clientCellAssignment.deleteMany({
+        where: {
+          client_id: clientId
+        }
+      });
+
+      // Create new assignments
+      const cellAssignmentData = {
+        client_id: clientId,
+        cell_ids,
+        warehouse_id,
+        assigned_by: userId,
+        notes: assignment_notes || `Cell reassignment for client ${clientId}`,
+        max_capacity: max_capacity || 100.00
+      };
+
+      await assignCellsToClient(cellAssignmentData);
+
+      // Log cell reassignment activity
+      await eventLogger.logEvent(
+        'CLIENT_CELLS_REASSIGNED',
+        'Client',
+        clientId,
+        `Client ${clientId} cells reassigned from ${existingClient.cellAssignments.length} to ${cell_ids.length} cells`,
+        {
+          old_cell_count: existingClient.cellAssignments.length,
+          old_cells: existingClient.cellAssignments.map(ca => ca.cell.id),
+          old_warehouse: existingClient.cellAssignments[0]?.warehouse?.name || 'Unknown'
+        },
+        {
+          new_cell_count: cell_ids.length,
+          new_cells: cell_ids,
+          new_warehouse_id: warehouse_id,
+          reassigned_by: userId,
+          reassignment_notes: assignment_notes
+        },
+        { 
+          operation_type: 'CLIENT_MANAGEMENT', 
+          action_type: 'CELL_REASSIGNMENT',
+          business_impact: 'CLIENT_CELLS_CHANGED'
+        }
+      );
+    }
+
+    // ✅ STEP 3: Get updated client with new assignments
+    const finalClient = await prisma.client.findUnique({
+      where: { client_id: clientId },
+      include: {
+        active_state: true,
+        cellAssignments: {
+          where: { is_active: true },
+          include: {
+            cell: true,
+            warehouse: true
+          }
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: "Client updated successfully with cell reassignment",
+      data: finalClient,
+      changes: {
+        client_updated: Object.keys(clientUpdateData).length > 0,
+        cells_reassigned: reassign_cells && cell_ids && cell_ids.length > 0,
+        old_cell_count: existingClient.cellAssignments.length,
+        new_cell_count: finalClient.cellAssignments.length
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in updateClientWithCellReassignment service:", error);
+    return {
+      success: false,
+      message: error.message || "Error updating client with cell reassignment",
+      error: error.message
+    };
+  }
+}
+
+/**
+ * ✅ NEW: Get client cell reassignment options
+ */
+async function getClientCellReassignmentOptions(clientId) {
+  try {
+    const client = await prisma.client.findUnique({
+      where: { client_id: clientId },
+      include: {
+        cellAssignments: {
+          where: { is_active: true },
+          include: {
+            cell: true,
+            warehouse: true
+          }
+        }
+      }
+    });
+
+    if (!client) {
+      return {
+        success: false,
+        message: "Client not found"
+      };
+    }
+
+    // Get all warehouses for reassignment options
+    const warehouses = await prisma.warehouse.findMany({
+      where: { status: "ACTIVE" },
+      select: {
+        warehouse_id: true,
+        name: true,
+        address: true,
+        location: true
+      }
+    });
+
+    // Get available cells for each warehouse
+    const reassignmentOptions = await Promise.all(
+      warehouses.map(async (warehouse) => {
+        const availableCells = await getAvailableCellsForClient(warehouse.warehouse_id);
+        
+        return {
+          warehouse_id: warehouse.warehouse_id,
+          warehouse_name: warehouse.name,
+          warehouse_address: warehouse.address,
+          warehouse_location: warehouse.location,
+          available_cells: availableCells.available_cells || [],
+          total_available: availableCells.available_cells?.length || 0
+        };
+      })
+    );
+
+    return {
+      success: true,
+      message: "Client cell reassignment options retrieved successfully",
+      data: {
+        client: {
+          client_id: client.client_id,
+          client_name: client.client_type === 'JURIDICO' ? client.company_name : `${client.first_names} ${client.last_name}`,
+          client_type: client.client_type
+        },
+        current_assignments: client.cellAssignments.map(ca => ({
+          assignment_id: ca.assignment_id,
+          cell_id: ca.cell.id,
+          cell_reference: `${ca.cell.row}.${String(ca.cell.bay).padStart(2, '0')}.${String(ca.cell.position).padStart(2, '0')}`,
+          warehouse_id: ca.warehouse.warehouse_id,
+          warehouse_name: ca.warehouse.name,
+          assigned_at: ca.assigned_at,
+          max_capacity: ca.max_capacity
+        })),
+        reassignment_options: reassignmentOptions
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in getClientCellReassignmentOptions service:", error);
+    return {
+      success: false,
+      message: error.message || "Error retrieving client cell reassignment options",
+      error: error.message
+    };
+  }
+}
+
+/**
+ * ✅ NEW: Bulk update clients with validation
+ */
+async function bulkUpdateClients(clientUpdates, userId) {
+  try {
+    const results = [];
+    const errors = [];
+
+    for (const update of clientUpdates) {
+      try {
+        const result = await updateClientWithCellReassignment(
+          update.client_id,
+          update.update_data,
+          userId
+        );
+        
+        results.push({
+          client_id: update.client_id,
+          success: result.success,
+          message: result.message,
+          changes: result.changes
+        });
+      } catch (error) {
+        errors.push({
+          client_id: update.client_id,
+          error: error.message
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message: "Bulk client update completed",
+      data: {
+        total_processed: clientUpdates.length,
+        successful_updates: results.filter(r => r.success).length,
+        failed_updates: errors.length,
+        results: results,
+        errors: errors
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in bulkUpdateClients service:", error);
+    return {
+      success: false,
+      message: error.message || "Error in bulk client update",
+      error: error.message
+    };
   }
 }
 
@@ -1124,7 +1405,7 @@ async function getAvailableCellsForClient(warehouseId) {
       // Group by warehouse
       if (!cellsByWarehouse[cell.warehouse_id]) {
         cellsByWarehouse[cell.warehouse_id] = {
-          warehouse: cell.warehouse,
+          warehouse: cell.warehouse || { warehouse_id: cell.warehouse_id, name: 'Unknown Warehouse' },
           cells: [],
           by_role: {
             STANDARD: [],
@@ -1192,9 +1473,173 @@ async function getAvailableCellsForClient(warehouseId) {
 }
 
 /**
+ * ✅ NEW: Get available cells including cells assigned to specific client
+ */
+async function getAvailableCellsWithClientAssignments(warehouseId, clientId) {
+  try {
+    const whereCondition = {
+      status: "AVAILABLE",
+      cell_role: { 
+        in: [
+          "STANDARD", "REJECTED", "SAMPLES", 
+          "RETURNS", "DAMAGED", "EXPIRED"
+        ]
+      }
+    };
+
+    if (warehouseId) {
+      whereCondition.warehouse_id = warehouseId;
+    }
+
+    // Get ALL available cells
+    const allCells = await prisma.warehouseCell.findMany({
+      where: whereCondition,
+      include: {
+        warehouse: true,
+        clientCellAssignments: {
+          where: { is_active: true },
+          include: {
+            client: {
+              select: {
+                client_id: true,
+                client_type: true,
+                company_name: true,
+                first_names: true,
+                last_name: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: [
+        { warehouse_id: 'asc' },
+        { cell_role: 'asc' },
+        { row: 'asc' },
+        { bay: 'asc' },
+        { position: 'asc' }
+      ]
+    });
+
+    // Categorize cells
+    const categorizedCells = {
+      assigned_to_client: [], // Cells assigned to the specific client
+      available_unassigned: [], // Cells not assigned to any client
+      assigned_to_others: [] // Cells assigned to other clients (for reference)
+    };
+
+    const cellsByWarehouse = {};
+    const cellsByRole = {
+      STANDARD: [], REJECTED: [], SAMPLES: [], 
+      RETURNS: [], DAMAGED: [], EXPIRED: []
+    };
+
+    allCells.forEach(cell => {
+      // Create base cell data
+      const cellData = {
+        ...cell,
+        cell_reference: `${cell.row}.${String(cell.bay).padStart(2, '0')}.${String(cell.position).padStart(2, '0')}`,
+        quality_purpose: {
+          STANDARD: "Regular storage",
+          REJECTED: "RECHAZADOS - Rejected products",
+          SAMPLES: "CONTRAMUESTRAS - Product samples",
+          RETURNS: "DEVOLUCIONES - Product returns",
+          DAMAGED: "Damaged products",
+          EXPIRED: "Expired products"
+        }[cell.cell_role]
+      };
+
+      // Initialize warehouse grouping
+      if (!cellsByWarehouse[cell.warehouse_id]) {
+        cellsByWarehouse[cell.warehouse_id] = {
+          warehouse: cell.warehouse || { warehouse_id: cell.warehouse_id, name: 'Unknown Warehouse' },
+          assigned_to_client: [],
+          available_unassigned: [],
+          assigned_to_others: []
+        };
+      }
+
+      // Categorize based on assignment status
+      if (cell.clientCellAssignments.length === 0) {
+        // Not assigned to any client
+        cellData.is_assigned_to_client = false;
+        cellData.client_assignment = null;
+        cellData.availability_status = "available";
+        
+        categorizedCells.available_unassigned.push(cellData);
+        cellsByWarehouse[cell.warehouse_id].available_unassigned.push(cellData);
+        cellsByRole[cell.cell_role].push(cellData);
+      } else {
+        // Assigned to some client
+        const assignment = cell.clientCellAssignments[0];
+        cellData.client_assignment = {
+          assignment_id: assignment.assignment_id,
+          client_id: assignment.client_id,
+          client_name: assignment.client.client_type === "JURIDICO" 
+            ? assignment.client.company_name 
+            : `${assignment.client.first_names} ${assignment.client.last_name}`,
+          client_type: assignment.client.client_type,
+          assigned_at: assignment.assigned_at,
+          priority: assignment.priority,
+          notes: assignment.notes
+        };
+
+        if (assignment.client_id === clientId) {
+          // Assigned to the specified client
+          cellData.is_assigned_to_client = true;
+          cellData.availability_status = "assigned_to_client";
+          
+          categorizedCells.assigned_to_client.push(cellData);
+          cellsByWarehouse[cell.warehouse_id].assigned_to_client.push(cellData);
+        } else {
+          // Assigned to other clients
+          cellData.is_assigned_to_client = false;
+          cellData.availability_status = "assigned_to_others";
+          
+          categorizedCells.assigned_to_others.push(cellData);
+          cellsByWarehouse[cell.warehouse_id].assigned_to_others.push(cellData);
+        }
+      }
+    });
+
+    return {
+      success: true,
+      message: "Available cells with client assignments retrieved successfully",
+      data: {
+        client_id: clientId,
+        warehouse_id: warehouseId || "all",
+        cells: categorizedCells,
+        cells_by_warehouse: cellsByWarehouse,
+        cells_by_role: cellsByRole,
+        summary: {
+          total_cells: allCells.length,
+          assigned_to_client: categorizedCells.assigned_to_client.length,
+          available_unassigned: categorizedCells.available_unassigned.length,
+          assigned_to_others: categorizedCells.assigned_to_others.length,
+          role_counts: {
+            standard: cellsByRole.STANDARD.length,
+            rejected: cellsByRole.REJECTED.length,
+            samples: cellsByRole.SAMPLES.length,
+            returns: cellsByRole.RETURNS.length,
+            damaged: cellsByRole.DAMAGED.length,
+            expired: cellsByRole.EXPIRED.length
+          }
+        }
+      }
+    };
+  } catch (error) {
+    console.error("Error in getAvailableCellsWithClientAssignments service:", error);
+    return {
+      success: false,
+      message: "Error retrieving available cells with client assignments",
+      error: error.message
+    };
+  }
+}
+
+/**
  * Deactivate client cell assignment
  */
-async function deactivateClientCellAssignment(assignmentId, deactivatedBy) {
+async function deactivateClientCellAssignment(assignmentId) {
   try {
     // Check if assignment exists and is active
     const assignment = await prisma.clientCellAssignment.findUnique({
@@ -1694,9 +2139,13 @@ module.exports = {
   getAllClients,
   getClientById,
   updateClient,
+  updateClientWithCellReassignment,
+  getClientCellReassignmentOptions,
+  bulkUpdateClients,
   assignCellsToClient,
   getClientCellAssignments,
   getAvailableCellsForClient,
+  getAvailableCellsWithClientAssignments,
   deactivateClientCellAssignment,
   getClientFormFields,
   getAvailableWarehousesForAssignment,
